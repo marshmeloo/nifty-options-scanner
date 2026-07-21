@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Trade Journal Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262b36;
+    --text: #e6e9ef;
+    --muted: #8a92a3;
+    --green: #3ecf8e;
+    --red: #ef5f6a;
+    --accent: #5b8def;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+
+  #dropzone {
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 32px;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+    margin-bottom: 24px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  #dropzone.drag { border-color: var(--accent); background: #131722; }
+  #dropzone input { display: none; }
+
+  #content { display: none; }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .card .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+  .card .value.pos { color: var(--green); }
+  .card .value.neg { color: var(--red); }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 24px;
+  }
+  .panel h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; cursor: pointer; user-select: none; }
+  th:hover { color: var(--text); }
+  tr:hover td { background: #1c2029; }
+  .win { color: var(--green); }
+  .loss { color: var(--red); }
+  .open { color: var(--accent); }
+
+  .tagbar-row td:first-child { width: 140px; }
+  .tagbar-track { background: #0f1115; border-radius: 4px; height: 8px; width: 100%; overflow: hidden; }
+  .tagbar-fill { height: 100%; }
+
+  #reset { font-size: 12px; color: var(--muted); cursor: pointer; text-decoration: underline; margin-bottom: 16px; display: none; }
+
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1>Trade Journal Dashboard</h1>
+<div class="subtitle">Loads logs/trade_journal.jsonl entirely in your browser — no upload, no server.</div>
+
+<div id="dropzone">
+  Drop <code>trade_journal.jsonl</code> here, or click to browse
+  <input type="file" id="fileInput" accept=".jsonl,.json,.txt">
+</div>
+
+<div id="reset">&larr; Load a different file</div>
+
+<div id="content">
+  <div class="cards" id="cards"></div>
+
+  <div class="panel">
+    <h2>Cumulative P&amp;L (closed trades, in order)</h2>
+    <svg id="equityChart" width="100%" height="180" viewBox="0 0 900 180" preserveAspectRatio="none"></svg>
+  </div>
+
+  <div class="panel">
+    <h2>Reason-tag win rate</h2>
+    <table id="tagTable">
+      <thead><tr><th>Tag</th><th>Win rate</th><th>Samples</th><th>Note</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="note">Tags with fewer than 3 closed samples aren't reliable yet — the tracker itself waits for MIN_TAG_SAMPLES_FOR_ADJUSTMENT before leaning on them.</div>
+  </div>
+
+  <div class="panel">
+    <h2>All trades</h2>
+    <table id="tradeTable">
+      <thead>
+        <tr>
+          <th data-key="opened_at">Opened</th>
+          <th data-key="strike">Strike</th>
+          <th data-key="option_type">Type</th>
+          <th data-key="score_at_entry">Score</th>
+          <th data-key="entry">Entry</th>
+          <th data-key="exit_ltp">Exit</th>
+          <th data-key="pnl_pct">P&amp;L %</th>
+          <th data-key="outcome">Outcome</th>
+          <th data-key="reason_tags">Tags</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+let trades = [];
+let sortKey = "opened_at";
+let sortDir = -1;
+
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("fileInput");
+const content = document.getElementById("content");
+const resetLink = document.getElementById("reset");
+
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("dragover", e => { e.preventDefault(); dropzone.classList.add("drag"); });
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag"));
+dropzone.addEventListener("drop", e => {
+  e.preventDefault();
+  dropzone.classList.remove("drag");
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", e => {
+  if (e.target.files.length) handleFile(e.target.files[0]);
+});
+resetLink.addEventListener("click", () => {
+  trades = [];
+  content.style.display = "none";
+  resetLink.style.display = "none";
+  dropzone.style.display = "block";
+  fileInput.value = "";
+});
+
+function handleFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    const lines = e.target.result.split(/\r?\n/).filter(l => l.trim().length);
+    trades = lines.map(l => {
+      try { return JSON.parse(l); } catch (err) { return null; }
+    }).filter(Boolean);
+    render();
+    dropzone.style.display = "none";
+    resetLink.style.display = "block";
+    content.style.display = "block";
+  };
+  reader.readAsText(file);
+}
+
+function fmtPct(v) {
+  if (v === undefined || v === null || isNaN(v)) return "—";
+  const s = v.toFixed(1) + "%";
+  return v > 0 ? "+" + s : s;
+}
+
+function render() {
+  const closed = trades.filter(t => t.status === "CLOSED" || t.outcome);
+  const open = trades.filter(t => !(t.status === "CLOSED" || t.outcome));
+  const wins = closed.filter(t => t.outcome === "WIN");
+  const losses = closed.filter(t => t.outcome === "LOSS");
+  const winRate = closed.length ? (wins.length / closed.length * 100) : null;
+  const avgPnl = closed.length ? (closed.reduce((s, t) => s + (t.pnl_pct || 0), 0) / closed.length) : null;
+  const totalPnl = closed.reduce((s, t) => s + (t.pnl_pct || 0), 0);
+
+  const cards = [
+    { label: "Total trades", value: trades.length },
+    { label: "Closed / Open", value: `${closed.length} / ${open.length}` },
+    { label: "Win rate", value: winRate === null ? "—" : winRate.toFixed(0) + "%", cls: winRate === null ? "" : (winRate >= 50 ? "pos" : "neg") },
+    { label: "Wins / Losses", value: `${wins.length} / ${losses.length}` },
+    { label: "Avg P&L / trade", value: fmtPct(avgPnl), cls: avgPnl === null ? "" : (avgPnl >= 0 ? "pos" : "neg") },
+    { label: "Cumulative P&L", value: fmtPct(totalPnl), cls: totalPnl >= 0 ? "pos" : "neg" },
+  ];
+
+  document.getElementById("cards").innerHTML = cards.map(c => `
+    <div class="card">
+      <div class="label">${c.label}</div>
+      <div class="value ${c.cls || ""}">${c.value}</div>
+    </div>
+  `).join("");
+
+  renderEquityCurve(closed);
+  renderTagTable(closed);
+  renderTradeTable();
+}
+
+function renderEquityCurve(closed) {
+  const svg = document.getElementById("equityChart");
+  if (!closed.length) { svg.innerHTML = `<text x="20" y="90" fill="#8a92a3" font-size="13">No closed trades yet.</text>`; return; }
+
+  const sorted = [...closed].sort((a, b) => new Date(a.closed_at || 0) - new Date(b.closed_at || 0));
+  let cum = 0;
+  const points = sorted.map(t => { cum += (t.pnl_pct || 0); return cum; });
+
+  const w = 900, h = 180, pad = 20;
+  const minV = Math.min(0, ...points), maxV = Math.max(0, ...points);
+  const range = (maxV - minV) || 1;
+  const xStep = points.length > 1 ? (w - pad * 2) / (points.length - 1) : 0;
+  const y = v => h - pad - ((v - minV) / range) * (h - pad * 2);
+  const x = i => pad + i * xStep;
+
+  const path = points.map((v, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
+  const zeroY = y(0).toFixed(1);
+  const lastColor = points[points.length - 1] >= 0 ? "#3ecf8e" : "#ef5f6a";
+
+  svg.innerHTML = `
+    <line x1="${pad}" y1="${zeroY}" x2="${w - pad}" y2="${zeroY}" stroke="#262b36" stroke-dasharray="4,4"/>
+    <path d="${path}" fill="none" stroke="${lastColor}" stroke-width="2"/>
+    ${points.map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.5" fill="${lastColor}"/>`).join("")}
+  `;
+}
+
+function renderTagTable(closed) {
+  const tagStats = {};
+  closed.forEach(t => {
+    (t.reason_tags || []).forEach(tag => {
+      if (!tagStats[tag]) tagStats[tag] = { wins: 0, total: 0 };
+      tagStats[tag].total++;
+      if (t.outcome === "WIN") tagStats[tag].wins++;
+    });
+  });
+
+  const rows = Object.entries(tagStats)
+    .map(([tag, s]) => ({ tag, rate: s.total ? (s.wins / s.total * 100) : 0, samples: s.total }))
+    .sort((a, b) => b.samples - a.samples);
+
+  const tbody = document.querySelector("#tagTable tbody");
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="4">No closed trades yet.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(r => `
+    <tr class="tagbar-row">
+      <td>${r.tag}</td>
+      <td>
+        <div class="tagbar-track">
+          <div class="tagbar-fill" style="width:${r.rate}%; background:${r.rate >= 50 ? "#3ecf8e" : "#ef5f6a"}"></div>
+        </div>
+        <div style="font-size:11px; color:#8a92a3; margin-top:2px;">${r.rate.toFixed(0)}%</div>
+      </td>
+      <td>${r.samples}</td>
+      <td style="color:#8a92a3; font-size:12px;">${r.samples < 3 ? "Not enough samples yet" : ""}</td>
+    </tr>
+  `).join("");
+}
+
+function renderTradeTable() {
+  const sorted = [...trades].sort((a, b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if (Array.isArray(av)) av = av.join(",");
+    if (Array.isArray(bv)) bv = bv.join(",");
+    if (av === undefined) av = "";
+    if (bv === undefined) bv = "";
+    if (av < bv) return -1 * sortDir;
+    if (av > bv) return 1 * sortDir;
+    return 0;
+  });
+
+  const tbody = document.querySelector("#tradeTable tbody");
+  tbody.innerHTML = sorted.map(t => {
+    const outcomeClass = t.outcome === "WIN" ? "win" : (t.outcome === "LOSS" ? "loss" : "open");
+    return `
+      <tr>
+        <td>${t.opened_at ? t.opened_at.replace("T", " ").slice(0, 19) : "—"}</td>
+        <td>${t.strike ?? "—"}</td>
+        <td>${t.option_type ?? "—"}</td>
+        <td>${t.score_at_entry ?? "—"}</td>
+        <td>${t.entry ?? "—"}</td>
+        <td>${t.exit_ltp ?? (t.current_ltp ?? "—")}</td>
+        <td class="${(t.pnl_pct ?? t.running_pnl_pct ?? 0) >= 0 ? "win" : "loss"}">${fmtPct(t.pnl_pct ?? t.running_pnl_pct)}</td>
+        <td class="${outcomeClass}">${t.outcome || t.status || "—"}</td>
+        <td style="font-size:11px; color:#8a92a3;">${(t.reason_tags || []).join(", ")}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
+document.querySelectorAll("#tradeTable th").forEach(th => {
+  th.addEventListener("click", () => {
+    const key = th.dataset.key;
+    if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = -1; }
+    renderTradeTable();
+  });
+});
+</script>
+
+</body>
+</html>

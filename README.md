@@ -81,6 +81,33 @@ live values:
 - `MAX_LOTS_PER_TRADE = 1`
 - `MAX_NEW_TRADES_PER_DAY` — effectively uncapped (training/evaluation phase)
 
+## Architecture
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full pipeline diagram, why the
+trade tracker sits on top of the scanner, and how the OI+price buildup
+classification works.
+
+## Trade journal dashboard
+
+`dashboard/trade_journal_dashboard.html` is a single self-contained HTML
+file — no build step, no server, no dependencies. Open it in any browser
+and drag in your `logs/trade_journal.jsonl` to see:
+
+- Win rate, average P&L, and cumulative P&L cards
+- A cumulative P&L curve across closed trades
+- Win rate broken down by `reason_tag` (mirrors the tag-adjustment logic
+  in `trade_tracker.py`, including a flag for tags with under 3 samples)
+- A sortable table of every trade
+
+Your journal data never leaves the browser — it's read locally via the
+File API, not uploaded anywhere.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push/PR: compiles all `.py`
+files (catches syntax errors), lints with `ruff`, and does an import
+sanity check across all modules on Python 3.10–3.12.
+
 ## Disclaimer
 
 This is decision-support tooling for personal use — it prints recommendations
