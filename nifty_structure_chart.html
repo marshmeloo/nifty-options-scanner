@@ -1,0 +1,122 @@
+<div id="root"></div>
+<script>
+const DATA = {"candles": [{"t": "09:15", "o": 24950.0, "h": 24953.51, "l": 24939.32, "c": 24947.83, "v": 10373}, {"t": "09:20", "o": 24947.83, "h": 24957.55, "l": 24940.0, "c": 24954.61, "v": 24627}, {"t": "09:25", "o": 24954.61, "h": 24957.47, "l": 24944.29, "c": 24950.48, "v": 15886}, {"t": "09:30", "o": 24950.48, "h": 24956.72, "l": 24933.84, "c": 24944.11, "v": 12056}, {"t": "09:35", "o": 24944.11, "h": 24961.47, "l": 24936.28, "c": 24953.16, "v": 10027}, {"t": "09:40", "o": 24953.16, "h": 24961.52, "l": 24941.4, "c": 24955.55, "v": 9526}, {"t": "09:45", "o": 24955.55, "h": 24960.9, "l": 24949.36, "c": 24957.57, "v": 11859}, {"t": "09:50", "o": 24957.57, "h": 24967.45, "l": 24948.75, "c": 24959.85, "v": 11376}, {"t": "09:55", "o": 24959.85, "h": 24970.71, "l": 24954.12, "c": 24962.32, "v": 10057}, {"t": "10:00", "o": 24962.32, "h": 24972.67, "l": 24955.35, "c": 24964.48, "v": 22011}, {"t": "10:05", "o": 24964.48, "h": 24977.12, "l": 24953.24, "c": 24970.47, "v": 19848}, {"t": "10:10", "o": 24970.47, "h": 24980.41, "l": 24958.87, "c": 24967.86, "v": 15998}, {"t": "10:15", "o": 24967.86, "h": 24972.86, "l": 24954.38, "c": 24961.33, "v": 19255}, {"t": "10:20", "o": 24961.33, "h": 24971.34, "l": 24949.53, "c": 24966.46, "v": 11868}, {"t": "10:25", "o": 24966.46, "h": 24971.33, "l": 24961.04, "c": 24967.68, "v": 24022}, {"t": "10:30", "o": 24967.68, "h": 24979.3, "l": 24964.49, "c": 24967.27, "v": 18280}, {"t": "10:35", "o": 24967.27, "h": 24972.77, "l": 24958.43, "c": 24965.39, "v": 22948}, {"t": "10:40", "o": 24965.39, "h": 24968.33, "l": 24953.93, "c": 24958.63, "v": 10129}, {"t": "10:45", "o": 24958.63, "h": 25015.74, "l": 24950.16, "c": 25006.72, "v": 22602}, {"t": "10:50", "o": 25006.72, "h": 25012.58, "l": 24995.16, "c": 25003.84, "v": 8739}, {"t": "10:55", "o": 25003.84, "h": 25018.33, "l": 24995.74, "c": 25012.78, "v": 24177}, {"t": "11:00", "o": 25012.78, "h": 25022.46, "l": 25002.54, "c": 25005.84, "v": 16113}, {"t": "11:05", "o": 25005.84, "h": 25017.01, "l": 24998.03, "c": 25005.0, "v": 13451}, {"t": "11:10", "o": 25005.0, "h": 25012.58, "l": 24994.17, "c": 25005.08, "v": 22107}, {"t": "11:15", "o": 25005.08, "h": 25017.42, "l": 24998.93, "c": 25012.64, "v": 19756}, {"t": "11:20", "o": 25012.64, "h": 25022.73, "l": 25008.33, "c": 25016.93, "v": 10719}, {"t": "11:25", "o": 25016.93, "h": 25021.25, "l": 25007.76, "c": 25012.1, "v": 23891}, {"t": "11:30", "o": 25012.1, "h": 25022.88, "l": 25007.28, "c": 25019.06, "v": 12773}, {"t": "11:35", "o": 25019.06, "h": 25024.75, "l": 25010.93, "c": 25018.6, "v": 12112}, {"t": "11:40", "o": 25018.6, "h": 25030.18, "l": 25010.42, "c": 25023.03, "v": 9769}, {"t": "11:45", "o": 25023.03, "h": 25033.96, "l": 25011.51, "c": 25023.25, "v": 20857}, {"t": "11:50", "o": 25023.25, "h": 25029.19, "l": 25015.6, "c": 25022.41, "v": 21121}, {"t": "11:55", "o": 25022.41, "h": 25025.09, "l": 25011.44, "c": 25015.53, "v": 13318}, {"t": "12:00", "o": 25015.53, "h": 25023.54, "l": 25006.49, "c": 25009.51, "v": 12956}, {"t": "12:05", "o": 25009.51, "h": 25022.66, "l": 25001.37, "c": 25011.17, "v": 10304}, {"t": "12:10", "o": 25011.17, "h": 25027.05, "l": 25007.68, "c": 25018.91, "v": 16265}, {"t": "12:15", "o": 25018.91, "h": 25036.13, "l": 25012.17, "c": 25028.11, "v": 11779}, {"t": "12:20", "o": 25028.11, "h": 25047.32, "l": 25021.45, "c": 25035.39, "v": 23854}, {"t": "12:25", "o": 25035.39, "h": 25038.83, "l": 25023.5, "c": 25033.0, "v": 16675}, {"t": "12:30", "o": 25033.0, "h": 25042.54, "l": 25025.84, "c": 25033.62, "v": 14724}, {"t": "12:35", "o": 25033.62, "h": 25040.9, "l": 24882.73, "c": 24972.73, "v": 8886}, {"t": "12:40", "o": 24972.73, "h": 24983.36, "l": 24964.3, "c": 24978.38, "v": 10982}, {"t": "12:45", "o": 24978.38, "h": 24987.52, "l": 24972.71, "c": 24982.91, "v": 13473}, {"t": "12:50", "o": 24982.91, "h": 24987.14, "l": 24973.9, "c": 24981.31, "v": 24472}, {"t": "12:55", "o": 24981.31, "h": 24985.54, "l": 24969.13, "c": 24979.25, "v": 14394}, {"t": "13:00", "o": 24979.25, "h": 24995.94, "l": 24969.85, "c": 24985.76, "v": 15429}, {"t": "13:05", "o": 24985.76, "h": 24992.69, "l": 24972.05, "c": 24981.36, "v": 8915}, {"t": "13:10", "o": 24981.36, "h": 24994.3, "l": 24977.42, "c": 24987.58, "v": 19281}, {"t": "13:15", "o": 24987.58, "h": 24999.0, "l": 24975.7, "c": 24987.63, "v": 19948}, {"t": "13:20", "o": 24987.63, "h": 24990.65, "l": 24974.38, "c": 24981.08, "v": 19066}, {"t": "13:25", "o": 24981.08, "h": 24989.32, "l": 24965.75, "c": 24976.76, "v": 8062}, {"t": "13:30", "o": 24976.76, "h": 24985.92, "l": 24966.76, "c": 24977.39, "v": 10778}, {"t": "13:35", "o": 24977.39, "h": 24987.61, "l": 24971.5, "c": 24984.41, "v": 14531}, {"t": "13:40", "o": 24984.41, "h": 24988.8, "l": 24974.52, "c": 24985.02, "v": 18895}, {"t": "13:45", "o": 24985.02, "h": 24996.48, "l": 24969.36, "c": 24978.58, "v": 23176}, {"t": "13:50", "o": 24978.58, "h": 24990.05, "l": 24968.55, "c": 24977.8, "v": 13570}, {"t": "13:55", "o": 24977.8, "h": 24989.95, "l": 24969.89, "c": 24987.68, "v": 23248}, {"t": "14:00", "o": 24987.68, "h": 24997.66, "l": 24977.41, "c": 24994.2, "v": 23543}, {"t": "14:05", "o": 24994.2, "h": 25003.53, "l": 24986.71, "c": 24998.03, "v": 12292}, {"t": "14:10", "o": 24998.03, "h": 25008.02, "l": 24981.15, "c": 24990.41, "v": 11367}], "levels": [{"kind": "fvg_bullish", "low": 24968.33, "high": 24995.16, "note": "Bullish FVG between candles at 10:40 and 10:50", "strength": 0.11}, {"kind": "fvg_bearish", "low": 24983.36, "high": 25025.84, "note": "Bearish FVG between candles at 12:30 and 12:40", "strength": 0.17}, {"kind": "resistance", "low": 24980.41, "high": 24999.0, "note": "Resistance level touched 2x around 24989.7", "strength": 2.0}, {"kind": "resistance", "low": 25033.96, "high": 25047.32, "note": "Resistance level touched 2x around 25040.6", "strength": 2.0}, {"kind": "support", "low": 24949.53, "high": 24965.75, "note": "Support level touched 2x around 24957.6", "strength": 2.0}, {"kind": "sweep_bullish", "low": 24882.73, "high": 24949.53, "note": "Swept support 24949.5 then closed back above at 12:35", "strength": 0.27}]};
+
+const STYLE = {
+  ob_bullish:   { fill: "#3b82f6", label: "Bullish order block" },
+  ob_bearish:   { fill: "#f97316", label: "Bearish order block" },
+  fvg_bullish:  { fill: "#a855f7", label: "Bullish FVG" },
+  fvg_bearish:  { fill: "#ec4899", label: "Bearish FVG" },
+  support:      { fill: "#22c55e", label: "Support" },
+  resistance:   { fill: "#ef4444", label: "Resistance" },
+  sweep_bullish:{ fill: "#fbbf24", label: "Bullish sweep" },
+  sweep_bearish:{ fill: "#fbbf24", label: "Bearish sweep" },
+};
+
+const root = document.getElementById("root");
+
+const wrap = document.createElement("div");
+wrap.style.cssText = `
+  background:#0a0e14; color:#cbd5e1; font-family:'JetBrains Mono','Courier New',monospace;
+  padding:20px; border-radius:8px; max-width:1100px; margin:0 auto;
+`;
+root.appendChild(wrap);
+
+const header = document.createElement("div");
+header.style.cssText = "display:flex; justify-content:space-between; align-items:baseline; margin-bottom:14px; flex-wrap:wrap; gap:8px;";
+header.innerHTML = `
+  <div>
+    <div style="font-size:15px; font-weight:600; color:#e2e8f0; letter-spacing:0.3px;">NIFTY · Structure Overlay</div>
+    <div style="font-size:11px; color:#64748b; margin-top:2px;">5-min candles · sample session · OB / FVG / S-R / sweeps from price_action.py</div>
+  </div>
+  <div style="font-size:11px; color:#475569;">${DATA.candles[0].t} – ${DATA.candles[DATA.candles.length-1].t} IST</div>
+`;
+wrap.appendChild(header);
+
+// ---- chart geometry ----
+const W = 1060, H = 460, padL = 56, padR = 90, padT = 10, padB = 30;
+const plotW = W - padL - padR, plotH = H - padT - padB;
+
+const allPrices = [];
+DATA.candles.forEach(c => { allPrices.push(c.h, c.l); });
+DATA.levels.forEach(l => { allPrices.push(l.low, l.high); });
+const pMin = Math.min(...allPrices), pMax = Math.max(...allPrices);
+const pPad = (pMax - pMin) * 0.06;
+const yMin = pMin - pPad, yMax = pMax + pPad;
+
+function yOf(price) { return padT + (yMax - price) / (yMax - yMin) * plotH; }
+const n = DATA.candles.length;
+const slot = plotW / n;
+function xOf(i) { return padL + i * slot + slot / 2; }
+
+let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%; height:auto; display:block; background:#0d1219; border-radius:6px;">`;
+
+// grid + y-axis labels
+const gridLines = 6;
+for (let g = 0; g <= gridLines; g++) {
+  const price = yMin + (yMax - yMin) * (g / gridLines);
+  const y = yOf(price);
+  svg += `<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="#1c2530" stroke-width="1"/>`;
+  svg += `<text x="${W-padR+8}" y="${y+4}" font-size="10" fill="#64748b">${price.toFixed(0)}</text>`;
+}
+
+// x-axis time labels (every 6th candle)
+DATA.candles.forEach((c, i) => {
+  if (i % 6 === 0) {
+    svg += `<text x="${xOf(i)}" y="${H-10}" font-size="9" fill="#475569" text-anchor="middle">${c.t}</text>`;
+  }
+});
+
+// price-action zones (drawn first, under candles)
+DATA.levels.forEach((lv, idx) => {
+  const style = STYLE[lv.kind] || { fill: "#64748b", label: lv.kind };
+  const yTop = yOf(lv.high), yBot = yOf(lv.low);
+  const h = Math.max(yBot - yTop, 2);
+  svg += `<rect data-level="${idx}" x="${padL}" y="${yTop}" width="${plotW}" height="${h}"
+           fill="${style.fill}" fill-opacity="0.14" stroke="${style.fill}" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="4,3"/>`;
+});
+
+// candles
+DATA.candles.forEach((c, i) => {
+  const up = c.c >= c.o;
+  const color = up ? "#3ddc97" : "#ff6b6b";
+  const x = xOf(i);
+  const yH = yOf(c.h), yL = yOf(c.l), yO = yOf(c.o), yC = yOf(c.c);
+  const bodyTop = Math.min(yO, yC), bodyH = Math.max(Math.abs(yC - yO), 1.2);
+  const bw = Math.max(slot * 0.55, 2);
+  svg += `<line x1="${x}" y1="${yH}" x2="${x}" y2="${yL}" stroke="${color}" stroke-width="1"/>`;
+  svg += `<rect x="${x - bw/2}" y="${bodyTop}" width="${bw}" height="${bodyH}" fill="${color}"/>`;
+});
+
+svg += `</svg>`;
+
+const chartBox = document.createElement("div");
+chartBox.innerHTML = svg;
+wrap.appendChild(chartBox);
+
+// legend + level list
+const listBox = document.createElement("div");
+listBox.style.cssText = "margin-top:14px; display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:8px;";
+DATA.levels.forEach(lv => {
+  const style = STYLE[lv.kind] || { fill: "#64748b", label: lv.kind };
+  const row = document.createElement("div");
+  row.style.cssText = `
+    display:flex; align-items:flex-start; gap:8px; padding:8px 10px;
+    background:#111826; border:1px solid #1e2836; border-radius:6px; font-size:12px;
+  `;
+  row.innerHTML = `
+    <span style="width:10px; height:10px; border-radius:2px; background:${style.fill}; margin-top:3px; flex-shrink:0;"></span>
+    <div>
+      <div style="color:#e2e8f0; font-weight:600;">${style.label} <span style="color:#64748b; font-weight:400;">${lv.low.toFixed(1)}–${lv.high.toFixed(1)}</span></div>
+      <div style="color:#8593a8; margin-top:2px;">${lv.note}</div>
+    </div>
+  `;
+  listBox.appendChild(row);
+});
+wrap.appendChild(listBox);
+
+const foot = document.createElement("div");
+foot.style.cssText = "margin-top:14px; font-size:10px; color:#475569; border-top:1px solid #1e2836; padding-top:10px;";
+foot.textContent = "Sample data for visual verification only. Live version renders this from real Dhan intraday candles each polling cycle.";
+wrap.appendChild(foot);
+</script>

@@ -1,0 +1,27 @@
+# Secrets / credentials -- never commit these
+.env
+*.env
+dhan_credentials*
+*token*.txt
+*access_token*
+
+# Runtime data / logs (grows daily, not source)
+*.log
+nifty_scan_*.log
+trade_journal.jsonl
+cmd-print-*.txt
+sample_data.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# OS / editor cruft
+.DS_Store
+.vscode/
+.idea/
