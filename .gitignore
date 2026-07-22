@@ -11,6 +11,7 @@ nifty_scan_*.log
 trade_journal.jsonl
 cmd-print-*.txt
 sample_data.csv
+state/*.json
 
 # Python
 __pycache__/

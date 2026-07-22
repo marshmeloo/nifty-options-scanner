@@ -40,6 +40,8 @@ Pipeline: `SCAN -> SIGNALS -> PLAN -> RISK -> DECISION`
 | `tradingview_source.py` | Last-resort fallback: spot + candles only (no option chain exists on TradingView) |
 | `resilient_source.py` | Orchestrates the Dhan -> NSE -> TradingView fallback; `main_live.py` imports from here |
 | `oi_analytics.py` | Chain-wide OI reads: Max Pain, call/put OI walls, net delta OI |
+| `trade_staging.py` | Approval-gate placeholder for future order execution ("Trading as Git" pattern) -- not wired in yet |
+| `approve_orders.py` | Interactive CLI to review/approve/reject staged orders |
 | `data_source.py` | CSV-based snapshot loader (offline/testing) |
 | `models.py` | Shared dataclasses (snapshot, setup, plan, verdict) |
 | `config.py` | Every threshold and risk parameter — tune to your own setup |
@@ -100,6 +102,18 @@ chain-wide read, separate from the per-strike buildup classification:
 
 All of it is on `snapshot.oi_analysis`, and `main_live.py` logs it every
 cycle.
+
+## Order execution (placeholder, not active)
+
+This project still only prints recommendations -- nothing places an order.
+`trade_staging.py` and `approve_orders.py` are a placeholder for **if you
+ever add execution**: a "Trading as Git" style gate where every proposed
+order is staged as a `PENDING` record, a human explicitly approves or
+rejects it (`python3 approve_orders.py`), and only an `APPROVED` record
+could ever be picked up by a (currently nonexistent) execution layer.
+Nothing in either file calls a broker API. They are not wired into
+`main_live.py` yet -- that's a deliberate future step, not something that
+should silently change what the live loop does today.
 
 ## Data source fallback (Dhan -> NSE -> TradingView)
 
