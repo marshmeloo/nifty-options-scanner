@@ -31,6 +31,23 @@ class OptionQuote:
 
 
 @dataclass
+class OIAnalysis:
+    """
+    Chain-wide "where is smart money positioned" read, computed once per
+    snapshot from OI across all strikes. See oi_analytics.py.
+    """
+    max_pain_strike: float          # strike where option writers collectively lose the least at expiry
+    max_pain_distance_pct: float    # how far spot currently sits from max pain, as a % of spot
+    call_wall_strike: float         # strike with the single largest CE OI -> acts as resistance
+    put_wall_strike: float          # strike with the single largest PE OI -> acts as support
+    call_wall_oi: int
+    put_wall_oi: int
+    net_delta_oi: int               # (today's CE OI added) - (today's PE OI added), signed
+    net_delta_oi_bias: str          # "bullish" | "bearish" | "neutral" reading of net_delta_oi
+    top_oi_concentration: list = field(default_factory=list)  # list[(strike, ce_oi, pe_oi)], sorted by combined OI desc
+
+
+@dataclass
 class MarketSnapshot:
     """Underlying + full option chain at a point in time."""
     symbol: str
@@ -39,6 +56,8 @@ class MarketSnapshot:
     pcr: float
     chain: list  # list[OptionQuote]
     timestamp: datetime = field(default_factory=datetime.now)
+    oi_analysis: Optional[OIAnalysis] = None
+    source: str = "unknown"   # which data source produced this snapshot: "dhan" | "nse" | "csv"
 
 
 @dataclass

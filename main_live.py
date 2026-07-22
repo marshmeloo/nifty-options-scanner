@@ -19,7 +19,7 @@ from datetime import datetime, time as dtime
 from pathlib import Path
 
 import config
-from dhan_source import get_nifty_snapshot, get_nearest_expiry, get_nifty_intraday_candles
+from resilient_source import get_nifty_snapshot, get_nearest_expiry, get_nifty_intraday_candles
 from scanner import scan, compute_market_bias, tag_bias_conflicts
 from plan_generator import build_plan
 from risk_checker import check
@@ -55,7 +55,16 @@ def market_is_open(now: datetime = None) -> bool:
 def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current_daily_loss_pct: float):
     snapshot = get_nifty_snapshot(expiry=expiry)
     ts = snapshot.timestamp.strftime("%H:%M:%S")
-    log.info(f"\n[{ts}] NIFTY spot {snapshot.spot}, VWAP-proxy {snapshot.vwap}, PCR {snapshot.pcr}")
+    log.info(f"\n[{ts}] ({snapshot.source}) NIFTY spot {snapshot.spot}, VWAP-proxy {snapshot.vwap}, PCR {snapshot.pcr}")
+
+    oi = snapshot.oi_analysis
+    if oi:
+        log.info(
+            f"  OI: max pain {oi.max_pain_strike} ({oi.max_pain_distance_pct:+.2f}% from spot) | "
+            f"call wall {oi.call_wall_strike} (OI {oi.call_wall_oi:,}) | "
+            f"put wall {oi.put_wall_strike} (OI {oi.put_wall_oi:,}) | "
+            f"net delta OI {oi.net_delta_oi:+,} ({oi.net_delta_oi_bias})"
+        )
 
     try:
         candles = get_nifty_intraday_candles()

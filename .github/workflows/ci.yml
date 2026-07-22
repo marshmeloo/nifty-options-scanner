@@ -36,4 +36,4 @@ jobs:
 
       - name: Import sanity check
         run: |
-          python -c "import config, models, data_source, plan_generator, risk_checker, price_action, scanner, trade_tracker, dhan_source"
+          python -c "import config, models, data_source, plan_generator, risk_checker, price_action, scanner, trade_tracker, dhan_source, oi_analytics, nse_source, tradingview_source, resilient_source"

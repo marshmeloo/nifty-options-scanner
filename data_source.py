@@ -14,6 +14,7 @@ form of auto order placement.
 import csv
 from datetime import datetime
 from models import OptionQuote, MarketSnapshot
+import oi_analytics
 
 
 def load_snapshot_from_csv(path: str, symbol: str = "NIFTY") -> MarketSnapshot:
@@ -54,6 +55,8 @@ def load_snapshot_from_csv(path: str, symbol: str = "NIFTY") -> MarketSnapshot:
         pcr=pcr,
         chain=chain,
         timestamp=datetime.now(),
+        oi_analysis=oi_analytics.analyze(chain, spot),
+        source="csv",
     )
 
 

@@ -47,6 +47,7 @@ from pathlib import Path
 import requests
 
 import config as cfg
+import oi_analytics
 from models import OptionQuote, MarketSnapshot, Candle
 
 DHAN_BASE_URL = "https://api.dhan.co/v2"
@@ -355,6 +356,7 @@ def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
         sides["pe"]["oi"] for sides in raw_chain.values() if sides.get("pe")
     )
     pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi else 0.0
+    oi_analysis = oi_analytics.analyze(chain, spot)
 
     return MarketSnapshot(
         symbol="NIFTY",
@@ -363,4 +365,6 @@ def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
         pcr=pcr,
         chain=chain,
         timestamp=datetime.now(),
+        oi_analysis=oi_analysis,
+        source="dhan",
     )

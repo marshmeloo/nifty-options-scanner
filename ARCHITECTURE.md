@@ -96,6 +96,30 @@ open and close (9:15–15:30 IST). OI and IV don't move meaningfully faster
 than that, so polling faster would just add noise and API load. Every
 session's output is also written to `logs/nifty_scan_YYYYMMDD.log`.
 
+## Chain-wide OI analytics vs. per-strike buildup
+
+`dhan_source._classify_buildup` answers "is *this contract's* OI/price
+move bullish or bearish." `oi_analytics.py` sits alongside it and answers
+a chain-wide question instead: where does aggregate OI say price is
+likely to gravitate (Max Pain) or struggle (call/put walls), and is fresh
+OI this session skewed to the call or put side (net delta OI). Both feed
+off the same `chain: list[OptionQuote]`, computed once per snapshot and
+attached at `snapshot.oi_analysis` regardless of which source produced
+the snapshot.
+
+## Data source tiering
+
+`resilient_source.py` sits between `main_live.py` and the three concrete
+sources (`dhan_source`, `nse_source`, `tradingview_source`). It tries the
+primary tier every cycle rather than latching onto a fallback
+permanently, since Dhan/NSE issues are often transient (rate limit
+window, expired token). A short per-tier cooldown avoids retrying a
+source that just failed on every single 30s cycle. TradingView is
+structurally different from the other two — it has no option chain at
+all — so it can only ever backstop spot/candles, not
+`get_nifty_snapshot()`; the module is explicit about that boundary rather
+than faking a chain from it.
+
 ## Extending this
 
 - **New data source**: add a module alongside `dhan_source.py`/

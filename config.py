@@ -77,6 +77,24 @@ VOLUME_SPIKE_MULTIPLE = 1.5   # candle volume vs its rolling average to count as
 BREAKOUT_CONFIRM_PCT = 0.05     # close beyond an S/R level by this % counts as a breakout
 PULLBACK_PROXIMITY_PCT = 0.15   # how close price must return to a broken level to flag a pullback
 
+# --- OI analytics (Max Pain / OI walls / net delta OI) ---
+# See oi_analytics.py. This is a chain-wide read, separate from the
+# per-strike buildup classification above.
+NET_DELTA_OI_NEUTRAL_BAND = 5000  # net delta OI within +/- this many contracts counts as "neutral", not a lean
+OI_CONCENTRATION_TOP_N = 5         # how many strikes to surface in the OI concentration table
+
+# --- Data source fallback (Dhan -> NSE -> TradingView) ---
+# See resilient_source.py. Dhan is the primary source (full chain + Greeks).
+# If Dhan errors or times out, fall back to NSE's public option-chain API
+# (full chain, no Greeks). If that also fails, fall back to TradingView for
+# spot price and candles ONLY -- TradingView has no public option-chain/OI
+# data, so in that last-resort tier the scanner runs in price-action-only
+# mode (no OI-based setups) until a chain source recovers.
+NSE_REQUEST_TIMEOUT = 10
+NSE_SESSION_WARMUP_TIMEOUT = 5
+TRADINGVIEW_REQUEST_TIMEOUT = 10
+FALLBACK_RETRY_COOLDOWN_SECONDS = 60  # don't hammer a source that just failed; wait this long before retrying it
+
 # --- Trade tracking ---
 # The scanner re-evaluates the whole chain every cycle, which is correct
 # for FINDING setups but wrong for TRACKING one: without a cap, "highest

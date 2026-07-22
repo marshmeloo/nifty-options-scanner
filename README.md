@@ -36,6 +36,10 @@ Pipeline: `SCAN -> SIGNALS -> PLAN -> RISK -> DECISION`
 | `price_action.py` | Structure detection: swings, OB, FVG, S/R, sweeps, trend, momentum |
 | `trade_tracker.py` | Journals tracked trades and their outcomes |
 | `dhan_source.py` | Dhan API client: option chain, snapshot, intraday candles |
+| `nse_source.py` | Fallback: NSE's public option-chain API (full chain, no Greeks) |
+| `tradingview_source.py` | Last-resort fallback: spot + candles only (no option chain exists on TradingView) |
+| `resilient_source.py` | Orchestrates the Dhan -> NSE -> TradingView fallback; `main_live.py` imports from here |
+| `oi_analytics.py` | Chain-wide OI reads: Max Pain, call/put OI walls, net delta OI |
 | `data_source.py` | CSV-based snapshot loader (offline/testing) |
 | `models.py` | Shared dataclasses (snapshot, setup, plan, verdict) |
 | `config.py` | Every threshold and risk parameter — tune to your own setup |
@@ -80,6 +84,40 @@ live values:
 - `NIFTY_LOT_SIZE = 65`
 - `MAX_LOTS_PER_TRADE = 1`
 - `MAX_NEW_TRADES_PER_DAY` — effectively uncapped (training/evaluation phase)
+
+## OI analytics ("where is smart money positioned")
+
+`oi_analytics.py` runs on every snapshot (Dhan, NSE, or CSV) and adds a
+chain-wide read, separate from the per-strike buildup classification:
+
+- **Max Pain** — the strike where option writers collectively lose the
+  least at expiry, and how far spot currently sits from it.
+- **Call wall / put wall** — the single strikes with the largest CE / PE
+  OI, which tend to act as resistance / support.
+- **Net delta OI** — today's fresh call-side OI minus fresh put-side OI
+  across the whole chain, with a bullish/bearish/neutral read.
+- **OI concentration table** — top strikes by combined CE+PE OI.
+
+All of it is on `snapshot.oi_analysis`, and `main_live.py` logs it every
+cycle.
+
+## Data source fallback (Dhan -> NSE -> TradingView)
+
+`main_live.py` now imports from `resilient_source.py` instead of talking
+to Dhan directly:
+
+1. **Dhan** (primary) — full chain + Greeks.
+2. **NSE public API** (fallback) — full chain, OI/IV/PCR all work, but no
+   Greeks (delta/theta/vega come back `None`).
+3. **TradingView** (last resort) — TradingView has no public option-chain
+   data at all, so this tier only backstops spot price and candles for
+   price-action analysis. OI-based setups simply won't fire until Dhan or
+   NSE recovers; the pipeline logs which tier is active each cycle
+   (`snapshot.source`) rather than failing silently.
+
+Each tier has a cooldown after a failure so a genuinely-down source
+doesn't add latency/log-noise to every 30s poll — see
+`FALLBACK_RETRY_COOLDOWN_SECONDS` in `config.py`.
 
 ## Architecture
 
