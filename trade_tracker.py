@@ -26,10 +26,13 @@ This module:
 """
 
 import json
+import logging
 from pathlib import Path
 from datetime import date
 
 import config
+
+log = logging.getLogger("nifty_scanner")
 
 STATE_DIR = Path(__file__).parent / "state"
 STATE_DIR.mkdir(exist_ok=True)
@@ -176,6 +179,17 @@ def open_new_trade(setup, plan, snapshot) -> dict:
     }
 
 
+def _pnl_inr(entry: float, exit_or_current: float, lots: int) -> float:
+    """
+    P&L in rupees for a long option position: (price move) * lot size *
+    number of lots. Percentage alone doesn't tell you what a move is
+    actually worth -- a 10% move on a 10-rupee option and a 10% move on a
+    150-rupee option are very different amounts of real money.
+    """
+    lot_size = getattr(config, "NIFTY_LOT_SIZE", 65)
+    return round((exit_or_current - entry) * lot_size * lots, 2)
+
+
 def update_open_trades(state: dict, snapshot) -> list:
     """
     Checks each open trade's CURRENT premium against its FROZEN
@@ -206,12 +220,14 @@ def update_open_trades(state: dict, snapshot) -> list:
             trade["exit_ltp"] = current_ltp
             trade["outcome"] = outcome
             trade["pnl_pct"] = round((current_ltp - trade["entry"]) / trade["entry"] * 100, 1)
+            trade["pnl_inr"] = _pnl_inr(trade["entry"], current_ltp, trade["lots"])
             trade["lesson"] = _build_lesson(trade, outcome)
             _append_journal(trade)
             closed_this_cycle.append(trade)
         else:
             trade["current_ltp"] = current_ltp
             trade["running_pnl_pct"] = round((current_ltp - trade["entry"]) / trade["entry"] * 100, 1)
+            trade["running_pnl_inr"] = _pnl_inr(trade["entry"], current_ltp, trade["lots"])
             still_open.append(trade)
 
     state["trades"] = still_open
@@ -224,12 +240,35 @@ def force_close_end_of_day(state: dict, snapshot) -> list:
     quote_lookup = {(q.strike, q.option_type): q for q in snapshot.chain}
     for trade in state["trades"]:
         quote = quote_lookup.get((trade["strike"], trade["option_type"]))
-        exit_ltp = quote.ltp if quote else trade["entry"]
+
+        if quote is None:
+            # No quote for this strike in the closing snapshot -- can
+            # happen if it's drifted outside STRIKE_RANGE_POINTS, or the
+            # feed already went quiet right at the close. Falling back to
+            # entry price is the only numeric option here, but doing that
+            # SILENTLY used to make a trade that actually moved (see the
+            # 2026-07-22 24000 PE incident: quote unavailable all day,
+            # force-closed at entry showing a misleading flat 0.0%, when
+            # it had actually traded up to 192 intraday) look like a
+            # harmless flat close in the journal. Flag it clearly instead.
+            log.info(
+                f"  WARNING: no closing quote available for {trade['strike']} {trade['option_type']} -- "
+                f"exit price defaulted to entry ({trade['entry']}). True EOD P&L is UNKNOWN, not necessarily flat."
+            )
+            exit_ltp = trade["entry"]
+            trade["exit_price_estimated"] = True
+        else:
+            exit_ltp = quote.ltp
+            trade["exit_price_estimated"] = False
+
         trade["closed_at"] = snapshot.timestamp.isoformat()
         trade["exit_ltp"] = exit_ltp
         trade["outcome"] = "EOD_CLOSE"
         trade["pnl_pct"] = round((exit_ltp - trade["entry"]) / trade["entry"] * 100, 1)
+        trade["pnl_inr"] = _pnl_inr(trade["entry"], exit_ltp, trade["lots"])
         trade["lesson"] = _build_lesson(trade, "EOD_CLOSE")
+        if trade["exit_price_estimated"]:
+            trade["lesson"] += " NOTE: exit price could not be confirmed at close -- this P&L is an estimate, not a confirmed outcome."
         _append_journal(trade)
         closed.append(trade)
     state["trades"] = []

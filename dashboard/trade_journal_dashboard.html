@@ -125,6 +125,7 @@
           <th data-key="entry">Entry</th>
           <th data-key="exit_ltp">Exit</th>
           <th data-key="pnl_pct">P&amp;L %</th>
+          <th data-key="pnl_inr">P&amp;L (Rs)</th>
           <th data-key="outcome">Outcome</th>
           <th data-key="reason_tags">Tags</th>
         </tr>
@@ -184,6 +185,12 @@ function fmtPct(v) {
   return v > 0 ? "+" + s : s;
 }
 
+function fmtInr(v) {
+  if (v === undefined || v === null || isNaN(v)) return "—";
+  const s = "Rs " + Math.abs(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  return v > 0 ? "+" + s : (v < 0 ? "-" + s : s);
+}
+
 function render() {
   const closed = trades.filter(t => t.status === "CLOSED" || t.outcome);
   const open = trades.filter(t => !(t.status === "CLOSED" || t.outcome));
@@ -192,6 +199,7 @@ function render() {
   const winRate = closed.length ? (wins.length / closed.length * 100) : null;
   const avgPnl = closed.length ? (closed.reduce((s, t) => s + (t.pnl_pct || 0), 0) / closed.length) : null;
   const totalPnl = closed.reduce((s, t) => s + (t.pnl_pct || 0), 0);
+  const totalPnlInr = closed.reduce((s, t) => s + (t.pnl_inr || 0), 0);
 
   const cards = [
     { label: "Total trades", value: trades.length },
@@ -200,6 +208,7 @@ function render() {
     { label: "Wins / Losses", value: `${wins.length} / ${losses.length}` },
     { label: "Avg P&L / trade", value: fmtPct(avgPnl), cls: avgPnl === null ? "" : (avgPnl >= 0 ? "pos" : "neg") },
     { label: "Cumulative P&L", value: fmtPct(totalPnl), cls: totalPnl >= 0 ? "pos" : "neg" },
+    { label: "Cumulative P&L (Rs)", value: fmtInr(totalPnlInr), cls: totalPnlInr >= 0 ? "pos" : "neg" },
   ];
 
   document.getElementById("cards").innerHTML = cards.map(c => `
@@ -299,6 +308,7 @@ function renderTradeTable() {
         <td>${t.entry ?? "—"}</td>
         <td>${t.exit_ltp ?? (t.current_ltp ?? "—")}</td>
         <td class="${(t.pnl_pct ?? t.running_pnl_pct ?? 0) >= 0 ? "win" : "loss"}">${fmtPct(t.pnl_pct ?? t.running_pnl_pct)}</td>
+        <td class="${(t.pnl_inr ?? t.running_pnl_inr ?? 0) >= 0 ? "win" : "loss"}">${fmtInr(t.pnl_inr ?? t.running_pnl_inr)}</td>
         <td class="${outcomeClass}">${t.outcome || t.status || "—"}</td>
         <td style="font-size:11px; color:#8a92a3;">${(t.reason_tags || []).join(", ")}</td>
       </tr>

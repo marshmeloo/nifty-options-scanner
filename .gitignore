@@ -12,6 +12,7 @@ trade_journal.jsonl
 cmd-print-*.txt
 sample_data.csv
 state/*.json
+logs/premarket_brief_*.md
 
 # Python
 __pycache__/

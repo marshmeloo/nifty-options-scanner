@@ -26,6 +26,7 @@ from models import OptionQuote, MarketSnapshot
 
 NSE_HOME_URL = "https://www.nseindia.com/"
 NSE_CHAIN_URL = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
+NSE_FII_DII_URL = "https://www.nseindia.com/api/fiidiiTradeReact"
 
 _HEADERS = {
     "User-Agent": (
@@ -54,6 +55,39 @@ def _fetch_raw_chain() -> dict:
     return resp.json()
 
 
+def get_fii_dii_activity() -> dict:
+    """
+    Latest provisional FII/DII cash-market buy/sell figures (in Rs crore),
+    from NSE's public dashboard endpoint -- the same figures reported in
+    financial news every evening. Useful pre-market context: heavy FII
+    selling the previous session is a headwind a pure OI/price read won't
+    tell you about on its own.
+
+    Returns {"date", "fii_net_crore", "dii_net_crore"} -- net = buy - sell.
+    Figures are provisional and subject to revision by NSE itself.
+    """
+    session = _warmed_up_session()
+    resp = session.get(NSE_FII_DII_URL, timeout=getattr(cfg, "NSE_REQUEST_TIMEOUT", 10))
+    resp.raise_for_status()
+    rows = resp.json()
+
+    fii_row = next((r for r in rows if r.get("category", "").upper().startswith("FII")), None)
+    dii_row = next((r for r in rows if r.get("category", "").upper().startswith("DII")), None)
+
+    def _net(row):
+        if not row:
+            return None
+        buy = float(row.get("buyValue", 0))
+        sell = float(row.get("sellValue", 0))
+        return round(buy - sell, 1)
+
+    return {
+        "date": fii_row.get("date") if fii_row else None,
+        "fii_net_crore": _net(fii_row),
+        "dii_net_crore": _net(dii_row),
+    }
+
+
 def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
     """
     Fetch a live Nifty option chain from NSE's public API and return it in
@@ -80,10 +114,12 @@ def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
             if not side:
                 continue
             ltp = side.get("lastPrice", 0.0)
-            if getattr(cfg, "PREMIUM_MIN", None) is not None and ltp < cfg.PREMIUM_MIN:
-                continue
-            if getattr(cfg, "PREMIUM_MAX", None) is not None and ltp > cfg.PREMIUM_MAX:
-                continue
+            # NOTE: no PREMIUM_MIN/MAX filter here on purpose -- see the
+            # matching comment in dhan_source.py. This chain feeds OI
+            # analytics and trade_tracker's open-trade lookup, both of
+            # which need every strike regardless of tradeable-premium
+            # range. The filter belongs in scanner.py at candidate-
+            # selection time, not here.
             oi = side.get("openInterest", 0)
             oi_change_pct = side.get("pchangeinOpenInterest", 0.0)
             chain.append(

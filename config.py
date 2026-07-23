@@ -52,10 +52,18 @@ CANDLE_INTERVAL_MINUTES = "5"    # Dhan intraday interval: "1","5","15","25","60
 STRIKE_RANGE_POINTS = 800
 
 # --- Premium range filter ---
-# Only options whose LTP (premium) falls in this range are scanned.
-# Cuts out both near-worthless deep-OTM lottery tickets (too cheap) and
-# expensive deep-ITM contracts that behave almost like the underlying
-# (too pricey for typical premium-buying setups).
+# Only NEW candidate strikes in this LTP (premium) range get flagged by
+# scanner.py. Cuts out both near-worthless deep-OTM lottery tickets (too
+# cheap) and expensive deep-ITM contracts that behave almost like the
+# underlying (too pricey for typical premium-buying setups).
+#
+# IMPORTANT: this filter is applied in scanner.py at candidate-selection
+# time ONLY. It must never be applied when building the chain itself
+# (dhan_source.py / nse_source.py) -- doing that used to silently drop
+# already-open trades' quotes from the snapshot the moment their premium
+# moved outside this band (which is normal as a position runs toward its
+# target), making them permanently untrackable ("current ?" forever) and
+# corrupting OI analytics (max pain/PCR need every strike). Fixed 2026-07-22.
 PREMIUM_MIN = 10.0
 PREMIUM_MAX = 150.0
 
@@ -94,6 +102,45 @@ NSE_REQUEST_TIMEOUT = 10
 NSE_SESSION_WARMUP_TIMEOUT = 5
 TRADINGVIEW_REQUEST_TIMEOUT = 10
 FALLBACK_RETRY_COOLDOWN_SECONDS = 60  # don't hammer a source that just failed; wait this long before retrying it
+
+# --- Pre-market plan generator ---
+# See premarket.py. Runs once before market open to build a brief:
+# previous session recap, overnight global cues, FII/DII flow, projected
+# levels, and any known event for the day.
+PREMARKET_LOOKBACK_DAYS = 10        # trading days of daily candles used for level projection
+GLOBAL_CUES_REQUEST_TIMEOUT = 10
+
+# Maintain this yourself -- recurring/scheduled events worth flagging in
+# the brief (RBI MPC decisions, Union Budget, US FOMC, etc). Key is
+# "YYYY-MM-DD", value is a short label. Not fetched from anywhere
+# automatically; NSE/RBI don't publish a clean free API for this.
+KNOWN_EVENT_DATES = {
+    # "2026-08-06": "RBI MPC decision",
+    # "2026-09-17": "US Fed FOMC decision",
+}
+
+# A same-day expiry gets flagged in the brief as higher-theta-decay /
+# higher-whipsaw risk (see get_nearest_expiry usage in premarket.py) --
+# NSE has changed the NIFTY weekly expiry weekday more than once, so this
+# is computed from the actual expiry date returned by the API rather
+# than a hardcoded day of week.
+
+# --- News tracking / event-risk flags ---
+# See news_source.py. Keyword-tagged RSS headlines, rolled up into a
+# single "elevated" / "normal" risk read for the day -- not sentiment
+# analysis, just "is today a day known event categories are in the news."
+NEWS_REQUEST_TIMEOUT = 10
+NEWS_MAX_HEADLINES_SHOWN = 10
+NEWS_RISK_ELEVATED_THRESHOLD = 3   # sum of distinct-category weights (see EVENT_CATEGORIES) that trips "elevated"
+NEWS_CACHE_MINUTES = 15            # main_live.py re-fetches news at most this often, not every 30s poll
+
+# If True, risk_checker.check() REJECTS new trades outright on an
+# elevated-news-risk day. If False (default), elevated risk is only
+# surfaced as an advisory reason on the verdict -- it doesn't block
+# anything on its own. Start conservative (False) until you've seen how
+# often this actually fires; a keyword match doesn't necessarily mean
+# today's specific setup is dangerous.
+NEWS_RISK_BLOCKS_NEW_TRADES = False
 
 # --- Trade tracking ---
 # The scanner re-evaluates the whole chain every cycle, which is correct

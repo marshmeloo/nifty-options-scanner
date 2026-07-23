@@ -25,6 +25,7 @@ from plan_generator import build_plan
 from risk_checker import check
 from price_action import analyze_with_context
 import trade_tracker as tt
+import news_source
 
 POLL_INTERVAL_SECONDS = 30   # OI/IV don't move meaningfully faster than this
 MARKET_OPEN = dtime(9, 15)
@@ -43,6 +44,24 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger("nifty_scanner")
+
+_news_cache = {"flags": None, "fetched_at": None}
+
+
+def get_cached_news_flags():
+    """News doesn't need a 30s refresh like OI/price does -- refetch at
+    most every config.NEWS_CACHE_MINUTES so we're not hammering RSS feeds
+    every single poll cycle."""
+    now = datetime.now()
+    stale = (
+        _news_cache["flags"] is None
+        or _news_cache["fetched_at"] is None
+        or (now - _news_cache["fetched_at"]).total_seconds() >= config.NEWS_CACHE_MINUTES * 60
+    )
+    if stale:
+        _news_cache["flags"] = news_source.get_news_flags()
+        _news_cache["fetched_at"] = now
+    return _news_cache["flags"]
 
 
 def market_is_open(now: datetime = None) -> bool:
@@ -66,6 +85,14 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
             f"net delta OI {oi.net_delta_oi:+,} ({oi.net_delta_oi_bias})"
         )
 
+    news_flags = get_cached_news_flags()
+    news_risk = news_flags["risk"]
+    if news_risk["level"] == "elevated":
+        log.info(
+            f"  NEWS RISK: elevated (categories: {', '.join(news_risk['categories_hit'])}) -- "
+            f"{news_risk['headline_count']} matching headline(s)"
+        )
+
     try:
         candles = get_nifty_intraday_candles()
         price_levels, context = analyze_with_context(candles)
@@ -84,7 +111,8 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
     for trade in closed:
         log.info(
             f"  [TRADE CLOSED: {trade['outcome']}] {trade['strike']} {trade['option_type']}  "
-            f"entry {trade['entry']} -> exit {trade['exit_ltp']}  pnl {trade['pnl_pct']:+.1f}%"
+            f"entry {trade['entry']} -> exit {trade['exit_ltp']}  "
+            f"pnl {trade['pnl_pct']:+.1f}% (Rs {trade['pnl_inr']:+,.0f})"
         )
         log.info(f"    lesson: {trade['lesson']}")
 
@@ -94,14 +122,15 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
             log.info(
                 f"    {trade['strike']} {trade['option_type']}  entry {trade['entry']} "
                 f"target {trade['target']} stop {trade['stop']}  "
-                f"current {trade.get('current_ltp', '?')}  running pnl {trade.get('running_pnl_pct', 0):+.1f}%"
+                f"current {trade.get('current_ltp', '?')}  "
+                f"running pnl {trade.get('running_pnl_pct', 0):+.1f}% (Rs {trade.get('running_pnl_inr', 0):+,.0f})"
             )
 
     setups = scan(snapshot, price_levels=price_levels, context=context)
     if not setups:
         log.info("  No setups flagged this cycle.")
         tt.save_open_trades(state)
-        return
+        return snapshot
 
     bias_label, bias_score, bias_reasons = compute_market_bias(snapshot, context)
     log.info(f"  Market bias: {bias_label} (score {bias_score})  [{', '.join(bias_reasons) if bias_reasons else 'no strong signal'}]")
@@ -113,6 +142,7 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
             plan,
             current_open_exposure_pct=current_open_exposure_pct,
             current_daily_loss_pct=current_daily_loss_pct,
+            news_risk_level=news_risk["level"],
         )
         if verdict.decision == "REJECTED" and plan.lots == 0:
             continue
@@ -149,18 +179,30 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
             )
 
     tt.save_open_trades(state)
+    return snapshot
 
 
-def force_close_all(state: dict, expiry: str):
-    """Called once at/after market close to settle any trades still open."""
+def force_close_all(state: dict, expiry: str, last_snapshot=None):
+    """
+    Called once at/after market close to settle any trades still open.
+    Prefers `last_snapshot` (the final snapshot fetched while the market
+    was still confirmed open) over fetching a brand-new one -- a fresh
+    fetch made AFTER close can come back thin/stale/incomplete right at
+    the transition, which used to make already-closed trades look like
+    flat 0% outcomes when they'd actually moved during the day (see the
+    2026-07-22 incident notes in trade_tracker.force_close_end_of_day).
+    Only falls back to a fresh fetch if no last_snapshot is available at all.
+    """
     if not state["trades"]:
         return
-    snapshot = get_nifty_snapshot(expiry=expiry)
+    snapshot = last_snapshot if last_snapshot is not None else get_nifty_snapshot(expiry=expiry)
     closed = tt.force_close_end_of_day(state, snapshot)
     for trade in closed:
         log.info(
             f"  [EOD CLOSE] {trade['strike']} {trade['option_type']}  "
-            f"entry {trade['entry']} -> exit {trade['exit_ltp']}  pnl {trade['pnl_pct']:+.1f}%"
+            f"entry {trade['entry']} -> exit {trade['exit_ltp']}  "
+            f"pnl {trade['pnl_pct']:+.1f}% (Rs {trade['pnl_inr']:+,.0f})"
+            + ("  [ESTIMATED -- no closing quote available]" if trade.get("exit_price_estimated") else "")
         )
         log.info(f"    lesson: {trade['lesson']}")
     tt.save_open_trades(state)
@@ -175,13 +217,14 @@ def run_forever(current_open_exposure_pct: float = 0.0, current_daily_loss_pct: 
 
     state = tt.load_open_trades()
     was_open_last_cycle = False
+    last_good_snapshot = None
 
     while True:
         is_open = market_is_open()
 
         if is_open:
             try:
-                run_once(expiry, state, current_open_exposure_pct, current_daily_loss_pct)
+                last_good_snapshot = run_once(expiry, state, current_open_exposure_pct, current_daily_loss_pct)
             except Exception as e:
                 log.info(f"  Error this cycle (will retry next cycle): {e}")
             was_open_last_cycle = True
@@ -189,7 +232,7 @@ def run_forever(current_open_exposure_pct: float = 0.0, current_daily_loss_pct: 
             if was_open_last_cycle and state["trades"]:
                 log.info("  Market just closed — settling any still-open trades.")
                 try:
-                    force_close_all(state, expiry)
+                    force_close_all(state, expiry, last_snapshot=last_good_snapshot)
                 except Exception as e:
                     log.info(f"  Could not settle open trades cleanly: {e}")
             log.info(f"[{datetime.now().strftime('%H:%M:%S')}] Market closed, sleeping...")

@@ -42,6 +42,9 @@ Pipeline: `SCAN -> SIGNALS -> PLAN -> RISK -> DECISION`
 | `oi_analytics.py` | Chain-wide OI reads: Max Pain, call/put OI walls, net delta OI |
 | `trade_staging.py` | Approval-gate placeholder for future order execution ("Trading as Git" pattern) -- not wired in yet |
 | `approve_orders.py` | Interactive CLI to review/approve/reject staged orders |
+| `premarket.py` | Pre-market brief: previous session recap, projected levels, global cues, FII/DII, expiry/event flags |
+| `global_cues.py` | Overnight US/crude/USD-INR/India VIX cues (free, unauthenticated Yahoo endpoint) |
+| `news_source.py` | RSS-based news fetch + keyword tagging into an event-risk level ("elevated"/"normal") |
 | `data_source.py` | CSV-based snapshot loader (offline/testing) |
 | `models.py` | Shared dataclasses (snapshot, setup, plan, verdict) |
 | `config.py` | Every threshold and risk parameter — tune to your own setup |
@@ -102,6 +105,82 @@ chain-wide read, separate from the per-strike buildup classification:
 
 All of it is on `snapshot.oi_analysis`, and `main_live.py` logs it every
 cycle.
+
+## Fixed: 2026-07-22 -- open trades going untrackable ("current ?")
+
+A live session on 2026-07-22 showed a tracked trade (24000 PE) stuck at
+`current ?` for the whole day and force-closed at entry price (flat
+0.0%), even though it had genuinely traded up to 192 intraday (confirmed
+against a manually-tracked chart). Root cause: `PREMIUM_MIN`/`PREMIUM_MAX`
+was being applied when the option chain snapshot was *built*
+(`dhan_source.py`/`nse_source.py`), not just when picking new candidates.
+The instant an already-open trade's premium moved outside that band --
+completely normal as a position runs toward its target -- its quote
+silently disappeared from every subsequent snapshot, making it
+permanently untrackable, and this was also quietly trimming strikes out
+of the OI analytics (Max Pain/PCR need every strike, not just the
+tradeable-premium slice).
+
+Fixed by moving the premium filter to `scanner.py` (candidate-selection
+time only); the chain-building sources now always return the full chain
+within `STRIKE_RANGE_POINTS`. Also fixed a related issue where the
+end-of-day settlement re-fetched a brand-new snapshot right at market
+close (which can come back thin/stale) instead of reusing the last
+snapshot confirmed while the market was still open -- and added an
+explicit `exit_price_estimated` flag + journal note for the rare case a
+quote genuinely can't be found at close, instead of silently reporting
+a misleading flat 0% outcome.
+
+## P&L in rupees, not just percent
+
+Every P&L figure (live tracking, trade close, EOD close, and the
+dashboard) now shows rupee P&L (`pnl_inr` / `running_pnl_inr`) alongside
+the percentage, computed as `(price move) * NIFTY_LOT_SIZE * lots` --
+percentage alone doesn't tell you what a move was actually worth.
+
+## Pre-market brief
+
+Run before 9:15 IST to get a written plan for the day instead of walking
+into the open cold:
+
+```bash
+python3 premarket.py
+```
+
+Combines the previous session's recap, structural levels projected from
+recent daily candles (reusing `price_action.py`), overnight global cues
+(US index closes, crude, USD/INR, India VIX -- see `global_cues.py` for
+why this isn't GIFT Nifty and what to swap in if you get a real feed),
+the previous session's FII/DII net flow, whether today is an expiry day
+(computed from the actual expiry date, not a hardcoded weekday --
+NSE has moved NIFTY's weekly expiry more than once), and any event you've
+flagged in `config.KNOWN_EVENT_DATES` (RBI/Budget/Fed -- you maintain
+this list, there's no free clean API for it). Everything rolls up into
+one synthesized "lean," explicitly framed as a starting point rather
+than a trade signal. Output goes to `logs/premarket_brief_YYYYMMDD.md`
+and prints to console.
+
+## News tracking / event-risk flags
+
+`news_source.py` pulls headlines from a few free RSS feeds (Economic
+Times, Moneycontrol, Business Standard) and tags them against keyword
+categories that historically move the NIFTY: RBI/monetary policy,
+Fed/FOMC, Union Budget, geopolitical shocks, crude oil, inflation/growth
+data, SEBI/regulatory action, elections. This is deliberately simple
+keyword tagging, not sentiment analysis or an LLM read -- same
+philosophy as the tag-adjustment loop in `trade_tracker.py`: "keep a
+spreadsheet of what matters," not a trained model.
+
+Matched categories roll up into a single `elevated` / `normal` risk level
+for the day (`config.NEWS_RISK_ELEVATED_THRESHOLD`). This shows up in
+two places:
+- `premarket.py`'s brief, under "News / event risk"
+- `main_live.py`, which checks it at most every `NEWS_CACHE_MINUTES`
+  (not every 30s poll) and passes it into `risk_checker.check()`. By
+  default this is **advisory only** -- an elevated day adds a cautionary
+  reason to the verdict but doesn't block anything. Set
+  `config.NEWS_RISK_BLOCKS_NEW_TRADES = True` if you'd rather it reject
+  new trades outright on flagged days.
 
 ## Order execution (placeholder, not active)
 

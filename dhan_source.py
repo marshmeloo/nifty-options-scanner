@@ -273,10 +273,14 @@ def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
             if not side:
                 continue
             ltp = side["last_price"]
-            if getattr(cfg, "PREMIUM_MIN", None) is not None and ltp < cfg.PREMIUM_MIN:
-                continue
-            if getattr(cfg, "PREMIUM_MAX", None) is not None and ltp > cfg.PREMIUM_MAX:
-                continue
+            # NOTE: no PREMIUM_MIN/MAX filter here on purpose. This chain
+            # feeds OI analytics (max pain/walls/PCR need every strike) AND
+            # trade_tracker's open-trade lookup (which must be able to find
+            # an already-open trade's quote even after its premium has
+            # moved well outside the "worth entering fresh" band -- that's
+            # normal and expected as a position runs toward its target).
+            # The premium filter is applied at candidate-selection time in
+            # scanner.py instead, where it actually belongs.
             oi = side["oi"]
             prev_oi = side.get("previous_oi", 0)
             oi_change_pct = ((oi - prev_oi) / prev_oi * 100) if prev_oi else 0.0

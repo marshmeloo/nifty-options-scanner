@@ -37,6 +37,19 @@ def scan(snapshot, price_levels=None, context=None) -> list:
     setups = []
 
     for q in snapshot.chain:
+        # Premium filter lives HERE, not in the data-source chain builder:
+        # this only gates whether a strike is worth flagging as a NEW
+        # candidate. It must not remove strikes from the snapshot itself,
+        # since trade_tracker.update_open_trades() needs to find an
+        # already-open trade's quote even once its premium has moved well
+        # outside this band -- which is normal as a position runs toward
+        # its target. See dhan_source.py's chain-building comment for the
+        # bug this used to cause when the filter was applied too early.
+        if getattr(config, "PREMIUM_MIN", None) is not None and q.ltp < config.PREMIUM_MIN:
+            continue
+        if getattr(config, "PREMIUM_MAX", None) is not None and q.ltp > config.PREMIUM_MAX:
+            continue
+
         reasons = []
         score = 0.0
 

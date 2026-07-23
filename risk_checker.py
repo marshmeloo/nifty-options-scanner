@@ -7,7 +7,8 @@ import config
 from models import RiskVerdict
 
 
-def check(plan, current_open_exposure_pct: float = 0.0, current_daily_loss_pct: float = 0.0) -> RiskVerdict:
+def check(plan, current_open_exposure_pct: float = 0.0, current_daily_loss_pct: float = 0.0,
+          news_risk_level: str = "normal") -> RiskVerdict:
     checks = {}
     reasons = []
 
@@ -48,8 +49,21 @@ def check(plan, current_open_exposure_pct: float = 0.0, current_daily_loss_pct: 
     if not daily_loss_ok:
         reasons.append("Daily loss circuit breaker already tripped, no new trades today")
 
+    # 5. News / event risk (advisory unless config.NEWS_RISK_BLOCKS_NEW_TRADES)
+    news_ok = not (news_risk_level == "elevated" and getattr(config, "NEWS_RISK_BLOCKS_NEW_TRADES", False))
+    checks["news_risk"] = {
+        "pass": news_ok,
+        "detail": f"news risk level: {news_risk_level}"
+        + ("" if news_ok else " -- new trades blocked by config.NEWS_RISK_BLOCKS_NEW_TRADES"),
+    }
+    if news_risk_level == "elevated":
+        reasons.append(
+            "Elevated news/event risk today -- consider smaller size or wider stops regardless of this verdict"
+            if news_ok else "Elevated news/event risk today: new trades blocked by config"
+        )
+
     # Decision logic
-    if not daily_loss_ok or not exposure_ok:
+    if not daily_loss_ok or not exposure_ok or not news_ok:
         decision = "REJECTED"
     elif not lots_ok or not risk_ok:
         decision = "REJECTED"
