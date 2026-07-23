@@ -162,14 +162,21 @@ and prints to console.
 
 ## News tracking / event-risk flags
 
-`news_source.py` pulls headlines from a few free RSS feeds (Economic
-Times, Moneycontrol, Business Standard) and tags them against keyword
-categories that historically move the NIFTY: RBI/monetary policy,
-Fed/FOMC, Union Budget, geopolitical shocks, crude oil, inflation/growth
-data, SEBI/regulatory action, elections. This is deliberately simple
-keyword tagging, not sentiment analysis or an LLM read -- same
-philosophy as the tag-adjustment loop in `trade_tracker.py`: "keep a
-spreadsheet of what matters," not a trained model.
+`news_source.py` pulls headlines from Economic Times' RSS feed and a
+Google News RSS search query (covering NIFTY/RBI/Fed/budget/SEBI/crude
+oil terms), and tags them against keyword categories that historically
+move the NIFTY: RBI/monetary policy, Fed/FOMC, Union Budget, geopolitical
+shocks, crude oil, inflation/growth data, SEBI/regulatory action,
+elections. This is deliberately simple keyword tagging, not sentiment
+analysis or an LLM read -- same philosophy as the tag-adjustment loop in
+`trade_tracker.py`: "keep a spreadsheet of what matters," not a trained
+model.
+
+(Moneycontrol and Business Standard's direct RSS feeds were tried first
+but both returned HTTP 403 in live testing -- almost certainly
+Cloudflare-style bot protection that header spoofing won't reliably get
+past. Google News' RSS search endpoint sidesteps that by aggregating
+across publishers instead of hitting each one directly.)
 
 Matched categories roll up into a single `elevated` / `normal` risk level
 for the day (`config.NEWS_RISK_ELEVATED_THRESHOLD`). This shows up in

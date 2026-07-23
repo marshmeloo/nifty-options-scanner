@@ -21,6 +21,7 @@ first rather than assuming your keyword categories are wrong. Each feed
 is fetched independently and a dead one is skipped, not fatal.
 """
 
+import html
 import re
 from datetime import datetime, timedelta
 
@@ -29,11 +30,33 @@ import xml.etree.ElementTree as ET
 
 import config as cfg
 
+import urllib.parse
+
 FEEDS = {
     "Economic Times Markets": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
-    "Moneycontrol Business": "https://www.moneycontrol.com/rss/business.xml",
-    "Business Standard Markets": "https://www.business-standard.com/rss/markets-106.rss",
 }
+
+# Moneycontrol and Business Standard's direct RSS URLs both returned
+# HTTP 403 in testing (2026-07-23) -- almost certainly Cloudflare/Akamai
+# bot-protection, which plain requests can't reliably get past no matter
+# how the User-Agent is spoofed (it's often a TLS-fingerprint check, not
+# a header check). Rather than fight that, this uses Google News' public
+# RSS search endpoint instead: it aggregates across many publishers
+# (including ones that would otherwise block direct scraping), needs no
+# key, and has a stable documented URL grammar. Tradeoff: Google News RSS
+# is capped at ~100 items with no pagination and can skew a few days
+# stale on quieter queries -- "when:2d" keeps this query reasonably fresh,
+# and this being one input among several (ET + your own OI/price reads)
+# means a slightly-stale headline here isn't a single point of failure.
+_GOOGLE_NEWS_QUERY = (
+    'NIFTY OR Sensex OR RBI OR "repo rate" OR "union budget" OR '
+    '"Federal Reserve" OR FOMC OR SEBI OR "crude oil" when:2d'
+)
+FEEDS["Google News (India markets/policy)"] = (
+    "https://news.google.com/rss/search?q="
+    + urllib.parse.quote(_GOOGLE_NEWS_QUERY)
+    + "&hl=en-IN&gl=IN&ceid=IN:en"
+)
 
 _HEADERS = {
     "User-Agent": (
@@ -70,11 +93,22 @@ def _fetch_feed(name: str, url: str) -> list:
     items = []
     for item in root.iter("item"):
         title = (item.findtext("title") or "").strip()
+        title = html.unescape(title)
         summary = (item.findtext("description") or "").strip()
         summary = re.sub("<[^<]+?>", "", summary)  # strip any embedded HTML tags
+        summary = html.unescape(summary)
         link = (item.findtext("link") or "").strip()
+        # Google News wraps each item with a <source> tag naming the real
+        # publisher (e.g. "Economic Times", "Livemint") -- prefer that
+        # over the generic feed name when it's present.
+        source_tag = item.findtext("source")
+        source_label = source_tag.strip() if source_tag else name
+        # Google News appends " - Publisher Name" to the title itself;
+        # strip it since we already have the publisher in source_label.
+        if source_label and title.endswith(f" - {source_label}"):
+            title = title[: -(len(source_label) + 3)].strip()
         if title:
-            items.append({"title": title, "summary": summary, "link": link, "source": name})
+            items.append({"title": title, "summary": summary, "link": link, "source": source_label})
     return items
 
 
