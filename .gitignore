@@ -9,6 +9,8 @@ dhan_credentials*
 *.log
 nifty_scan_*.log
 trade_journal.jsonl
+# dedupe_journal.py backups -- real trade records, never commit
+*.bak-*
 cmd-print-*.txt
 sample_data.csv
 state/*.json
