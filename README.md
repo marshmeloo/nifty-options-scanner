@@ -51,6 +51,7 @@ Pipeline: `SCAN -> SIGNALS -> PLAN -> RISK -> DECISION`
 | `anchored_vwap.py` | True VWAP anchored from session open, recent swing high, recent swing low |
 | `opening_gap.py` | Captures NIFTY + Bank Nifty opening gap (points/%) once per day |
 | `decision_log.py` | Full per-cycle audit trail: every candidate considered, adjusted score, exact rejection reason -- not just the winner |
+| `session_summary.py` | End-of-day digest -- the one compact file to hand to a fresh Claude session, not the raw logs |
 | `watchdog.py` | Standalone monitor: warns if main_live.py's log goes stale during market hours (run in a separate terminal) |
 | `supervisor.py` | Run this INSTEAD of main_live.py directly -- auto-restarts it on crash or freeze |
 | `atomic_state.py` | Shared atomic JSON-write helper used by every state file, so a forced kill can never corrupt one |
@@ -66,6 +67,8 @@ Pipeline: `SCAN -> SIGNALS -> PLAN -> RISK -> DECISION`
 | `data_source.py` | CSV-based snapshot loader (offline/testing) |
 | `models.py` | Shared dataclasses (snapshot, setup, plan, verdict) |
 | `config.py` | Every threshold and risk parameter — tune to your own setup |
+| `tests/` | Regression tests pinning the 2026-07-28 scoring/risk/OI-freshness fixes (`python -m pytest tests/ -q`) |
+| `dedupe_journal.py` | One-off repair: removes duplicate `trade_journal.jsonl` entries left by the pre-fix recovery bug (dry-run by default, backs up before writing) |
 
 ## Setup
 
@@ -296,6 +299,37 @@ lookback-walking logic (which tries today, then walks backward through
 weekends/holidays to find the most recently published report) against
 both a delayed-success and a total-failure case.
 
+## End-of-day digest for reviewing with Claude
+
+Run once the market's closed:
+
+```bash
+python3 session_summary.py
+```
+
+Writes `logs/session_summary_YYYYMMDD.md` -- **hand this file to a
+fresh Claude conversation or Claude Code session, not the raw logs.**
+`logs/nifty_scan_*.log` repeats OI/bias context every single cycle
+(noisy), and `logs/decision_log.jsonl` has one record per cycle
+(hundreds per day) -- both are expensive to feed a fresh conversation
+for what you actually want reviewed. This pulls just the high-signal
+parts into one small file:
+
+- Every trade closed today (outcome, P&L, capture efficiency, lesson)
+- **Near-miss candidates** -- setups rejected after the learned
+  adjustment but within 1 point of the conviction bar, exactly the ones
+  worth a human look if the bar or penalty ever seems miscalibrated
+- **Operational health** -- gaps in the scan log longer than 3 minutes
+  during market hours (the same evidence that caught the 2026-07-24
+  freeze incident, found automatically instead of by manual log
+  archaeology) plus any WARNING/error lines
+- End-of-day context: spot, bias, opening gap, news risk
+
+Includes a ready-to-use prompt at the bottom of the output for handing
+it to a new session. Tested against seeded data reproducing a deliberate
+freeze gap and a genuine near-miss candidate -- both correctly detected;
+also verified it doesn't crash when no logs exist at all.
+
 ## Fast position check (added 2026-07-27)
 
 A real gap: with only a 30s scan cycle, a trade could spike through its
@@ -316,6 +350,236 @@ between, at an accelerated interval for a fast test).
 check, not a lightweight per-contract quote -- see `BACKLOG.md` for the
 plan to switch to Dhan's dedicated `marketfeed/ltp` endpoint before
 relying on this with real capital.
+
+## Fixed: 2026-07-28 -- same strike entered 3x, and a dead circuit breaker
+
+A session opened the **same contract (24050 PE) three times at
+effectively the same premium** (75.7 / 76.7 / 76.7), stopping out twice
+and closing the third at EOD, for a combined Rs -4,017. The first
+question was whether the system had followed its own rules. It had --
+`try_open_new_trade()` only ever blocked a strike while a trade on it was
+*currently open*, so once a trade closed the strike was immediately
+eligible again. But investigating why it kept re-qualifying turned up
+several independent defects, listed here worst-first.
+
+**1. The daily-loss circuit breaker and total-exposure cap were dead
+code.** `main_live.py` passed a hardcoded `current_daily_loss_pct=0.0`
+and `current_open_exposure_pct=0.0` into `risk_checker.check()` and never
+updated them, so `MAX_DAILY_LOSS_PCT` could not trip no matter how much a
+day lost, and `MAX_TOTAL_EXPOSURE_PCT` was never enforced. Both are
+advertised in this README as active risk controls; neither was. Every
+input needed was already on disk -- today's journal entries for realized
+P&L, `state/open_trades.json` for unrealized and for capital at risk --
+it just was never read back. Now computed every cycle by
+`trade_tracker.compute_risk_state()` and logged as a "Risk state" line so
+it's visible rather than implicit. It reflects trades THIS TOOL tracked,
+not your broker account.
+
+**2. The structure score was a one-way ratchet.** `price_action.analyze()`
+returned every FVG / order block / breakout ever detected in the candle
+series and never pruned them, while `scanner.py` added a flat +0.5 per
+nearby level with no cap. So a strike's score could only climb as a
+session went on. Measured from the real decision log for 24050 PE that
+day: 0 levels at 09:16, 14 by 14:00, **never once decreasing**, with the
+raw score going 6.0 -> 11.0 almost entirely on that count. That is why
+the setup re-qualified at *higher* conviction after failing twice. Fixed
+in two parts: FVGs are now dropped once price trades back through them
+(standard mitigation), and one-off events age out after
+`LEVEL_MAX_AGE_CANDLES`. Support/resistance is deliberately exempt --
+it's defined by repeated touches over time. On a simulated choppy
+session this took the level count from a monotonic 2->29 down to a
+non-monotonic 0-4.
+
+**3. Structure scoring ignored direction, and rewarded contradiction.**
+Every nearby level added a *positive* score regardless of which way it
+pointed, so a **bullish** FVG raised conviction on a **PE**. And because
+overlapping bull and bear levels both scored positive, a chopping market
+that printed both across the same zone read as double confluence when it
+means the opposite. The real entry listed both `Bullish FVG
+(24013.4-24015.2)` and `Bearish FVG (24014.0-24015.2)`, plus support
+*and* resistance on the same strike -- four separate bonuses for
+indecision. Levels are now scored by directional agreement with the
+contract, opposing levels net against each other, and the total is capped
+by `MAX_LEVEL_SCORE_CONTRIBUTION` so confluence *count* can't dominate.
+
+**4. Rich and cheap IV both scored +1.0.** This scanner only ever *buys*
+premium, so those aren't symmetric -- buying expensive volatility means
+vega works against you and the move has to be bigger just to break even.
+Now `IV_CHEAP_SCORE` / `IV_RICH_SCORE`, the latter negative.
+
+**5. Plan geometry took no account of the instrument.** A flat -30% stop
+and +60% target meant that on this contract (real intraday range
+51.15-102.55) the target sat at 122.72, about **20 points above the
+highest price it traded all day** -- unreachable from the moment it was
+set -- while the stop at 53.69 sat *inside* the option's normal
+oscillation. Stop inside the noise, target outside the range. Stop
+distance is now derived from `ATR x |delta| x STOP_ATR_MULTIPLE` (ATR in
+NIFTY points, delta converting that into premium points), clamped into a
+`MIN_STOP_PCT`-`MAX_STOP_PCT` band, with the flat percentage kept as a
+fallback for the NSE tier, which returns no Greeks. Each plan records a
+`stop_basis` string so the geometry is auditable afterward.
+
+**6. Nothing knew it was expiry day.** All four trades were same-day
+expiry *long* options -- almost pure extrinsic value decaying to zero by
+15:30 -- and the last was opened at 14:32. Same-day expiry now raises the
+conviction bar by `EXPIRY_DAY_EXTRA_CONVICTION` and blocks new entries
+after `EXPIRY_DAY_NO_NEW_TRADES_AFTER`.
+
+**7. Re-entry gate.** A blanket post-stop time cooldown was implemented
+first and then **rejected**: on the real data a 60-minute window caught
+only one of the two re-entries (the other came 2h31m after its stop), and
+it would also wrongly block a genuinely different setup just because the
+clock hadn't run out. What actually went wrong was re-running an
+*identical failed plan* -- same entry price means the same stop and the
+same target. `is_repeat_of_stopped_plan()` now blocks a new entry when a
+trade on that strike+type already stopped out today within
+`REENTRY_PRICE_TOLERANCE_PCT` of the new entry. Catches both real
+re-entries; a materially different premium passes through.
+
+**8. OI buildup was a day-scale read driving 30-second decisions.**
+`oi_change_pct` is measured against Dhan's `previous_oi` -- the *previous
+session's* closing OI -- and the premium baseline is likewise previous
+close or first-seen-today. Both only ever grow as a session runs, so
+`buildup_type` was effectively pinned for the day. The three real entries
+were classified `long_buildup` at 10:21 (OI +112.2%), 13:14 (+338.2%) and
+14:32 (+217.7%): three different numbers, three different times, one
+identical verdict, across completely different intraday price action --
+because OI versus *yesterday* had of course risen in all three cases.
+Worse, `scanner.py`'s magnitude multiplier saturates its 3.0 cap at any
+day-cumulative move past ~45%, so it carried no information either.
+
+`dhan_source.py` now keeps a short rolling per-contract history
+(`state/oi_history.json`, reset daily, sample spacing and window in
+config) and classifies buildup on the change over the last
+`OI_INTRADAY_LOOKBACK_MINUTES` instead. The day-cumulative figure is
+retained alongside it and still shown in the reason string, because
+`oi_analytics.py` genuinely needs it to derive "OI added today" and "OI
+is 3x yesterday" is useful context in its own right. When there isn't
+enough history yet -- the session's first minutes, or the NSE/CSV
+sources, which don't track it -- the intraday fields are `None` and the
+old daily behaviour is used, labelled as such in the reason rather than
+passed off as a fresh read. Simulated at the real 30s cadence against
+the 2026-07-28 OI shape: the morning ramp still classifies as
+`long_buildup`, and then from ~60 minutes in the intraday signal
+correctly goes **silent** while the daily read stays `long_buildup` for
+the rest of the day -- meaning both the 13:14 and 14:32 entries would
+have had no buildup signal at all.
+
+**9. Interrupted-session recovery journalled trades twice.**
+`settle_stale_trades()` journalled every stale trade but never cleared
+`state["trades"]`, leaving that to the caller -- unlike
+`force_close_end_of_day()`, which has always cleared it itself. Anything
+interrupting the process between journalling and the caller's save left
+those trades still marked OPEN on disk, so the next start recovered and
+journalled them **again**. That really happened: 8 trades from the
+2026-07-23 session were journalled twice on 2026-07-24, once at 00:39:42
+(market shut, no quote available, `exit_price_estimated: true`) and again
+at 07:28:46 (fresh quote, slightly different exit prices), duplicating
+Rs -1,976 of P&L. 37 journal lines held only 29 distinct trades.
+
+This was found by auditing the **full** journal history rather than the
+single session under investigation, and it matters well beyond tidiness:
+the newly-wired daily-loss breaker (fix 1 above) sums today's journalled
+P&L, so duplicates would trip the circuit breaker early on phantom
+losses. Recovery is now idempotent -- it skips any trade id already in
+the journal and clears state itself -- and `compute_risk_state()`
+deduplicates by trade id so it stays correct against the duplicate
+entries already sitting in existing journals.
+
+### Validated against the full history, not just one session
+
+Re-running the whole 6-day / 29-trade journal through the new rules:
+
+- **Re-entry gate**: of 7 same-day repeats across all sessions, it blocks
+  3 (the 24050 PE pair 1.3% and 0.0% apart, and a 2026-07-21 24200 PE
+  pair 1.5% apart where *both* legs lost) and allows 4 that had
+  materially different geometry -- including the two re-entries that
+  actually **won** (+60.4% and +64.7%). A blanket cooldown risks
+  suppressing exactly those.
+- **Expiry-day cutoff**: blocks 2 historical trades -- one at -16.8%
+  (Rs -835) and one at +22.8% (Rs +172). It is **not** free: it would
+  have cost a winner. Net across the two it still saves Rs 663, because
+  the loser was far larger in absolute rupees, but that is a small sample
+  and the rule is a judgment call, not a proven edge.
+
+### What this does NOT fix
+
+**The target is systematically unreachable, and that is not a
+2026-07-28 problem.** A `DEFAULT_STOP_LOSS_PCT` of 30% with
+`DEFAULT_TARGET_RR = 2.0` demands a **+60%** move in the premium. Across
+the full journal history:
+
+- **2 WINs in 29 trades.**
+- Of the 13 trades that tracked max-favourable excursion, only **2 ever
+  reached +60%** at any point while open. The median best-move-ever was
+  **+20.3%**.
+
+So for roughly 85% of trades the target was never in reach at any moment
+of their life -- the exit was always going to be a stop or an EOD close.
+Meanwhile the stop sits inside normal oscillation (the three 24050 PE
+trades drew down ~30% while their best move was +33.7%). Volatility-based
+sizing (fix 5) helps, but it cannot resolve the underlying tension:
+**you cannot have both a stop outside a ±30% noise band and a 2:1 target
+on an instrument whose realistic move is +20%.**
+
+**But lowering the target is NOT the fix -- checked, and it makes things
+worse.** The obvious inference from "only 15% of trades ever reach 2R" is
+to lower the target. Simulating every candidate target against the real
+journal (`trade_tracker.rr_milestone_stats()`, which replays each trade
+as if the target had been set at that level and it had exited there)
+says otherwise:
+
+```
+  0.5R reached by 7 (53.8%), simulated expectancy -0.178R
+    1R reached by 4 (30.8%), simulated expectancy -0.111R
+  1.2R reached by 3 (23.1%), simulated expectancy -0.185R
+    2R reached by 2 (15.4%), simulated expectancy -0.028R  <-- current
+```
+
+A lower target hits far more often but wins less each time. On this
+sample the **current 2R setting has the least-bad expectancy of the lot**,
+and moving to 1.2R would roughly *sextuple* the loss per trade. Hit-rate
+is the seductive number here and it is the wrong one; expectancy is the
+one that decides.
+
+The real conclusion is less comfortable: **every simulated target is
+negative, which points at entry quality rather than target placement.**
+No exit rule rescues a signal with no edge. That is what fixes 2-4 and 8
+(structure ratchet, direction, contradiction, OI freshness) are aimed at,
+and whether they worked is an empirical question that needs more
+sessions.
+
+So `DEFAULT_TARGET_RR` stays at 2.0 -- not because it is right, but
+because 13 measurable trades cannot justify changing it and the evidence
+that does exist points the other way from intuition. The system now
+records the R-multiples every trade reaches (see below) so this can be
+decided on data later.
+`tests/test_scoring_and_risk.py::test_20260728_excursion_was_symmetric`
+pins the underlying finding so it stays visible instead of being quietly
+tuned away.
+
+### R-multiple milestone tracking
+
+"R" is a trade's own risk unit: 1R = entry - stop, so `DEFAULT_TARGET_RR`
+is literally how many R we aim for. Every open trade now records which
+multiples in `config.RR_MILESTONES` it actually touched **and when**,
+plus `max_r_reached`, `r_at_exit`, and `rr_would_have_won_at` (the list
+of targets under which it would have been a winner rather than the
+outcome it got). The journal's `lesson` field states it plainly, e.g.
+*"Peaked at +1.12R (aiming for 2R) -- would have hit target at: 0.5R,
+0.8R, 1R."*
+
+The timing is the part that can't be reconstructed afterwards: "reached
+1.2R at 11:04, then gave it all back and stopped out at 14:05" is a
+completely different lesson from "never got going," and a pass/fail
+outcome hides both. `trade_tracker.summarize_rr_milestones()` prints the
+aggregate table above at session startup and it is shown on the live
+dashboard.
+
+This is evidence-gathering only -- **it changes no trading behaviour.**
+
+Everything above is covered by `tests/` (44 tests), which now run in CI
+as a hard failure rather than advisory.
 
 ## Fixed: 2026-07-27 -- dashboard overlap, missing worst-seen, vanishing exits, no totals
 
@@ -367,6 +631,21 @@ a window onto what `main_live.py`/`decision_log.py`/`condor_tracker.py`
 are already writing to disk.
 
 Shows, refreshed every 8s:
+- **Risk gates** -- live exposure vs `MAX_TOTAL_EXPOSURE_PCT` and day
+  drawdown vs `MAX_DAILY_LOSS_PCT`, with the circuit breaker's actual
+  armed/tripped state. On the dashboard specifically because both were
+  silently hardcoded to 0.0 and therefore inert until 2026-07-28; if they
+  ever go inert again that should be visible, not buried in a log line
+- **R-multiple progress per open trade** -- current R, peak R, and a bar
+  running from the stop (-1R) to the target, with a faint segment showing
+  the best the trade has EVER been. That gap between marker and peak is
+  the "ran up, gave it all back" pattern, which a current-price number
+  cannot show. Hovering lists each milestone and the time it was hit
+- **R-multiple history** -- how often trades actually reached each
+  candidate target and the simulated expectancy of setting the target
+  there, so `DEFAULT_TARGET_RR` can eventually be chosen on evidence.
+  Expectancy is shown next to hit-rate deliberately: hit-rate is the
+  number intuition reaches for and it is the misleading one
 - Live spot/VWAP/PCR and a **strike landscape** -- a visual strip
   showing where spot currently sits relative to the put wall, max pain,
   and call wall, so you can see the OI structure at a glance instead of
@@ -689,8 +968,13 @@ File API, not uploaded anywhere.
 ## CI
 
 `.github/workflows/ci.yml` runs on every push/PR: compiles all `.py`
-files (catches syntax errors), lints with `ruff`, and does an import
-sanity check across all modules on Python 3.10–3.12.
+files (catches syntax errors), lints with `ruff` (advisory), runs the
+`tests/` suite (**not** advisory — a failure fails the build), and does
+an import sanity check across all modules on Python 3.10–3.12.
+
+```bash
+python -m pytest tests/ -q
+```
 
 ## Disclaimer
 
