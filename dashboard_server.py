@@ -21,6 +21,7 @@ from pathlib import Path
 from datetime import datetime, date
 
 import config
+import trade_tracker as tt
 
 HOST = "127.0.0.1"
 PORT = 8787
@@ -63,12 +64,23 @@ def _read_todays_closed_trades() -> list:
 
 
 def _enrich_open_trades(trades: list) -> list:
-    """Adds a computed capital_deployed figure (entry * lot size * lots) to each open trade."""
+    """
+    Adds computed fields the tracker doesn't persist: capital deployed
+    (entry * lot size * lots), and the trade's live R-multiple position.
+
+    R is the trade's own risk unit (entry - stop), so `current_r` answers
+    "how far has this gone, measured in what it stands to lose" -- a scale
+    that's comparable across trades in a way raw percentages aren't.
+    """
     lot_size = getattr(config, "NIFTY_LOT_SIZE", 65)
     enriched = []
     for t in trades:
         t = dict(t)
         t["capital_deployed"] = round(t.get("entry", 0) * lot_size * t.get("lots", 1), 2)
+        t["current_r"] = tt.r_multiple(t, t.get("current_ltp"))
+        t["target_r"] = getattr(config, "DEFAULT_TARGET_RR", None)
+        hit = sorted(float(m) for m in (t.get("rr_milestones_hit") or {}))
+        t["best_milestone_hit"] = hit[-1] if hit else None
         enriched.append(t)
     return enriched
 
@@ -132,6 +144,28 @@ def build_state() -> dict:
     staged_orders = _read_json(STATE_DIR / "staged_orders.json", default=[])
     pending_staged = [r for r in (staged_orders or []) if r.get("status") == "PENDING"]
 
+    # Mirror what risk_checker.check() is actually being handed each cycle.
+    # Computed here rather than read from a file because trade_tracker owns
+    # the definition -- duplicating the formula would let the two drift.
+    try:
+        exposure_pct, daily_loss_pct = tt.compute_risk_state(
+            {"trades": open_trades_raw} if open_trades_raw else {"trades": []}
+        )
+        risk_state = {
+            "open_exposure_pct": exposure_pct,
+            "max_total_exposure_pct": config.MAX_TOTAL_EXPOSURE_PCT,
+            "daily_loss_pct": daily_loss_pct,
+            "max_daily_loss_pct": config.MAX_DAILY_LOSS_PCT,
+            "breaker_tripped": daily_loss_pct >= config.MAX_DAILY_LOSS_PCT,
+        }
+    except Exception as e:
+        risk_state = {"error": str(e)}
+
+    try:
+        rr_stats = tt.rr_milestone_stats()
+    except Exception as e:
+        rr_stats = {"error": str(e), "sample": 0, "milestones": []}
+
     main_log_path = todays_main_log_path()
     log_age_seconds = None
     if main_log_path.exists():
@@ -154,6 +188,14 @@ def build_state() -> dict:
         "opening_gap": opening_gap,
         "pending_approvals": pending_staged,
         "main_log_age_seconds": log_age_seconds,
+        # Live risk-gate state. These drive real decisions in
+        # risk_checker.check() (and used to be silently hardcoded to 0.0),
+        # so they belong on the dashboard rather than only in the log.
+        "risk_state": risk_state,
+        # Aggregate R-multiple history: how often trades actually reach
+        # each candidate target, and the simulated expectancy of setting
+        # the target there. Evidence for tuning DEFAULT_TARGET_RR later.
+        "rr_stats": rr_stats,
     }
 
 

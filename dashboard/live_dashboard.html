@@ -87,6 +87,24 @@
   .card .row { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
   .card .row .k { color: var(--muted); }
   .card .row .v { font-family: var(--mono); }
+
+  /* R-multiple progress bar: stop (-1R) on the left, target on the right */
+  .rbar { min-width: 130px; }
+  .rbar-track { position: relative; height: 8px; background: var(--border); border-radius: 4px; }
+  .rbar-fill { position: absolute; top: 0; height: 8px; border-radius: 4px; opacity: 0.85; }
+  .rbar-peak { position: absolute; top: 0; height: 8px; background: var(--muted); opacity: 0.35; border-radius: 4px; }
+  .rbar-zero { position: absolute; top: -2px; width: 1px; height: 12px; background: var(--muted); opacity: 0.8; }
+  .rbar-target { position: absolute; top: -3px; width: 2px; height: 14px; background: var(--blue); }
+  .rbar-marker { position: absolute; top: -2px; width: 3px; height: 12px; border-radius: 1px; }
+
+  /* R-milestone histogram */
+  .rr-row { display: grid; grid-template-columns: 44px 1fr 92px 96px; gap: 8px; align-items: center;
+            font-size: 12px; padding: 3px 0; font-family: var(--mono); }
+  .rr-bar-outer { background: var(--border); border-radius: 3px; height: 12px; }
+  .rr-bar-inner { background: var(--green); height: 12px; border-radius: 3px; opacity: 0.75; }
+  .rr-current { color: var(--blue); font-weight: 600; }
+  .breaker-ok { color: var(--green); }
+  .breaker-trip { color: var(--red); font-weight: 700; }
   .pos { color: var(--green); } .neg { color: var(--red); } .neu { color: var(--amber); }
 
   /* ---- Panels ---- */
@@ -141,6 +159,11 @@
 <div class="panel">
   <h2>Open Trades (Momentum Scanner)</h2>
   <div id="open-trades-container"><div class="empty-state">No open trades.</div></div>
+</div>
+
+<div class="panel" id="rr-panel" style="display:none;">
+  <h2>R-Multiple History <span style="font-weight:400; color:var(--muted); font-size:12px;">— how often trades actually reach each target, and what setting the target there would have earned</span></h2>
+  <div id="rr-container"></div>
 </div>
 
 <div class="panel" id="closed-today-panel" style="display:none;">
@@ -245,7 +268,7 @@ function renderLandscape(oi, spot, volProfile) {
   }).join("");
 }
 
-function renderContextCards(cycle, gap) {
+function renderContextCards(cycle, gap, risk) {
   const container = document.getElementById("context-cards");
   if (!cycle) { container.innerHTML = ""; return; }
   const oi = cycle.oi_analysis || {};
@@ -285,6 +308,20 @@ function renderContextCards(cycle, gap) {
       <div class="row"><span class="k">Categories</span><span class="v" style="font-size:11px;">${(news.categories_hit || []).join(", ") || "none"}</span></div>
     </div>`);
 
+  // The two gates that actually block new trades. Worth showing because
+  // they were silently hardcoded to 0.0 until 2026-07-28 and therefore
+  // could never fire -- if they're inert again, it should be visible here
+  // rather than buried in a log line.
+  if (risk && !risk.error) {
+    const trip = risk.breaker_tripped;
+    cards.push(`
+      <div class="card"><h3>Risk Gates</h3>
+        <div class="row"><span class="k">Exposure</span><span class="v">${risk.open_exposure_pct}% / ${risk.max_total_exposure_pct}%</span></div>
+        <div class="row"><span class="k">Day drawdown</span><span class="v ${trip ? 'neg' : ''}">${risk.daily_loss_pct}% / ${risk.max_daily_loss_pct}%</span></div>
+        <div class="row"><span class="k">Breaker</span><span class="v ${trip ? 'breaker-trip' : 'breaker-ok'}">${trip ? "TRIPPED — no new trades" : "armed"}</span></div>
+      </div>`);
+  }
+
   if (gap && (gap.nifty || gap.banknifty)) {
     const ng = gap.nifty || {}, bg = gap.banknifty || {};
     cards.push(`
@@ -317,6 +354,38 @@ function renderContextCards(cycle, gap) {
   container.innerHTML = cards.join("");
 }
 
+// A trade's journey from stop (-1R) to target, drawn on the R scale.
+// The marker is where it sits now; the faint bar behind it is the best
+// it has EVER been. That gap is the "ran up then gave it all back"
+// pattern, which a single current-price number can't show you.
+function renderRBar(t) {
+  const cur = t.current_r, peak = t.max_r_seen, target = t.target_r || 2;
+  if (cur === null || cur === undefined) return '<span style="color:var(--muted);">—</span>';
+
+  const lo = -1, hi = Math.max(target, peak || 0, cur);
+  const pct = v => Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
+  const zero = pct(0), targetPos = pct(target);
+  const curPos = pct(cur), peakPos = pct(Math.max(peak ?? cur, cur));
+  const colour = cur >= 0 ? "var(--green)" : "var(--red)";
+
+  const milestones = t.rr_milestones_hit || {};
+  const hitList = Object.keys(milestones).sort((a, b) => a - b);
+  const title = hitList.length
+    ? `Milestones hit: ${hitList.map(m => `${m}R at ${(milestones[m] || "").split("T")[1] || ""}`).join(", ")}`
+    : "No R milestone reached yet";
+
+  return `
+    <div class="rbar" title="${title}">
+      <div class="rbar-track">
+        <div class="rbar-peak" style="left:${Math.min(curPos, peakPos)}%; width:${Math.abs(peakPos - curPos)}%;"></div>
+        <div class="rbar-fill" style="left:${Math.min(zero, curPos)}%; width:${Math.abs(curPos - zero)}%; background:${colour};"></div>
+        <div class="rbar-zero" style="left:${zero}%;"></div>
+        <div class="rbar-target" style="left:${targetPos}%;" title="target ${target}R"></div>
+        <div class="rbar-marker" style="left:${curPos}%; background:${colour};"></div>
+      </div>
+    </div>`;
+}
+
 function renderOpenTrades(trades, totals) {
   const container = document.getElementById("open-trades-container");
   if (!trades || !trades.length) {
@@ -325,7 +394,7 @@ function renderOpenTrades(trades, totals) {
   }
   container.innerHTML = `
     <table>
-      <thead><tr><th>Strike</th><th>Type</th><th>Entry</th><th>Target</th><th>Stop</th><th>Current</th><th>Best Seen</th><th>Worst Seen</th><th>Capital</th><th>P&amp;L %</th><th>P&amp;L (Rs)</th></tr></thead>
+      <thead><tr><th>Strike</th><th>Type</th><th>Entry</th><th>Target</th><th>Stop</th><th>Current</th><th>R now</th><th>Progress to target</th><th>Peak R</th><th>Best Seen</th><th>Worst Seen</th><th>Capital</th><th>P&amp;L %</th><th>P&amp;L (Rs)</th></tr></thead>
       <tbody>
         ${trades.map(t => `
           <tr>
@@ -335,6 +404,9 @@ function renderOpenTrades(trades, totals) {
             <td>${t.target}</td>
             <td>${t.stop}</td>
             <td>${t.current_ltp ?? "?"}</td>
+            <td class="${pnlClass(t.current_r)}">${fmtSigned(t.current_r, 2, "R")}</td>
+            <td>${renderRBar(t)}</td>
+            <td class="${pnlClass(t.max_r_seen)}">${fmtSigned(t.max_r_seen, 2, "R")}</td>
             <td>${t.max_ltp_seen ?? "—"}</td>
             <td>${t.min_ltp_seen ?? "—"}</td>
             <td>${fmtInr(t.capital_deployed)}</td>
@@ -345,12 +417,61 @@ function renderOpenTrades(trades, totals) {
       </tbody>
       <tfoot>
         <tr style="font-weight:600;">
-          <td colspan="8" style="text-align:right; color:var(--muted);">TOTAL</td>
+          <td colspan="11" style="text-align:right; color:var(--muted);">TOTAL</td>
           <td>${fmtInr(totals ? totals.capital_deployed : null)}</td>
           <td colspan="2" class="${pnlClass(totals ? totals.open_pnl_inr : null)}">${fmtInr(totals ? totals.open_pnl_inr : null)}</td>
         </tr>
       </tfoot>
     </table>`;
+}
+
+// How often trades reached each candidate target, and what expectancy
+// setting the target there would have produced. Hit-rate is the number
+// people reach for and it is the misleading one -- a low target hits far
+// more often but caps the winners, so expectancy is shown alongside and
+// the best one is called out explicitly.
+function renderRRStats(rr) {
+  const panel = document.getElementById("rr-panel");
+  const container = document.getElementById("rr-container");
+  if (!rr || !rr.sample) {
+    panel.style.display = "block";
+    container.innerHTML = `<div class="empty-state">
+      No R-multiple history yet — tracking applies to trades opened from now on.
+      Earlier journal entries predate it and are excluded rather than counted as zero.
+    </div>`;
+    return;
+  }
+  panel.style.display = "block";
+
+  const best = Math.max(...rr.milestones.map(m => m.expectancy_r));
+  const allNegative = best <= 0;
+
+  container.innerHTML = `
+    <div class="rr-row" style="color:var(--muted); font-family:var(--sans); border-bottom:1px solid var(--border); padding-bottom:6px; margin-bottom:4px;">
+      <div>Target</div><div>Reached by</div><div style="text-align:right;">Hit rate</div><div style="text-align:right;">Expectancy</div>
+    </div>
+    ${rr.milestones.map(m => {
+      const isCurrent = m.r === rr.current_target_r;
+      const isBest = m.expectancy_r === best && !allNegative;
+      return `
+        <div class="rr-row">
+          <div class="${isCurrent ? "rr-current" : ""}">${m.r}R${isCurrent ? " ←" : ""}</div>
+          <div class="rr-bar-outer"><div class="rr-bar-inner" style="width:${m.pct}%;"></div></div>
+          <div style="text-align:right;">${m.reached}/${rr.sample} (${m.pct}%)</div>
+          <div style="text-align:right;" class="${m.expectancy_r >= 0 ? "up" : "down"}">
+            ${m.expectancy_r >= 0 ? "+" : ""}${m.expectancy_r.toFixed(3)}R${isBest ? " ★" : ""}
+          </div>
+        </div>`;
+    }).join("")}
+    <div style="margin-top:10px; font-size:12px; color:var(--muted);">
+      Sample: ${rr.sample} closed trades · median best excursion
+      ${rr.median_max_r >= 0 ? "+" : ""}${rr.median_max_r}R · best ever
+      ${rr.best_max_r >= 0 ? "+" : ""}${rr.best_max_r}R
+      ${allNegative ? `<div style="margin-top:6px; color:var(--red);">
+        Every simulated target has negative expectancy on this sample — that points at
+        entry quality, not target placement. No exit rule rescues a signal with no edge.
+      </div>` : ""}
+    </div>`;
 }
 
 function renderClosedToday(trades) {
@@ -477,8 +598,9 @@ async function refresh() {
     }
 
     renderLandscape(cycle ? cycle.oi_analysis : null, cycle ? cycle.spot : null, cycle ? cycle.volume_profile : null);
-    renderContextCards(cycle, gap);
+    renderContextCards(cycle, gap, data.risk_state);
     renderOpenTrades(data.open_trades, data.totals);
+    renderRRStats(data.rr_stats);
     renderClosedToday(data.closed_today);
     renderCondor(data.condor_position);
     renderApprovals(data.pending_approvals);
