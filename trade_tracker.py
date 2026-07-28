@@ -26,11 +26,13 @@ This module:
 """
 
 import json
+import os
 import logging
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime
 
 import config
+from atomic_state import atomic_write_json
 
 log = logging.getLogger("nifty_scanner")
 
@@ -44,16 +46,88 @@ JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 
 
 def load_open_trades() -> dict:
-    """Daily state: which trades are currently open, how many opened today."""
+    """
+    Daily state: which trades are currently open, how many opened today.
+
+    IMPORTANT: if the saved state is from a PREVIOUS date and still has
+    open trades (e.g. the process was killed with Ctrl+C or crashed
+    before the 15:30 EOD settlement ever ran), this does NOT silently
+    discard them. Doing that used to be exactly what happened on
+    2026-07-23: the script was stopped around 15:20, the market-close
+    transition that triggers force_close_all() was never observed, and a
+    naive "if not today's date, start fresh" reload would have silently
+    wiped those 8 trades the next time the script started -- no journal
+    entry, no error, just gone. Instead, stale trades are returned as-is
+    with a flag so the caller (main_live.py's startup) can settle and
+    journal them via settle_stale_trades() BEFORE starting a fresh day.
+    """
     if OPEN_TRADES_PATH.exists():
         data = json.loads(OPEN_TRADES_PATH.read_text())
         if data.get("date") == date.today().isoformat():
             return data
+        if data.get("trades"):
+            data["_stale_from_previous_session"] = True
+            return data
     return {"date": date.today().isoformat(), "trades": [], "opened_today": 0}
 
 
+def settle_stale_trades(state: dict, snapshot=None) -> list:
+    """
+    Settle trades left over from an interrupted previous session (see
+    load_open_trades()'s note above). Exit price preference order:
+      1. A live quote from `snapshot`, if one is provided and covers
+         this strike (most accurate -- reflects current reality).
+      2. The trade's own last recorded `current_ltp` from before the
+         interruption (the last real observed price, not a guess).
+      3. Entry price, flagged as estimated, if neither is available.
+    Every recovered trade is clearly tagged so it's auditable in the
+    journal, not indistinguishable from a normal close.
+    """
+    quote_lookup = {(q.strike, q.option_type): q for q in snapshot.chain} if snapshot else {}
+    recovered = []
+
+    for trade in state["trades"]:
+        quote = quote_lookup.get((trade["strike"], trade["option_type"]))
+        if quote is not None:
+            exit_ltp = quote.ltp
+            estimated = False
+            price_source = "fresh quote at recovery time"
+        elif trade.get("current_ltp") is not None:
+            exit_ltp = trade["current_ltp"]
+            estimated = True
+            price_source = "last live quote before the session was interrupted"
+        else:
+            exit_ltp = trade["entry"]
+            estimated = True
+            price_source = "entry price (no live quote ever recorded for this trade)"
+
+        trade["closed_at"] = datetime.now().isoformat(timespec="seconds")
+        trade["exit_ltp"] = exit_ltp
+        trade["outcome"] = "RECOVERED_INTERRUPTED_SESSION"
+        trade["pnl_pct"] = round((exit_ltp - trade["entry"]) / trade["entry"] * 100, 1)
+        trade["pnl_inr"] = _pnl_inr(trade["entry"], exit_ltp, trade["lots"])
+        trade["exit_price_estimated"] = estimated
+        _update_excursion(trade, exit_ltp)
+        trade.update(_excursion_summary(trade))
+        trade["lesson"] = (
+            _build_lesson(trade, "RECOVERED_INTERRUPTED_SESSION")
+            + f" NOTE: this trade was recovered after the tracking session for {state.get('date')} was "
+            f"interrupted before end-of-day settlement (e.g. a Ctrl+C or crash before 15:30). "
+            f"Exit price source: {price_source}. Treat this outcome as approximate, not a confirmed exit."
+        )
+        _append_journal(trade)
+        recovered.append(trade)
+
+    return recovered
+
+
 def save_open_trades(state: dict):
-    OPEN_TRADES_PATH.write_text(json.dumps(state, indent=2))
+    """
+    Atomic write (see atomic_state.py) -- a process killed mid-write
+    (e.g. supervisor.py force-terminating a frozen main_live.py) can
+    never leave a corrupted state file.
+    """
+    atomic_write_json(OPEN_TRADES_PATH, state, indent=2)
 
 
 def _append_journal(entry: dict):
@@ -149,15 +223,75 @@ def summarize_recent_lessons(limit=None) -> str:
     return "Recent signal performance:\n" + "\n".join(lines)
 
 
+def _update_excursion(trade: dict, current_ltp: float):
+    """
+    Track the running best/worst LTP seen this trade, regardless of
+    whether this cycle closes it -- see open_new_trade()'s comment on
+    why this exists. Called every single cycle a trade is evaluated,
+    including the cycle that ends up closing it.
+    """
+    trade["max_ltp_seen"] = max(trade.get("max_ltp_seen", trade["entry"]), current_ltp)
+    trade["min_ltp_seen"] = min(trade.get("min_ltp_seen", trade["entry"]), current_ltp)
+
+
+def _excursion_summary(trade: dict) -> dict:
+    """
+    Derived MFE/MAE stats computed at close time. `capture_efficiency_pct`
+    is the number that actually answers "did we give back a big move
+    before closing": of the best favorable move this trade ever had,
+    what fraction did the ACTUAL exit capture? 100%+ means it closed at
+    or beyond its peak (e.g. target hit exactly at the high). A low or
+    negative number means a real pullback ate most or all of an earlier
+    favorable move before the trade closed.
+    """
+    entry = trade["entry"]
+    max_ltp = trade.get("max_ltp_seen", entry)
+    min_ltp = trade.get("min_ltp_seen", entry)
+    max_favorable_pct = round((max_ltp - entry) / entry * 100, 1)
+    max_adverse_pct = round((min_ltp - entry) / entry * 100, 1)
+    pnl_pct = trade.get("pnl_pct")
+
+    capture_efficiency_pct = None
+    if pnl_pct is not None and max_favorable_pct > 0:
+        capture_efficiency_pct = round(pnl_pct / max_favorable_pct * 100, 1)
+
+    return {
+        "max_ltp_seen": max_ltp,
+        "min_ltp_seen": min_ltp,
+        "max_favorable_pct": max_favorable_pct,
+        "max_favorable_inr": _pnl_inr(entry, max_ltp, trade["lots"]),
+        "max_adverse_pct": max_adverse_pct,
+        "max_adverse_inr": _pnl_inr(entry, min_ltp, trade["lots"]),
+        "capture_efficiency_pct": capture_efficiency_pct,
+    }
+
+
 def _build_lesson(trade: dict, outcome: str) -> str:
     tags = trade.get("reason_tags", [])
     tag_text = ", ".join(tags) if tags else "no tagged reasons"
+    base = ""
     if outcome == "WIN":
-        return f"Hit target ({trade['pnl_pct']:+.1f}%). Contributing signals: {tag_text}."
+        base = f"Hit target ({trade['pnl_pct']:+.1f}%). Contributing signals: {tag_text}."
     elif outcome == "LOSS":
-        return f"Hit stop ({trade['pnl_pct']:+.1f}%). Re-examine reliance on: {tag_text}."
-    else:  # EOD_CLOSE
-        return f"Closed at end of day, neither target nor stop hit ({trade['pnl_pct']:+.1f}%). Signals: {tag_text}."
+        base = f"Hit stop ({trade['pnl_pct']:+.1f}%). Re-examine reliance on: {tag_text}."
+    else:  # EOD_CLOSE, RECOVERED_INTERRUPTED_SESSION, etc.
+        base = f"Closed at end of day, neither target nor stop hit ({trade['pnl_pct']:+.1f}%). Signals: {tag_text}."
+
+    # Append the excursion read whenever there's something worth flagging:
+    # a real gap between the best move this trade had and what actually
+    # got captured at exit. Skip it when the trade barely moved either
+    # way, or when it captured close to its full favorable move already
+    # -- no point noting "captured 98%" as if it were a lesson.
+    max_fav = trade.get("max_favorable_pct")
+    capture_eff = trade.get("capture_efficiency_pct")
+    if max_fav is not None and max_fav > 1.0 and capture_eff is not None and capture_eff < 85:
+        base += (
+            f" Reached as high as {trade['max_ltp_seen']} ({max_fav:+.1f}% from entry) before closing at "
+            f"{trade.get('exit_ltp')} ({trade['pnl_pct']:+.1f}%) -- only captured {capture_eff:.0f}% of "
+            f"that favorable move. Worth reviewing whether the target/stop or an exit rule should adapt "
+            f"once a trade has moved this far in its favor."
+        )
+    return base
 
 
 def open_new_trade(setup, plan, snapshot) -> dict:
@@ -176,6 +310,15 @@ def open_new_trade(setup, plan, snapshot) -> dict:
         "reasons_at_entry": list(setup.reasons),
         "reason_tags": _reason_tags(setup.reasons),
         "status": "OPEN",
+        # Max favorable / adverse excursion tracking (MFE/MAE) -- the
+        # highest and lowest LTP seen at ANY point while the trade is
+        # open, updated every cycle regardless of whether that cycle
+        # closes the trade. This is what lets you later answer "how
+        # often do we give back a big favorable move before exit" --
+        # something the target/stop check alone can never tell you,
+        # since it only ever looks at the current tick.
+        "max_ltp_seen": plan.entry,
+        "min_ltp_seen": plan.entry,
     }
 
 
@@ -209,6 +352,8 @@ def update_open_trades(state: dict, snapshot) -> list:
             continue
 
         current_ltp = quote.ltp
+        _update_excursion(trade, current_ltp)
+
         outcome = None
         if current_ltp >= trade["target"]:
             outcome = "WIN"
@@ -221,6 +366,7 @@ def update_open_trades(state: dict, snapshot) -> list:
             trade["outcome"] = outcome
             trade["pnl_pct"] = round((current_ltp - trade["entry"]) / trade["entry"] * 100, 1)
             trade["pnl_inr"] = _pnl_inr(trade["entry"], current_ltp, trade["lots"])
+            trade.update(_excursion_summary(trade))
             trade["lesson"] = _build_lesson(trade, outcome)
             _append_journal(trade)
             closed_this_cycle.append(trade)
@@ -260,12 +406,14 @@ def force_close_end_of_day(state: dict, snapshot) -> list:
         else:
             exit_ltp = quote.ltp
             trade["exit_price_estimated"] = False
+            _update_excursion(trade, exit_ltp)  # in case this final tick is a new high/low not yet captured
 
         trade["closed_at"] = snapshot.timestamp.isoformat()
         trade["exit_ltp"] = exit_ltp
         trade["outcome"] = "EOD_CLOSE"
         trade["pnl_pct"] = round((exit_ltp - trade["entry"]) / trade["entry"] * 100, 1)
         trade["pnl_inr"] = _pnl_inr(trade["entry"], exit_ltp, trade["lots"])
+        trade.update(_excursion_summary(trade))
         trade["lesson"] = _build_lesson(trade, "EOD_CLOSE")
         if trade["exit_price_estimated"]:
             trade["lesson"] += " NOTE: exit price could not be confirmed at close -- this P&L is an estimate, not a confirmed outcome."

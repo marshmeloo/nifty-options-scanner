@@ -128,3 +128,42 @@ class RiskVerdict:
     decision: str            # "APPROVED", "WATCHLIST", "REJECTED"
     reasons: list             # list[str]
     checks: dict               # individual check name -> pass/fail + detail
+
+
+@dataclass
+class CondorPlan:
+    """
+    A proposed iron condor: sell CE + sell PE (the credit legs), buy a
+    further-OTM CE + PE against each (the protective wings). See
+    condor_plan_generator.py for how this gets built and
+    config_condor.py for the strike-selection/hedge-distance knobs.
+    """
+    expiry: str
+    short_ce_strike: float
+    short_ce_premium: float
+    short_pe_strike: float
+    short_pe_premium: float
+    hedge_ce_strike: float
+    hedge_ce_premium: float
+    hedge_pe_strike: float
+    hedge_pe_premium: float
+    lots: int
+    net_credit: float          # per share, i.e. per 1 lot-unit -- multiply by lot_size*lots for rupees
+    net_credit_inr: float
+    max_loss_inr: float        # worst case across both wings, in rupees
+    max_profit_inr: float      # = net_credit_inr (full credit retained if spot stays between the short strikes)
+    breakeven_upper: float
+    breakeven_lower: float
+
+
+@dataclass
+class CondorPosition:
+    """Live-tracked state of an OPEN condor -- what condor_tracker.py journals/monitors."""
+    plan: CondorPlan
+    opened_at: str              # isoformat timestamp
+    status: str = "OPEN"        # "OPEN" | "CLOSED" | "EXPIRED"
+    closed_at: str = None
+    close_reason: str = None    # "expiry_settlement" | "breach_close" | "manual"
+    exit_credit_inr: float = None   # what it cost to buy back (or 0 if let expire worthless -- the good outcome)
+    pnl_inr: float = None
+    pnl_pct_of_max_profit: float = None

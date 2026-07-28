@@ -15,7 +15,7 @@ Run:
 
 import time
 import logging
-from datetime import datetime, time as dtime
+from datetime import datetime, date, time as dtime
 from pathlib import Path
 
 import config
@@ -26,6 +26,11 @@ from risk_checker import check
 from price_action import analyze_with_context
 import trade_tracker as tt
 import news_source
+import banknifty_context
+import opening_gap
+import decision_log
+import volume_profile as vp
+import anchored_vwap as avwap
 
 POLL_INTERVAL_SECONDS = 30   # OI/IV don't move meaningfully faster than this
 MARKET_OPEN = dtime(9, 15)
@@ -64,6 +69,24 @@ def get_cached_news_flags():
     return _news_cache["flags"]
 
 
+_banknifty_cache = {"context": None, "fetched_at": None}
+
+
+def get_cached_banknifty_context():
+    """Same reasoning as get_cached_news_flags -- Bank Nifty's own trend
+    doesn't meaningfully change every 30s either."""
+    now = datetime.now()
+    stale = (
+        _banknifty_cache["context"] is None
+        or _banknifty_cache["fetched_at"] is None
+        or (now - _banknifty_cache["fetched_at"]).total_seconds() >= config.BANKNIFTY_CACHE_MINUTES * 60
+    )
+    if stale:
+        _banknifty_cache["context"] = banknifty_context.get_banknifty_context()
+        _banknifty_cache["fetched_at"] = now
+    return _banknifty_cache["context"]
+
+
 def market_is_open(now: datetime = None) -> bool:
     now = now or datetime.now()
     if now.weekday() >= 5:  # Saturday/Sunday
@@ -93,6 +116,20 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
             f"{news_risk['headline_count']} matching headline(s)"
         )
 
+    gap = opening_gap.capture_opening_gap()
+    if gap.get("nifty") or gap.get("banknifty"):
+        parts = []
+        if gap.get("nifty"):
+            g = gap["nifty"]
+            parts.append(f"NIFTY {g['gap_points']:+.1f} pts ({g['gap_pct']:+.2f}%)")
+        if gap.get("banknifty"):
+            g = gap["banknifty"]
+            parts.append(f"Bank Nifty {g['gap_points']:+.1f} pts ({g['gap_pct']:+.2f}%)")
+        log.info(f"  Opening gap: {' | '.join(parts)}")
+
+    bn_ctx, divergence = None, None
+    vol_profile = {"error": "not computed"}
+    anchored_vwap_ctx = {"error": "not computed"}
     try:
         candles = get_nifty_intraday_candles()
         price_levels, context = analyze_with_context(candles)
@@ -102,6 +139,38 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
             f"  Trend: {context.trend} | RSI: {context.rsi} ({context.rsi_state}) | "
             f"ROC: {context.roc_pct}% | Volume: {context.volume_ratio}x avg"
         )
+
+        # Reuses the SAME candles already fetched above for price_action --
+        # no extra API call needed for the volume profile.
+        vol_profile = vp.get_volume_profile_context(candles=candles)
+        if "error" not in vol_profile:
+            log.info(
+                f"  Volume profile: POC {vol_profile['poc']}  |  "
+                f"Value Area {vol_profile['value_area_low']}-{vol_profile['value_area_high']} "
+                f"({vol_profile['value_area_captured_pct']}% of volume)"
+            )
+
+        anchored_vwap_ctx = avwap.get_anchored_vwap_context(candles)
+        if "error" not in anchored_vwap_ctx:
+            log.info(
+                "  Anchored VWAP: "
+                + " | ".join(
+                    f"{a['label']} {a['vwap']} ({a['position']}, {a['distance_pct']:+.2f}%)"
+                    for a in anchored_vwap_ctx["anchors"]
+                )
+            )
+
+        if candles:
+            nifty_pct_change = round((candles[-1].close - candles[0].open) / candles[0].open * 100, 2)
+            bn_ctx = get_cached_banknifty_context()
+            divergence = banknifty_context.compute_divergence(nifty_pct_change, bn_ctx)
+            if "error" not in bn_ctx:
+                log.info(
+                    f"  Bank Nifty: {bn_ctx['spot']} ({bn_ctx['pct_change_today']:+.2f}%, {bn_ctx['trend']}) -- "
+                    f"{divergence['read']}: {divergence['detail']}"
+                )
+            else:
+                log.info(f"  Bank Nifty context unavailable this cycle: {bn_ctx['error']}")
     except Exception as e:
         log.info(f"  Price-action fetch failed this cycle, scanning without it: {e}")
         price_levels, context = [], None
@@ -119,11 +188,14 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
     if state["trades"]:
         log.info(f"  Currently tracking {len(state['trades'])} open trade(s):")
         for trade in state["trades"]:
+            max_seen = trade.get("max_ltp_seen")
+            max_seen_note = f"  (best seen: {max_seen})" if max_seen is not None else ""
             log.info(
                 f"    {trade['strike']} {trade['option_type']}  entry {trade['entry']} "
                 f"target {trade['target']} stop {trade['stop']}  "
                 f"current {trade.get('current_ltp', '?')}  "
                 f"running pnl {trade.get('running_pnl_pct', 0):+.1f}% (Rs {trade.get('running_pnl_inr', 0):+,.0f})"
+                f"{max_seen_note}"
             )
 
     setups = scan(snapshot, price_levels=price_levels, context=context)
@@ -155,6 +227,7 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
     # if the daily cap isn't reached and conviction (after the learned
     # adjustment) clears the raised bar. This replaces printing the whole
     # noisy chain every cycle.
+    new_trade = None
     if state["opened_today"] >= config.MAX_NEW_TRADES_PER_DAY:
         log.info(f"  Daily trade cap reached ({state['opened_today']}/{config.MAX_NEW_TRADES_PER_DAY}). Not opening new trades today.")
     else:
@@ -171,12 +244,33 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
                 log.info(f"    learned adjustment: {'; '.join(new_trade['learned_adjustment_notes'])}")
             log.info(f"    trades opened today: {state['opened_today']}/{config.MAX_NEW_TRADES_PER_DAY}")
         elif results:
-            best = results[0]
+            # Show the ADJUSTED score and the precise reason, not just the
+            # raw score against the bar -- a candidate can clear the raw
+            # bar and still get rejected after the learned tag-based
+            # adjustment, which the old version of this line never showed
+            # (that's exactly what caused the "score 5.75, bar 5.0, but no
+            # trade" confusion on 2026-07-24).
+            best_setup, best_plan, best_verdict = results[0]
+            adjusted_score, learn_notes = tt.apply_learned_adjustment(best_setup.score, best_setup.reasons)
+            if best_verdict.decision != "APPROVED":
+                reason = f"risk check: {'; '.join(best_verdict.reasons) if best_verdict.reasons else best_verdict.decision}"
+            elif adjusted_score < config.MIN_CONVICTION_SCORE_TO_TRACK:
+                reason = f"adjusted score {adjusted_score} < bar {config.MIN_CONVICTION_SCORE_TO_TRACK}"
+                if learn_notes:
+                    reason += f" ({'; '.join(learn_notes)})"
+            else:
+                reason = "already tracking this strike/type"
             log.info(
                 f"  No new trade this cycle ({state['opened_today']}/{config.MAX_NEW_TRADES_PER_DAY} used today). "
-                f"Highest candidate: {best[0].strike} {best[0].option_type} score {best[0].score} "
-                f"(bar is {config.MIN_CONVICTION_SCORE_TO_TRACK})"
+                f"Highest candidate: {best_setup.strike} {best_setup.option_type} raw score {best_setup.score} "
+                f"-> adjusted {adjusted_score}  ({reason})"
             )
+
+    decision_log.log_cycle(
+        snapshot, context, bias_label, bias_score, bias_reasons,
+        bn_ctx, divergence, news_risk, gap, results, state, new_trade,
+        volume_profile=vol_profile, anchored_vwap=anchored_vwap_ctx,
+    )
 
     tt.save_open_trades(state)
     return snapshot
@@ -208,6 +302,34 @@ def force_close_all(state: dict, expiry: str, last_snapshot=None):
     tt.save_open_trades(state)
 
 
+def check_open_trades_fast(state: dict, expiry: str):
+    """
+    Runs every FAST_CHECK_INTERVAL_SECONDS between full scan cycles --
+    re-checks already-open trades' target/stop only, so a spike-through
+    between two 30s snapshots doesn't go unnoticed for up to 30s longer
+    than necessary. Skips the fetch entirely if there's nothing open
+    (the common case for most of a session), so this costs nothing when
+    there's nothing to check.
+    """
+    if not state["trades"]:
+        return
+    try:
+        snapshot = get_nifty_snapshot(expiry=expiry)
+    except Exception as e:
+        log.info(f"  [fast check] snapshot fetch failed, will retry next fast check: {e}")
+        return
+
+    closed = tt.update_open_trades(state, snapshot)
+    for trade in closed:
+        log.info(
+            f"  [FAST CHECK - TRADE CLOSED: {trade['outcome']}] {trade['strike']} {trade['option_type']}  "
+            f"entry {trade['entry']} -> exit {trade['exit_ltp']}  "
+            f"pnl {trade['pnl_pct']:+.1f}% (Rs {trade['pnl_inr']:+,.0f})"
+        )
+        log.info(f"    lesson: {trade['lesson']}")
+    tt.save_open_trades(state)
+
+
 def run_forever(current_open_exposure_pct: float = 0.0, current_daily_loss_pct: float = 0.0):
     log.info("Fetching nearest expiry...")
     expiry = get_nearest_expiry()
@@ -216,17 +338,78 @@ def run_forever(current_open_exposure_pct: float = 0.0, current_daily_loss_pct: 
     log.info(tt.summarize_recent_lessons())
 
     state = tt.load_open_trades()
+
+    # Settle leftover open trades in TWO situations, not just one:
+    #   1. The state is from a previous calendar date (existing check).
+    #   2. The state is from TODAY, but the process is only starting now
+    #      and the market is ALREADY closed -- e.g. the previous instance
+    #      of this script silently died mid-session (crashed, hung, or
+    #      was killed) with trades still open, and by the time it got
+    #      restarted the trading day was already over. This happened for
+    #      real on 2026-07-24: a trade opened at 11:04, the process then
+    #      went completely silent (no error, no further cycles logged)
+    #      for the rest of the day, and a same-day restart's first check
+    #      landed after 15:30 -- since that restart's own
+    #      `was_open_last_cycle` starts False, the normal market-close
+    #      transition that triggers settlement never fires, and the
+    #      trade would otherwise sit "OPEN" in state forever with no one
+    #      the wiser. Catching this here, at startup, closes that gap
+    #      regardless of what caused the original process to go silent.
+    needs_recovery = state.get("_stale_from_previous_session") or (
+        state.get("trades") and not market_is_open()
+    )
+
+    if needs_recovery:
+        reason = (
+            f"from a previous session ({state.get('date')})" if state.get("_stale_from_previous_session")
+            else "from earlier today, but the market is already closed and this process is only starting now"
+        )
+        log.info(
+            f"  WARNING: found {len(state['trades'])} still-OPEN trade(s) {reason} that never got settled -- "
+            f"likely the previous run of this script was stopped, crashed, or went silent before market close. "
+            f"Recovering and journaling them now, using each trade's last known live price as the exit (not a "
+            f"guess -- see each journal entry's lesson for its exact price source)."
+        )
+        try:
+            recovery_snapshot = get_nifty_snapshot(expiry=get_nearest_expiry())
+        except Exception as e:
+            log.info(f"  Could not fetch a fresh snapshot for recovery ({e}) -- using each trade's last known price instead.")
+            recovery_snapshot = None
+        recovered = tt.settle_stale_trades(state, snapshot=recovery_snapshot)
+        for trade in recovered:
+            log.info(
+                f"    [RECOVERED] {trade['strike']} {trade['option_type']}  entry {trade['entry']} -> "
+                f"exit {trade['exit_ltp']}  pnl {trade['pnl_pct']:+.1f}% (Rs {trade['pnl_inr']:+,.0f})"
+                + ("  [ESTIMATED]" if trade["exit_price_estimated"] else "")
+            )
+        was_same_day = not state.get("_stale_from_previous_session")
+        state = {
+            "date": date.today().isoformat(),
+            "trades": [],
+            "opened_today": state.get("opened_today", 0) if was_same_day else 0,
+        }
+        tt.save_open_trades(state)
+
     was_open_last_cycle = False
     last_good_snapshot = None
+    last_full_cycle_at = 0.0  # forces a full cycle on the very first iteration
 
     while True:
         is_open = market_is_open()
 
         if is_open:
-            try:
-                last_good_snapshot = run_once(expiry, state, current_open_exposure_pct, current_daily_loss_pct)
-            except Exception as e:
-                log.info(f"  Error this cycle (will retry next cycle): {e}")
+            now = time.monotonic()
+            if now - last_full_cycle_at >= POLL_INTERVAL_SECONDS:
+                try:
+                    last_good_snapshot = run_once(expiry, state, current_open_exposure_pct, current_daily_loss_pct)
+                except Exception as e:
+                    log.info(f"  Error this cycle (will retry next cycle): {e}")
+                last_full_cycle_at = now
+            else:
+                try:
+                    check_open_trades_fast(state, expiry)
+                except Exception as e:
+                    log.info(f"  [fast check] error (will retry next fast check): {e}")
             was_open_last_cycle = True
         else:
             if was_open_last_cycle and state["trades"]:
@@ -238,7 +421,7 @@ def run_forever(current_open_exposure_pct: float = 0.0, current_daily_loss_pct: 
             log.info(f"[{datetime.now().strftime('%H:%M:%S')}] Market closed, sleeping...")
             was_open_last_cycle = False
 
-        time.sleep(POLL_INTERVAL_SECONDS)
+        time.sleep(config.FAST_CHECK_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":

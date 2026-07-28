@@ -142,6 +142,45 @@ NEWS_CACHE_MINUTES = 15            # main_live.py re-fetches news at most this o
 # today's specific setup is dangerous.
 NEWS_RISK_BLOCKS_NEW_TRADES = False
 
+# --- Bank Nifty context / divergence ---
+# See banknifty_context.py. Context-only signal (not traded) -- checks
+# whether Bank Nifty is confirming or fighting NIFTY's move today, since
+# financials are ~30-35% of NIFTY 50's weight.
+BANKNIFTY_CACHE_MINUTES = 5   # main_live.py refetches Bank Nifty at most this often, not every 30s poll
+
+# --- Smart money / participant-wise OI (see participant_oi.py) ---
+# How far FII+Pro's combined net-call minus net-put position (in
+# contracts) has to lean before counting as "bullish"/"bearish" rather
+# than "neutral". This is an unresearched starting assumption -- NIFTY's
+# index options OI runs in the hundreds of thousands to millions of
+# contracts most days, so tune this once you've seen a few real reports.
+SMART_MONEY_NEUTRAL_BAND = 50000
+
+# --- Volume profile (see volume_profile.py) ---
+# Built from OHLCV bars (Dhan doesn't give us a tick-level trade tape),
+# using the standard "spread each candle's volume evenly across its
+# high-low range" approximation. Bin size is your resolution/noise
+# tradeoff -- 10 points is a starting assumption for NIFTY's current
+# level (~24-25k), not a researched optimum.
+VOLUME_PROFILE_BIN_POINTS = 10
+VALUE_AREA_TARGET_PCT = 0.70   # standard convention (roughly "one std dev" of volume)
+HVN_MULTIPLE = 1.5             # bin volume >= this x average -> high-volume node
+LVN_MULTIPLE = 0.5             # bin volume <= this x average -> low-volume node
+
+# --- Fast position check (added 2026-07-27) ---
+# Between full scan cycles (POLL_INTERVAL_SECONDS, 30s), a big favorable
+# move can spike through target and back again without ever being seen
+# by a 30s-granularity snapshot -- e.g. price touches 160 against a 160
+# target, then drops to 150 seconds later, and neither snapshot around
+# it ever shows 160. This runs a MUCH lighter check every
+# FAST_CHECK_INTERVAL_SECONDS, but ONLY re-checks already-open trades'
+# target/stop -- it does not scan for new candidates, run OI analytics,
+# news, etc. Currently still re-fetches the FULL option chain each time
+# (simple, safe, reuses fully-tested code) -- see BACKLOG.md for the
+# lighter-weight version (Dhan's marketfeed/ltp endpoint, needs security-
+# ID resolution) planned before going live with real capital.
+FAST_CHECK_INTERVAL_SECONDS = 5
+
 # --- Trade tracking ---
 # The scanner re-evaluates the whole chain every cycle, which is correct
 # for FINDING setups but wrong for TRACKING one: without a cap, "highest

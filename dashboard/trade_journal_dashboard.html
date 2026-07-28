@@ -126,6 +126,7 @@
           <th data-key="exit_ltp">Exit</th>
           <th data-key="pnl_pct">P&amp;L %</th>
           <th data-key="pnl_inr">P&amp;L (Rs)</th>
+          <th data-key="capture_efficiency_pct">Capture %</th>
           <th data-key="outcome">Outcome</th>
           <th data-key="reason_tags">Tags</th>
         </tr>
@@ -198,6 +199,8 @@ function render() {
   const losses = closed.filter(t => t.outcome === "LOSS");
   const winRate = closed.length ? (wins.length / closed.length * 100) : null;
   const avgPnl = closed.length ? (closed.reduce((s, t) => s + (t.pnl_pct || 0), 0) / closed.length) : null;
+  const withCapture = closed.filter(t => t.capture_efficiency_pct != null);
+  const avgCapture = withCapture.length ? (withCapture.reduce((s, t) => s + t.capture_efficiency_pct, 0) / withCapture.length) : null;
   const totalPnl = closed.reduce((s, t) => s + (t.pnl_pct || 0), 0);
   const totalPnlInr = closed.reduce((s, t) => s + (t.pnl_inr || 0), 0);
 
@@ -207,6 +210,7 @@ function render() {
     { label: "Win rate", value: winRate === null ? "—" : winRate.toFixed(0) + "%", cls: winRate === null ? "" : (winRate >= 50 ? "pos" : "neg") },
     { label: "Wins / Losses", value: `${wins.length} / ${losses.length}` },
     { label: "Avg P&L / trade", value: fmtPct(avgPnl), cls: avgPnl === null ? "" : (avgPnl >= 0 ? "pos" : "neg") },
+    { label: "Avg capture of peak move", value: avgCapture === null ? "—" : avgCapture.toFixed(0) + "%", cls: avgCapture === null ? "" : (avgCapture >= 70 ? "pos" : "neg") },
     { label: "Cumulative P&L", value: fmtPct(totalPnl), cls: totalPnl >= 0 ? "pos" : "neg" },
     { label: "Cumulative P&L (Rs)", value: fmtInr(totalPnlInr), cls: totalPnlInr >= 0 ? "pos" : "neg" },
   ];
@@ -309,6 +313,7 @@ function renderTradeTable() {
         <td>${t.exit_ltp ?? (t.current_ltp ?? "—")}</td>
         <td class="${(t.pnl_pct ?? t.running_pnl_pct ?? 0) >= 0 ? "win" : "loss"}">${fmtPct(t.pnl_pct ?? t.running_pnl_pct)}</td>
         <td class="${(t.pnl_inr ?? t.running_pnl_inr ?? 0) >= 0 ? "win" : "loss"}">${fmtInr(t.pnl_inr ?? t.running_pnl_inr)}</td>
+        <td title="${t.max_ltp_seen != null ? 'Peak seen: ' + t.max_ltp_seen : ''}">${t.capture_efficiency_pct != null ? t.capture_efficiency_pct.toFixed(0) + '%' : '—'}</td>
         <td class="${outcomeClass}">${t.outcome || t.status || "—"}</td>
         <td style="font-size:11px; color:#8a92a3;">${(t.reason_tags || []).join(", ")}</td>
       </tr>

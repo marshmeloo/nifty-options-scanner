@@ -32,6 +32,9 @@ import config as cfg
 import global_cues
 import nse_source
 import news_source
+import banknifty_context
+import participant_oi
+import volume_profile as vp
 import price_action
 from resilient_source import get_nifty_intraday_candles, get_nearest_expiry, get_nifty_snapshot
 
@@ -87,10 +90,10 @@ def get_previous_session_recap(daily_candles: list) -> dict:
     close_position_pct = round((prev.close - prev.low) / day_range * 100, 1) if day_range else 50.0
     return {
         "date": prev.timestamp.strftime("%Y-%m-%d"),
-        "open": prev.open,
-        "high": prev.high,
-        "low": prev.low,
-        "close": prev.close,
+        "open": round(prev.open, 2),
+        "high": round(prev.high, 2),
+        "low": round(prev.low, 2),
+        "close": round(prev.close, 2),
         "close_position_pct": close_position_pct,  # 0 = closed at low, 100 = closed at high
     }
 
@@ -134,13 +137,20 @@ def get_previous_chain_context() -> dict:
         return {"error": str(e)}
 
 
-def synthesize_bias(recap: dict, context, cues_bias: str, chain_ctx: dict) -> str:
+def synthesize_bias(recap: dict, context, cues_bias: str, chain_ctx: dict, banknifty_divergence: dict = None,
+                     smart_money: dict = None) -> str:
     """
     Combine (a) where price closed within its previous-day range, (b) the
     price_action trend read on recent daily candles, (c) the overnight
-    global cues lean, and (d) chain net-delta-OI bias (if available) into
-    one plain-language starting lean. Explicitly a lean, not a call --
-    ties or missing inputs fall back to "neutral / wait for confirmation".
+    global cues lean, (d) chain net-delta-OI bias (if available), and
+    (e) FII+Pro's index-options positioning lean (if available) into one
+    plain-language starting lean. Explicitly a lean, not a call -- ties
+    or missing inputs fall back to "neutral / wait for confirmation".
+    Bank Nifty divergence doesn't add its own directional vote (it's a
+    same-index-family comparison, not an independent signal) -- instead,
+    if it reads "diverging", that gets appended as a caveat on whatever
+    lean the other votes produce, since a diverging financials sector is
+    a reason for LESS confidence in that lean, not a vote for the other side.
     """
     votes = []
 
@@ -163,16 +173,24 @@ def synthesize_bias(recap: dict, context, cues_bias: str, chain_ctx: dict) -> st
     if chain_ctx.get("net_delta_oi_bias") in ("bullish", "bearish"):
         votes.append(chain_ctx["net_delta_oi_bias"])
 
+    if smart_money and smart_money.get("lean") in ("bullish", "bearish"):
+        votes.append(smart_money["lean"])
+
     if not votes:
         return "neutral / insufficient data"
 
     bulls = votes.count("bullish")
     bears = votes.count("bearish")
     if bulls > bears:
-        return f"leaning bullish ({bulls}/{len(votes)} signals)"
-    if bears > bulls:
-        return f"leaning bearish ({bears}/{len(votes)} signals)"
-    return "mixed / neutral"
+        result = f"leaning bullish ({bulls}/{len(votes)} signals)"
+    elif bears > bulls:
+        result = f"leaning bearish ({bears}/{len(votes)} signals)"
+    else:
+        result = "mixed / neutral"
+
+    if banknifty_divergence and banknifty_divergence.get("read") == "diverging":
+        result += " -- caveat: Bank Nifty diverging, this lean may be narrower than it looks"
+    return result
 
 
 def build_brief() -> dict:
@@ -180,9 +198,37 @@ def build_brief() -> dict:
     raw_candles = get_nifty_intraday_candles(interval="60", from_date=from_date, to_date=to_date)
     daily_candles = _aggregate_to_daily(raw_candles)
 
+    # Previous-session volume profile: filter the already-fetched raw
+    # (hourly) candles down to just the most recent day, rather than a
+    # separate fetch. Hourly resolution is coarser than the 5-min bins
+    # main_live.py uses intraday, but still meaningful for "which price
+    # levels saw more volume yesterday."
+    prev_day_volume_profile = {"error": "no candle data"}
+    if daily_candles:
+        prev_day = daily_candles[-1].timestamp.date()
+        prev_day_raw_candles = [c for c in raw_candles if c.timestamp.date() == prev_day]
+        prev_day_volume_profile = vp.get_volume_profile_context(candles=prev_day_raw_candles)
+
     recap = get_previous_session_recap(daily_candles)
     levels = price_action.detect_support_resistance(daily_candles) if daily_candles else []
     context = price_action.build_context(daily_candles) if daily_candles else None
+
+    try:
+        bn_raw_candles = banknifty_context.get_banknifty_candles(interval="60", from_date=from_date, to_date=to_date)
+        bn_daily_candles = _aggregate_to_daily(bn_raw_candles)
+        bn_recap = get_previous_session_recap(bn_daily_candles)
+        if recap and bn_recap:
+            nifty_prev_pct = round((recap["close"] - recap["open"]) / recap["open"] * 100, 2) if recap["open"] else 0.0
+            bn_ctx_for_divergence = {
+                "pct_change_today": round((bn_recap["close"] - bn_recap["open"]) / bn_recap["open"] * 100, 2) if bn_recap["open"] else 0.0,
+                "spot": bn_recap["close"],
+                "trend": None,
+            }
+            bn_divergence = banknifty_context.compute_divergence(nifty_prev_pct, bn_ctx_for_divergence)
+        else:
+            bn_recap, bn_divergence = {}, {"read": "unavailable", "detail": "insufficient candle data"}
+    except Exception as e:
+        bn_recap, bn_divergence = {}, {"read": "unavailable", "detail": str(e)}
 
     cues = global_cues.get_global_cues()
     cues_bias = global_cues.summarize_bias(cues)
@@ -196,8 +242,9 @@ def build_brief() -> dict:
     event_today = get_today_event()
     chain_ctx = get_previous_chain_context()
     news_flags = news_source.get_news_flags()
+    smart_money = participant_oi.get_smart_money_bias()
 
-    bias = synthesize_bias(recap, context, cues_bias, chain_ctx)
+    bias = synthesize_bias(recap, context, cues_bias, chain_ctx, banknifty_divergence=bn_divergence, smart_money=smart_money)
 
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -216,6 +263,9 @@ def build_brief() -> dict:
         "event_today": event_today,
         "chain_context": chain_ctx,
         "news": news_flags,
+        "smart_money": smart_money,
+        "volume_profile": prev_day_volume_profile,
+        "banknifty": {"recap": bn_recap, "divergence": bn_divergence},
         "bias": bias,
     }
 
@@ -250,6 +300,22 @@ def render_markdown(brief: dict) -> str:
             f"- {recap['date']}: O {recap['open']}  H {recap['high']}  L {recap['low']}  C {recap['close']}"
         )
         lines.append(f"- Closed at {recap['close_position_pct']}% of the day's range (0=low, 100=high)")
+        vprof = brief.get("volume_profile", {})
+        if vprof and "error" not in vprof:
+            lines.append(
+                f"- Volume profile: POC {vprof['poc']}, Value Area {vprof['value_area_low']}-"
+                f"{vprof['value_area_high']} ({vprof['value_area_captured_pct']}% of volume, "
+                f"hourly-bar resolution)"
+            )
+        lines.append("")
+
+    bn = brief.get("banknifty", {})
+    if bn.get("recap"):
+        lines.append("## Bank Nifty (previous session)")
+        r = bn["recap"]
+        lines.append(f"- {r['date']}: O {r['open']}  H {r['high']}  L {r['low']}  C {r['close']}")
+        div = bn["divergence"]
+        lines.append(f"- Divergence read vs NIFTY: **{div['read']}** -- {div['detail']}")
         lines.append("")
 
     ctx = brief["trend_context"]
@@ -312,6 +378,20 @@ def render_markdown(brief: dict) -> str:
             lines.append(f"  - [{h['source']}] {h['title']} ({', '.join(h['categories'])})")
     else:
         lines.append("- No event-risk headlines matched today's keyword categories.")
+    lines.append("")
+
+    sm = brief.get("smart_money", {})
+    lines.append("## Smart money (NSE Participant-wise OI, index options)")
+    if sm.get("lean") == "unavailable":
+        lines.append(f"- Unavailable: {sm.get('detail', 'no report found')}")
+    else:
+        lines.append(f"- As of {sm.get('as_of_date', 'n/a')}: **{sm['lean']}** -- {sm['detail']}")
+        lines.append(f"  - FII: net calls {sm['fii_net_call']:+,}, net puts {sm['fii_net_put']:+,}")
+        lines.append(f"  - Pro: net calls {sm['pro_net_call']:+,}, net puts {sm['pro_net_put']:+,}")
+        lines.append(
+            f"  - DII: net calls {sm['dii_net_call']:+,}, net puts {sm['dii_net_put']:+,} "
+            f"(regulatorily restricted, largely uninformative here)"
+        )
     lines.append("")
 
     lines.append("---")

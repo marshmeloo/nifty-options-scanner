@@ -37,6 +37,8 @@ import uuid
 from pathlib import Path
 from datetime import datetime
 
+from atomic_state import atomic_write_json
+
 STATE_DIR = Path(__file__).parent / "state"
 STATE_DIR.mkdir(exist_ok=True)
 STAGED_ORDERS_PATH = STATE_DIR / "staged_orders.json"
@@ -51,7 +53,37 @@ def _load() -> list:
 
 
 def _save(records: list):
-    STAGED_ORDERS_PATH.write_text(json.dumps(records, indent=2))
+    atomic_write_json(STAGED_ORDERS_PATH, records, indent=2)
+
+
+def stage_advisory(kind: str, detail: str, note: str = "", data: dict = None) -> dict:
+    """
+    A lighter-weight sibling to stage_order() for things that need human
+    review but aren't a momentum-scanner TradePlan/Setup/RiskVerdict --
+    e.g. condor_tracker.py's breach-warning flag or a candidate condor to
+    open. Same file, same approve()/reject() workflow, same "nothing
+    here executes anything" guarantee -- just without forcing an
+    unrelated strategy's data shape onto a review item that doesn't fit
+    it. `data`, if given, carries the exact structured payload (e.g. a
+    CondorPlan as a dict) so a follow-up step can act on precisely what
+    was reviewed and approved, rather than re-scanning and risking acting
+    on a plan that's drifted since the market moved.
+    """
+    record = {
+        "id": uuid.uuid4().hex[:8],
+        "staged_at": datetime.now().isoformat(timespec="seconds"),
+        "status": "PENDING",
+        "kind": kind,          # e.g. "condor_breach_warning", "condor_open_candidate"
+        "detail": detail,
+        "note": note,
+        "data": data,
+        "decided_at": None,
+        "decided_by_note": None,
+    }
+    records = _load()
+    records.append(record)
+    _save(records)
+    return record
 
 
 def stage_order(plan, setup, verdict, note: str = "") -> dict:
@@ -101,10 +133,24 @@ def list_staged(status: str = None) -> list:
 
 def render_diff(record: dict) -> str:
     """
-    Git-diff-style human-readable rendering of one staged order, meant to
+    Git-diff-style human-readable rendering of one staged item, meant to
     be read before approving -- the whole point of staging is that a
     human actually looks at this, not that it exists as a formality.
+    Handles both stage_order() (a trade candidate) and stage_advisory()
+    (a generic review item, e.g. a condor breach warning) record shapes.
     """
+    if "kind" in record and "strike" not in record:
+        # Generic advisory record (stage_advisory)
+        lines = [
+            f"  advisory {record['id']}  [{record['status']}]  staged {record['staged_at']}  ({record['kind']})",
+            f"+ {record['detail']}",
+        ]
+        if record.get("note"):
+            lines.append(f"+   note: {record['note']}")
+        if record["status"] != "PENDING":
+            lines.append(f"    decided {record['decided_at']}: {record['decided_by_note'] or '(no note)'}")
+        return "\n".join(lines)
+
     lines = [
         f"  order {record['id']}  [{record['status']}]  staged {record['staged_at']}",
         f"+ BUY {record['lots']} lot(s)  {record['symbol']} {record['strike']} {record['option_type']}  (expiry {record['expiry']})",

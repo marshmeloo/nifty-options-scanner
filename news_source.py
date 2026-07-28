@@ -45,14 +45,20 @@ FEEDS = {
 # (including ones that would otherwise block direct scraping), needs no
 # key, and has a stable documented URL grammar. Tradeoff: Google News RSS
 # is capped at ~100 items with no pagination and can skew a few days
-# stale on quieter queries -- "when:2d" keeps this query reasonably fresh,
+# stale on quieter queries -- "when:1d" keeps this query reasonably fresh,
 # and this being one input among several (ET + your own OI/price reads)
 # means a slightly-stale headline here isn't a single point of failure.
-_GOOGLE_NEWS_QUERY = (
-    'NIFTY OR Sensex OR RBI OR "repo rate" OR "union budget" OR '
-    '"Federal Reserve" OR FOMC OR SEBI OR "crude oil" when:2d'
-)
-FEEDS["Google News (India markets/policy)"] = (
+#
+# IMPORTANT (fixed 2026-07-24): this query used to OR together the exact
+# same words EVENT_CATEGORIES tags against (RBI, SEBI, "crude oil", "Federal
+# Reserve", etc). That guaranteed every single article this feed returned
+# already matched at least one category -- risk showed "elevated" almost
+# every session regardless of whether anything unusual was actually
+# happening. The query now stays neutral (just "is this about the Indian
+# stock market at all"), so EVENT_CATEGORIES below is doing the real
+# filtering, not rubber-stamping its own search terms.
+_GOOGLE_NEWS_QUERY = 'NIFTY OR Sensex OR "Indian stock market" OR "BSE Sensex" when:1d'
+FEEDS["Google News (India markets)"] = (
     "https://news.google.com/rss/search?q="
     + urllib.parse.quote(_GOOGLE_NEWS_QUERY)
     + "&hl=en-IN&gl=IN&ceid=IN:en"
@@ -66,17 +72,37 @@ _HEADERS = {
 }
 
 # category -> (risk weight, keywords). Keywords are matched case-insensitively
-# as whole words/phrases against headline + summary text. Weights are
-# somewhat arbitrary or added up against NEWS_RISK_ELEVATED_THRESHOLD --
-# tune both to taste, there's no "correct" calibration for this.
+# as whole words/phrases against the HEADLINE TITLE ONLY (not the
+# summary/description -- RSS descriptions, especially Google News',
+# often carry boilerplate or unrelated linked-story text that caused
+# false-positive matches in testing). Weights are somewhat arbitrary,
+# added up against NEWS_RISK_ELEVATED_THRESHOLD -- tune both to taste,
+# there's no "correct" calibration for this.
+#
+# IMPORTANT (fixed 2026-07-24): earlier keywords included bare
+# institution/commodity names (bare "RBI", "SEBI", "Federal Reserve",
+# "OPEC", "war") that show up constantly in routine market-wrap
+# reporting ("Sensex ends flat amid Fed rate worries, crude oil dips") --
+# that's scene-setting, not an actual event. Every keyword below now
+# requires a decision/action/shock word attached, so a category only
+# fires on headlines actually ABOUT that event, not ones that merely
+# mention the institution in passing.
 EVENT_CATEGORIES = {
-    "rbi_monetary_policy": (3, ["RBI", "repo rate", "monetary policy committee", "MPC meeting", "reverse repo"]),
-    "global_central_bank": (3, ["Federal Reserve", "FOMC", "Fed rate", "Fed chair", "rate hike", "rate cut"]),
+    "rbi_monetary_policy": (3, ["repo rate", "monetary policy committee", "MPC meeting", "MPC decision",
+                                  "reverse repo", "RBI monetary policy", "RBI governor"]),
+    "global_central_bank": (3, ["FOMC meeting", "FOMC decision", "Fed rate hike", "Fed rate cut",
+                                  "Fed rate decision", "Fed policy decision"]),
     "union_budget": (3, ["union budget", "budget session", "fiscal deficit", "finance minister budget"]),
-    "geopolitical": (3, ["war", "ceasefire", "sanctions", "missile", "border tension", "military strike", "conflict escalates"]),
-    "crude_oil_shock": (2, ["crude oil surge", "crude oil plunge", "OPEC", "oil prices spike", "Brent crude"]),
+    "geopolitical": (3, ["war breaks out", "war escalates", "declares war", "ceasefire collapses",
+                          "new sanctions", "sanctions imposed", "missile strike", "military strike",
+                          "border tension escalates"]),
+    "crude_oil_shock": (2, ["crude oil surge", "crude oil surges", "crude oil surging",
+                             "crude oil plunge", "crude oil plunges", "crude oil plunging",
+                             "oil prices spike", "oil prices spikes", "oil price shock",
+                             "oil supply disruption", "Brent crude surge", "Brent crude plunge"]),
     "inflation_growth_data": (2, ["CPI inflation", "WPI inflation", "GDP growth", "IIP data", "PMI data"]),
-    "regulatory_action": (2, ["SEBI", "circuit breaker", "F&O ban", "margin requirement", "trading halt"]),
+    "regulatory_action": (2, ["SEBI bans", "SEBI order", "SEBI probe", "circuit breaker", "F&O ban",
+                               "margin requirement hiked", "trading halt"]),
     "elections": (2, ["assembly election", "election results", "exit poll", "general election"]),
 }
 
@@ -133,13 +159,15 @@ def _matches(text: str, keyword: str) -> bool:
 
 def tag_headlines(headlines: list) -> list:
     """
-    Tag each headline with any matching event categories. Returns only
-    headlines that matched at least one category -- most day-to-day
-    market chatter won't match anything, which is the point.
+    Tag each headline with any matching event categories. Matches
+    against the TITLE only (see the EVENT_CATEGORIES comment above for
+    why) -- most day-to-day market chatter won't match anything, which
+    is the point. Returns only headlines that matched at least one
+    category.
     """
     tagged = []
     for h in headlines:
-        text = f"{h['title']} {h['summary']}"
+        text = h["title"]
         matched_categories = []
         for category, (weight, keywords) in EVENT_CATEGORIES.items():
             if any(_matches(text, kw) for kw in keywords):

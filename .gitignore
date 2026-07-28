@@ -13,6 +13,8 @@ cmd-print-*.txt
 sample_data.csv
 state/*.json
 logs/premarket_brief_*.md
+logs/condor_*.log
+logs/condor_journal.jsonl
 
 # Python
 __pycache__/
