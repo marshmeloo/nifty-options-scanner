@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NIFTY Live Terminal</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #12171f;
+    --panel-raised: #171d27;
+    --border: #232b36;
+    --text: #e8ecf1;
+    --muted: #7c8798;
+    --amber: #e0a526;
+    --amber-dim: #7a5d1e;
+    --green: #3ecf8e;
+    --red: #ef5f6a;
+    --blue: #5b8def;
+    --mono: ui-monospace, "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, "Inter", "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    padding: 20px;
+    min-height: 100vh;
+  }
+
+  /* ---- Ticker header ---- */
+  .ticker {
+    display: flex;
+    align-items: baseline;
+    gap: 28px;
+    flex-wrap: wrap;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 22px;
+    margin-bottom: 18px;
+  }
+  .ticker .spot-block { display: flex; align-items: baseline; gap: 10px; }
+  .ticker .spot-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  .ticker .spot-value { font-family: var(--mono); font-size: 34px; font-weight: 600; color: var(--amber); }
+  .ticker .metric { font-family: var(--sans); font-size: 12px; color: var(--muted); }
+  .ticker .metric b { font-family: var(--mono); font-size: 14px; color: var(--text); font-weight: 500; margin-left: 5px; }
+  .live-dot-wrap { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); animation: pulse 1.6s infinite; }
+  .live-dot.stale { background: var(--red); animation: none; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  /* ---- Strike landscape (signature element) ---- */
+  .landscape-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 26px 30px;
+    margin-bottom: 18px;
+  }
+  .landscape-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 18px; }
+  .landscape-track {
+    position: relative;
+    height: 6px;
+    background: linear-gradient(90deg, var(--red) 0%, var(--border) 35%, var(--border) 65%, var(--green) 100%);
+    opacity: 0.35;
+    border-radius: 3px;
+    margin: 90px 10px 46px;
+  }
+  .landmark { position: absolute; top: 50%; transform: translateX(-50%); text-align: center; }
+  .landmark .connector { position: absolute; left: 50%; width: 1px; background: var(--border); transform: translateX(-50%); }
+  .landmark .dot { width: 14px; height: 14px; border-radius: 50%; margin: 0 auto 6px; border: 2px solid var(--bg); position: relative; z-index: 2; }
+  .landmark .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+  .landmark .value { font-family: var(--mono); font-size: 13px; color: var(--text); white-space: nowrap; }
+  .landmark.put-wall .dot { background: var(--green); }
+  .landmark.max-pain .dot { background: var(--amber); width: 10px; height: 10px; }
+  .landmark.call-wall .dot { background: var(--red); }
+  .landmark.poc .dot { background: var(--amber); width: 12px; height: 12px; border: 2px dashed var(--bg); }
+  .landmark.spot .dot { background: var(--blue); width: 18px; height: 18px; box-shadow: 0 0 0 5px rgba(91,141,239,0.18); }
+  .landmark.spot .value { color: var(--blue); font-weight: 700; font-size: 15px; }
+
+  /* ---- Card grid ---- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-bottom: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+  .card h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; margin: 0 0 12px; font-weight: 600; }
+  .card .row { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
+  .card .row .k { color: var(--muted); }
+  .card .row .v { font-family: var(--mono); }
+  .pos { color: var(--green); } .neg { color: var(--red); } .neu { color: var(--amber); }
+
+  /* ---- Panels ---- */
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 18px; }
+  .panel h2 { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; margin: 0 0 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--border); font-family: var(--mono); }
+  tr:last-child td { border-bottom: none; }
+  tfoot td { border-top: 2px solid var(--border); border-bottom: none; padding-top: 10px; }
+  .empty-state { color: var(--muted); font-size: 13px; padding: 10px 4px; }
+
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-family: var(--mono); }
+  .badge.opened { background: rgba(62,207,142,0.15); color: var(--green); }
+  .badge.rejected { background: rgba(239,95,106,0.15); color: var(--red); }
+  .badge.notselected { background: rgba(124,135,152,0.15); color: var(--muted); }
+  .badge.approved { background: rgba(62,207,142,0.15); color: var(--green); }
+
+  .activity-row { border-bottom: 1px solid var(--border); padding: 10px 4px; font-size: 12.5px; }
+  .activity-row:last-child { border-bottom: none; }
+  .activity-time { font-family: var(--mono); color: var(--muted); margin-right: 10px; }
+  .activity-detail { color: var(--muted); font-size: 12px; margin-top: 3px; }
+
+  .footer-note { color: var(--muted); font-size: 11px; text-align: center; margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<div class="ticker" id="ticker">
+  <div class="spot-block">
+    <span class="spot-label">NIFTY</span>
+    <span class="spot-value" id="spot-value">—</span>
+  </div>
+  <div class="metric">VWAP<b id="vwap-value">—</b></div>
+  <div class="metric">PCR<b id="pcr-value">—</b></div>
+  <div class="metric">GAP<b id="gap-value">—</b></div>
+  <div class="metric">SOURCE<b id="source-value">—</b></div>
+  <div class="metric">TODAY'S P&amp;L<b id="total-pnl-value">—</b></div>
+  <div class="live-dot-wrap">
+    <div class="live-dot" id="live-dot"></div>
+    <span id="live-text">connecting…</span>
+  </div>
+</div>
+
+<div class="landscape-panel">
+  <div class="landscape-title">Strike Landscape</div>
+  <div class="landscape-track" id="landscape-track"></div>
+</div>
+
+<div class="grid" id="context-cards"></div>
+
+<div class="panel">
+  <h2>Open Trades (Momentum Scanner)</h2>
+  <div id="open-trades-container"><div class="empty-state">No open trades.</div></div>
+</div>
+
+<div class="panel" id="closed-today-panel" style="display:none;">
+  <h2>Closed Today</h2>
+  <div id="closed-today-container"></div>
+</div>
+
+<div class="panel" id="condor-panel" style="display:none;">
+  <h2>Iron Condor Position</h2>
+  <div id="condor-container"></div>
+</div>
+
+<div class="panel" id="approvals-panel" style="display:none;">
+  <h2>Pending Approvals</h2>
+  <div id="approvals-container"></div>
+</div>
+
+<div class="panel">
+  <h2>Recent Decision Activity</h2>
+  <div id="activity-container"><div class="empty-state">No activity yet.</div></div>
+</div>
+
+<div class="footer-note">Read-only local view of main_live.py's state &amp; logs. Refreshes every 8s. Nothing on this page can place, modify, or cancel anything.</div>
+
+<script>
+const REFRESH_MS = 8000;
+const STALE_SECONDS = 90;
+
+function fmtSigned(v, decimals, suffix) {
+  if (v === null || v === undefined || isNaN(v)) return "—";
+  const s = Number(v).toFixed(decimals ?? 1) + (suffix || "");
+  return v > 0 ? "+" + s : s;
+}
+function fmtInr(v) {
+  if (v === null || v === undefined || isNaN(v)) return "—";
+  const s = "Rs " + Math.abs(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  return v > 0 ? "+" + s : (v < 0 ? "-" + s : s);
+}
+function pnlClass(v) {
+  if (v === null || v === undefined || isNaN(v)) return "";
+  return v >= 0 ? "pos" : "neg";
+}
+
+function renderLandscape(oi, spot, volProfile) {
+  const track = document.getElementById("landscape-track");
+  if (!oi || spot === null) {
+    track.innerHTML = '<div class="empty-state" style="position:absolute; top:-30px;">No OI data yet.</div>';
+    return;
+  }
+  const points = [
+    { key: "put-wall", label: "Put Wall", value: oi.put_wall_strike },
+    { key: "max-pain", label: "Max Pain", value: oi.max_pain_strike },
+    { key: "spot", label: "Spot", value: spot },
+    { key: "call-wall", label: "Call Wall", value: oi.call_wall_strike },
+  ];
+  if (volProfile && !volProfile.error && volProfile.poc !== null && volProfile.poc !== undefined) {
+    points.push({ key: "poc", label: "Vol POC", value: volProfile.poc });
+  }
+  const filtered = points.filter(p => p.value !== null && p.value !== undefined);
+
+  if (!filtered.length) {
+    track.innerHTML = '<div class="empty-state" style="position:absolute; top:-30px;">No strike data available yet.</div>';
+    return;
+  }
+  const values = filtered.map(p => p.value);
+  const min = Math.min(...values), max = Math.max(...values);
+  const range = (max - min) || 1;
+  const pad = 0.12;
+
+  filtered.forEach(p => {
+    p.pct = pad * 100 + ((p.value - min) / range) * (100 - pad * 200);
+  });
+
+  // Collision avoidance: sort by position, then greedily assign each
+  // landmark to the first "tier" (vertical row) whose most recently
+  // placed landmark is far enough away in %. Dots always stay at their
+  // true position on the track; only the label BLOCK moves between
+  // tiers, connected back to the track with a thin vertical line so
+  // it's still clear which label belongs to which dot.
+  const MIN_GAP_PCT = 11;
+  const sorted = [...filtered].sort((a, b) => a.pct - b.pct);
+  const tierLastPct = [];
+  sorted.forEach(p => {
+    let tier = tierLastPct.findIndex(lastPct => Math.abs(p.pct - lastPct) >= MIN_GAP_PCT);
+    if (tier === -1) { tier = tierLastPct.length; tierLastPct.push(p.pct); }
+    else { tierLastPct[tier] = p.pct; }
+    p.tier = tier;
+  });
+
+  const TIER_HEIGHT = 42; // px between tiers
+  track.innerHTML = filtered.map(p => {
+    const topOffset = -(p.tier * TIER_HEIGHT);
+    const connectorHeight = Math.abs(topOffset) || 0;
+    return `
+      <div class="landmark ${p.key}" style="left:${p.pct}%; top: calc(50% + ${topOffset}px);">
+        ${p.tier > 0 ? `<div class="connector" style="height:${connectorHeight}px; bottom:-${connectorHeight}px;"></div>` : ""}
+        <div class="value" style="margin-bottom:6px;">${p.value}</div>
+        <div class="dot"></div>
+        <div class="label">${p.label}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderContextCards(cycle, gap) {
+  const container = document.getElementById("context-cards");
+  if (!cycle) { container.innerHTML = ""; return; }
+  const oi = cycle.oi_analysis || {};
+  const ctx = cycle.market_context || {};
+  const bias = cycle.market_bias || {};
+  const bn = cycle.banknifty || {};
+  const news = cycle.news_risk || {};
+
+  const cards = [];
+
+  cards.push(`
+    <div class="card"><h3>OI Analytics</h3>
+      <div class="row"><span class="k">Max Pain</span><span class="v">${oi.max_pain_strike ?? "—"} (${fmtSigned(oi.max_pain_distance_pct, 2, "%")})</span></div>
+      <div class="row"><span class="k">Call Wall</span><span class="v">${oi.call_wall_strike ?? "—"}</span></div>
+      <div class="row"><span class="k">Put Wall</span><span class="v">${oi.put_wall_strike ?? "—"}</span></div>
+      <div class="row"><span class="k">Net Delta OI</span><span class="v ${oi.net_delta_oi_bias === 'bullish' ? 'pos' : (oi.net_delta_oi_bias === 'bearish' ? 'neg' : '')}">${oi.net_delta_oi_bias ?? "—"}</span></div>
+    </div>`);
+
+  cards.push(`
+    <div class="card"><h3>Trend &amp; Bias</h3>
+      <div class="row"><span class="k">Trend</span><span class="v">${ctx.trend ?? "—"}</span></div>
+      <div class="row"><span class="k">RSI</span><span class="v">${ctx.rsi ?? "—"} ${ctx.rsi_state ? "(" + ctx.rsi_state + ")" : ""}</span></div>
+      <div class="row"><span class="k">Market Bias</span><span class="v neu">${bias.label ?? "—"}</span></div>
+      <div class="row"><span class="k">Bias Score</span><span class="v">${fmtSigned(bias.score, 1)}</span></div>
+    </div>`);
+
+  cards.push(`
+    <div class="card"><h3>Bank Nifty</h3>
+      <div class="row"><span class="k">Spot</span><span class="v">${bn.spot ?? "—"}</span></div>
+      <div class="row"><span class="k">Change</span><span class="v ${pnlClass(bn.pct_change_today)}">${fmtSigned(bn.pct_change_today, 2, "%")}</span></div>
+      <div class="row"><span class="k">Divergence</span><span class="v">${bn.divergence_read ?? "—"}</span></div>
+    </div>`);
+
+  cards.push(`
+    <div class="card"><h3>News Risk</h3>
+      <div class="row"><span class="k">Level</span><span class="v ${news.level === 'elevated' ? 'neg' : ''}">${news.level ?? "—"}</span></div>
+      <div class="row"><span class="k">Categories</span><span class="v" style="font-size:11px;">${(news.categories_hit || []).join(", ") || "none"}</span></div>
+    </div>`);
+
+  if (gap && (gap.nifty || gap.banknifty)) {
+    const ng = gap.nifty || {}, bg = gap.banknifty || {};
+    cards.push(`
+      <div class="card"><h3>Opening Gap</h3>
+        <div class="row"><span class="k">NIFTY</span><span class="v ${pnlClass(ng.gap_pct)}">${fmtSigned(ng.gap_points, 1)} pts (${fmtSigned(ng.gap_pct, 2, "%")})</span></div>
+        <div class="row"><span class="k">Bank Nifty</span><span class="v ${pnlClass(bg.gap_pct)}">${fmtSigned(bg.gap_points, 1)} pts (${fmtSigned(bg.gap_pct, 2, "%")})</span></div>
+      </div>`);
+  }
+
+  const volp = cycle.volume_profile;
+  if (volp && !volp.error) {
+    cards.push(`
+      <div class="card"><h3>Volume Profile</h3>
+        <div class="row"><span class="k">POC</span><span class="v neu">${volp.poc}</span></div>
+        <div class="row"><span class="k">Value Area</span><span class="v">${volp.value_area_low} – ${volp.value_area_high}</span></div>
+        <div class="row"><span class="k">VA Captured</span><span class="v">${volp.value_area_captured_pct}%</span></div>
+      </div>`);
+  }
+
+  const avwap = cycle.anchored_vwap;
+  if (avwap && !avwap.error && avwap.anchors && avwap.anchors.length) {
+    cards.push(`
+      <div class="card"><h3>Anchored VWAP</h3>
+        ${avwap.anchors.map(a => `
+          <div class="row"><span class="k">${a.label}</span><span class="v ${pnlClass(a.distance_pct)}">${a.vwap} (${a.position}, ${fmtSigned(a.distance_pct, 2, "%")})</span></div>
+        `).join("")}
+      </div>`);
+  }
+
+  container.innerHTML = cards.join("");
+}
+
+function renderOpenTrades(trades, totals) {
+  const container = document.getElementById("open-trades-container");
+  if (!trades || !trades.length) {
+    container.innerHTML = '<div class="empty-state">No open trades.</div>';
+    return;
+  }
+  container.innerHTML = `
+    <table>
+      <thead><tr><th>Strike</th><th>Type</th><th>Entry</th><th>Target</th><th>Stop</th><th>Current</th><th>Best Seen</th><th>Worst Seen</th><th>Capital</th><th>P&amp;L %</th><th>P&amp;L (Rs)</th></tr></thead>
+      <tbody>
+        ${trades.map(t => `
+          <tr>
+            <td>${t.strike}</td>
+            <td>${t.option_type}</td>
+            <td>${t.entry}</td>
+            <td>${t.target}</td>
+            <td>${t.stop}</td>
+            <td>${t.current_ltp ?? "?"}</td>
+            <td>${t.max_ltp_seen ?? "—"}</td>
+            <td>${t.min_ltp_seen ?? "—"}</td>
+            <td>${fmtInr(t.capital_deployed)}</td>
+            <td class="${pnlClass(t.running_pnl_pct)}">${fmtSigned(t.running_pnl_pct, 1, "%")}</td>
+            <td class="${pnlClass(t.running_pnl_inr)}">${fmtInr(t.running_pnl_inr)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+      <tfoot>
+        <tr style="font-weight:600;">
+          <td colspan="8" style="text-align:right; color:var(--muted);">TOTAL</td>
+          <td>${fmtInr(totals ? totals.capital_deployed : null)}</td>
+          <td colspan="2" class="${pnlClass(totals ? totals.open_pnl_inr : null)}">${fmtInr(totals ? totals.open_pnl_inr : null)}</td>
+        </tr>
+      </tfoot>
+    </table>`;
+}
+
+function renderClosedToday(trades) {
+  const panel = document.getElementById("closed-today-panel");
+  const container = document.getElementById("closed-today-container");
+  if (!trades || !trades.length) { panel.style.display = "none"; return; }
+  panel.style.display = "block";
+  container.innerHTML = `
+    <table>
+      <thead><tr><th>Closed</th><th>Strike</th><th>Type</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>P&amp;L %</th><th>P&amp;L (Rs)</th></tr></thead>
+      <tbody>
+        ${trades.map(t => `
+          <tr>
+            <td>${(t.closed_at || "").split("T")[1] || t.closed_at}</td>
+            <td>${t.strike}</td>
+            <td>${t.option_type}</td>
+            <td>${t.entry}</td>
+            <td>${t.exit_ltp ?? "—"}</td>
+            <td><span class="badge ${t.outcome === "WIN" ? "opened" : (t.outcome === "LOSS" ? "rejected" : "notselected")}">${t.outcome}</span></td>
+            <td class="${pnlClass(t.pnl_pct)}">${fmtSigned(t.pnl_pct, 1, "%")}</td>
+            <td class="${pnlClass(t.pnl_inr)}">${fmtInr(t.pnl_inr)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>`;
+}
+
+function renderCondor(position) {
+  const panel = document.getElementById("condor-panel");
+  const container = document.getElementById("condor-container");
+  if (!position || position.status !== "OPEN") { panel.style.display = "none"; return; }
+  panel.style.display = "block";
+  const plan = position.plan || {};
+  container.innerHTML = `
+    <div class="grid">
+      <div class="card"><h3>Structure</h3>
+        <div class="row"><span class="k">Short CE</span><span class="v">${plan.short_ce_strike} @ ${plan.short_ce_premium}</span></div>
+        <div class="row"><span class="k">Short PE</span><span class="v">${plan.short_pe_strike} @ ${plan.short_pe_premium}</span></div>
+        <div class="row"><span class="k">Hedge CE</span><span class="v">${plan.hedge_ce_strike} @ ${plan.hedge_ce_premium}</span></div>
+        <div class="row"><span class="k">Hedge PE</span><span class="v">${plan.hedge_pe_strike} @ ${plan.hedge_pe_premium}</span></div>
+      </div>
+      <div class="card"><h3>P&amp;L</h3>
+        <div class="row"><span class="k">Net Credit</span><span class="v">${fmtInr(plan.net_credit_inr)}</span></div>
+        <div class="row"><span class="k">Max Loss</span><span class="v neg">${fmtInr(-Math.abs(plan.max_loss_inr))}</span></div>
+        <div class="row"><span class="k">Mark-to-Market</span><span class="v ${pnlClass(position.current_mtm_pnl_inr)}">${fmtInr(position.current_mtm_pnl_inr)}</span></div>
+        <div class="row"><span class="k">Breakevens</span><span class="v">${plan.breakeven_lower} / ${plan.breakeven_upper}</span></div>
+      </div>
+    </div>`;
+}
+
+function renderApprovals(pending) {
+  const panel = document.getElementById("approvals-panel");
+  const container = document.getElementById("approvals-container");
+  if (!pending || !pending.length) { panel.style.display = "none"; return; }
+  panel.style.display = "block";
+  container.innerHTML = pending.map(p => `
+    <div class="activity-row">
+      <span class="badge approved" style="background:rgba(224,165,38,0.15); color: var(--amber);">PENDING</span>
+      <span style="margin-left:8px;">${p.kind || "trade candidate"}: ${p.detail || (p.strike + " " + p.option_type)}</span>
+      <div class="activity-detail">Staged ${p.staged_at} — run approve_orders.py to review.</div>
+    </div>
+  `).join("");
+}
+
+function renderActivity(cycles) {
+  const container = document.getElementById("activity-container");
+  if (!cycles || !cycles.length) { container.innerHTML = '<div class="empty-state">No activity yet.</div>'; return; }
+  const rows = [];
+  [...cycles].reverse().forEach(cycle => {
+    const time = (cycle.timestamp || "").split("T")[1] || cycle.timestamp;
+    (cycle.candidates || []).slice(0, 3).forEach(c => {
+      const badgeClass = c.final_decision === "OPENED" ? "opened" : (c.final_decision.startsWith("REJECTED") ? "rejected" : "notselected");
+      rows.push(`
+        <div class="activity-row">
+          <span class="activity-time">${time}</span>
+          <span class="badge ${badgeClass}">${c.final_decision}</span>
+          <span style="margin-left:8px;">${c.strike} ${c.option_type} — raw ${c.raw_score} → adjusted ${c.adjusted_score}</span>
+          <div class="activity-detail">${c.detail}</div>
+        </div>
+      `);
+    });
+  });
+  container.innerHTML = rows.length ? rows.join("") : '<div class="empty-state">No candidates logged yet.</div>';
+}
+
+async function refresh() {
+  try {
+    const res = await fetch("/api/state", { cache: "no-store" });
+    const data = await res.json();
+
+    const cycle = data.latest_cycle;
+    document.getElementById("spot-value").textContent = cycle ? cycle.spot : "—";
+    document.getElementById("vwap-value").textContent = cycle ? cycle.vwap : "—";
+    document.getElementById("pcr-value").textContent = cycle ? cycle.pcr : "—";
+    document.getElementById("source-value").textContent = cycle ? cycle.source : "—";
+
+    const totals = data.totals;
+    const pnlEl = document.getElementById("total-pnl-value");
+    if (totals) {
+      pnlEl.textContent = fmtInr(totals.total_pnl_today_inr);
+      pnlEl.className = pnlClass(totals.total_pnl_today_inr);
+    }
+
+    const gap = data.opening_gap;
+    if (gap && gap.nifty) {
+      document.getElementById("gap-value").textContent =
+        (gap.nifty.gap_points > 0 ? "+" : "") + gap.nifty.gap_points + " (" + (gap.nifty.gap_pct > 0 ? "+" : "") + gap.nifty.gap_pct + "%)";
+    } else {
+      document.getElementById("gap-value").textContent = "—";
+    }
+
+    const age = data.main_log_age_seconds;
+    const dot = document.getElementById("live-dot");
+    const text = document.getElementById("live-text");
+    if (age === null || age === undefined) {
+      dot.classList.add("stale");
+      text.textContent = "no log found";
+    } else if (age > STALE_SECONDS) {
+      dot.classList.add("stale");
+      text.textContent = `stale (${Math.round(age)}s since last update)`;
+    } else {
+      dot.classList.remove("stale");
+      text.textContent = `updated ${Math.round(age)}s ago`;
+    }
+
+    renderLandscape(cycle ? cycle.oi_analysis : null, cycle ? cycle.spot : null, cycle ? cycle.volume_profile : null);
+    renderContextCards(cycle, gap);
+    renderOpenTrades(data.open_trades, data.totals);
+    renderClosedToday(data.closed_today);
+    renderCondor(data.condor_position);
+    renderApprovals(data.pending_approvals);
+    renderActivity(data.recent_cycles);
+  } catch (e) {
+    document.getElementById("live-text").textContent = "connection error";
+    document.getElementById("live-dot").classList.add("stale");
+  }
+}
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+
+</body>
+</html>

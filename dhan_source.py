@@ -49,6 +49,7 @@ import requests
 import config as cfg
 import oi_analytics
 from models import OptionQuote, MarketSnapshot, Candle
+from atomic_state import atomic_write_json
 
 DHAN_BASE_URL = "https://api.dhan.co/v2"
 NIFTY_UNDERLYING_SCRIP = 13       # Dhan's security ID for the Nifty 50 index
@@ -129,7 +130,7 @@ def _load_price_baseline() -> dict:
 
 
 def _save_price_baseline(state: dict):
-    PRICE_BASELINE_PATH.write_text(json.dumps(state))
+    atomic_write_json(PRICE_BASELINE_PATH, state)
 
 
 def _classify_buildup(oi_change_pct: float, price_change_pct, oi_threshold: float):
@@ -162,7 +163,7 @@ def _load_iv_history() -> list:
 
 
 def _save_iv_history(history: list):
-    IV_HISTORY_PATH.write_text(json.dumps(history[-IV_HISTORY_WINDOW:]))
+    atomic_write_json(IV_HISTORY_PATH, history[-IV_HISTORY_WINDOW:])
 
 
 def _load_vwap_proxy_state() -> dict:
@@ -172,7 +173,7 @@ def _load_vwap_proxy_state() -> dict:
 
 
 def _save_vwap_proxy_state(state: dict):
-    LIVE_STATE_PATH.write_text(json.dumps(state))
+    atomic_write_json(LIVE_STATE_PATH, state)
 
 
 def _update_vwap_proxy(spot: float) -> float:

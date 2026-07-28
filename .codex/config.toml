@@ -1,0 +1,10 @@
+# Project-scoped TradingView MCP test. The bridge is installed locally under
+# .tools/ (ignored by Git) and only exposes read-only diagnostic tools.
+[mcp_servers.tradingview]
+command = "C:\\Program Files\\nodejs\\node.exe"
+args = ["D:\\AI Projects\\nifty-options-scanner\\.tools\\tradingview-mcp\\src\\server.js"]
+cwd = "D:\\AI Projects\\nifty-options-scanner\\.tools\\tradingview-mcp"
+startup_timeout_sec = 30
+tool_timeout_sec = 30
+default_tools_approval_mode = "prompt"
+enabled_tools = ["tv_health_check", "tv_discover", "tv_ui_state"]
