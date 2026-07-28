@@ -18,14 +18,59 @@ def _find_quote(snapshot, setup):
     return None
 
 
-def build_plan(snapshot, setup) -> TradePlan:
+def _stop_distance(entry: float, quote, atr) -> tuple:
+    """
+    Returns (stop_distance_in_premium_points, how_it_was_derived).
+
+    Preferred path: size the stop off what the underlying actually moves.
+    ATR is in NIFTY points; the option's delta converts that into premium
+    points (a delta-0.4 option moves ~0.4 premium points per NIFTY point).
+    A stop placed STOP_ATR_MULTIPLE ATRs away therefore sits outside
+    normal intraday oscillation instead of inside it.
+
+    Falls back to the flat DEFAULT_STOP_LOSS_PCT when volatility sizing is
+    disabled or the inputs aren't available -- notably the NSE fallback
+    tier, which returns no Greeks at all (delta is None there).
+    """
+    flat = entry * (config.DEFAULT_STOP_LOSS_PCT / 100)
+
+    if not getattr(config, "USE_VOLATILITY_BASED_PLAN", False):
+        return flat, f"flat {config.DEFAULT_STOP_LOSS_PCT}% of premium (volatility sizing disabled)"
+    if atr is None or not quote.delta:
+        missing = "no ATR (not enough candles)" if atr is None else "no delta on this quote"
+        return flat, f"flat {config.DEFAULT_STOP_LOSS_PCT}% of premium ({missing})"
+
+    premium_move = atr * abs(quote.delta) * config.STOP_ATR_MULTIPLE
+    # Clamp into the configured band so an outlier ATR can't produce a
+    # stop that's either meaninglessly tight or larger than the position.
+    low = entry * (config.MIN_STOP_PCT / 100)
+    high = entry * (config.MAX_STOP_PCT / 100)
+    clamped = max(low, min(high, premium_move))
+
+    note = (
+        f"{config.STOP_ATR_MULTIPLE} x ATR({config.ATR_PERIOD}) of {atr} pts "
+        f"x delta {abs(quote.delta):.2f} = {premium_move:.2f} premium pts"
+    )
+    if clamped != premium_move:
+        note += f", clamped to {clamped:.2f} by the {config.MIN_STOP_PCT}-{config.MAX_STOP_PCT}% band"
+    return clamped, note
+
+
+def build_plan(snapshot, setup, atr=None) -> TradePlan:
+    """
+    `atr` is the underlying's Average True Range in NIFTY points (from
+    price_action.compute_atr on the same candles the scanner already
+    fetched). When supplied, stop/target are sized from real volatility
+    rather than flat percentages -- see _stop_distance.
+    """
     quote = _find_quote(snapshot, setup)
     if quote is None:
         raise ValueError("Matching option quote not found in snapshot for this setup")
 
     entry = quote.ltp
-    stop = round(entry * (1 - config.DEFAULT_STOP_LOSS_PCT / 100), 2)
-    risk_per_unit = entry - stop
+    risk_per_unit, stop_basis = _stop_distance(entry, quote, atr)
+    stop = round(max(0.05, entry - risk_per_unit), 2)
+    risk_per_unit = entry - stop  # recompute after the floor/rounding
     target = round(entry + risk_per_unit * config.DEFAULT_TARGET_RR, 2)
 
     invalidation = (
@@ -61,4 +106,5 @@ def build_plan(snapshot, setup) -> TradePlan:
         capital_at_risk=capital_at_risk,
         risk_pct_of_capital=risk_pct_of_capital,
         risk_level=risk_level,
+        stop_basis=stop_basis,
     )

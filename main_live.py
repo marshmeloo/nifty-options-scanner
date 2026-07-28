@@ -23,7 +23,7 @@ from resilient_source import get_nifty_snapshot, get_nearest_expiry, get_nifty_i
 from scanner import scan, compute_market_bias, tag_bias_conflicts
 from plan_generator import build_plan
 from risk_checker import check
-from price_action import analyze_with_context
+from price_action import analyze_with_context, compute_atr
 import trade_tracker as tt
 import news_source
 import banknifty_context
@@ -94,7 +94,7 @@ def market_is_open(now: datetime = None) -> bool:
     return MARKET_OPEN <= now.time() <= MARKET_CLOSE
 
 
-def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current_daily_loss_pct: float):
+def run_once(expiry: str, state: dict):
     snapshot = get_nifty_snapshot(expiry=expiry)
     ts = snapshot.timestamp.strftime("%H:%M:%S")
     log.info(f"\n[{ts}] ({snapshot.source}) NIFTY spot {snapshot.spot}, VWAP-proxy {snapshot.vwap}, PCR {snapshot.pcr}")
@@ -130,11 +130,15 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
     bn_ctx, divergence = None, None
     vol_profile = {"error": "not computed"}
     anchored_vwap_ctx = {"error": "not computed"}
+    atr = None
     try:
         candles = get_nifty_intraday_candles()
         price_levels, context = analyze_with_context(candles)
+        atr = compute_atr(candles)
+        if atr is not None:
+            log.info(f"  ATR({config.ATR_PERIOD}): {atr} pts -- stop/target sized from this")
         if price_levels:
-            log.info(f"  Structure: {len(price_levels)} OB/FVG/S-R/sweep/breakout/pullback levels detected")
+            log.info(f"  Structure: {len(price_levels)} live OB/FVG/S-R/sweep/breakout/pullback levels (stale/mitigated pruned)")
         log.info(
             f"  Trend: {context.trend} | RSI: {context.rsi} ({context.rsi_state}) | "
             f"ROC: {context.roc_pct}% | Volume: {context.volume_ratio}x avg"
@@ -190,12 +194,18 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
         for trade in state["trades"]:
             max_seen = trade.get("max_ltp_seen")
             max_seen_note = f"  (best seen: {max_seen})" if max_seen is not None else ""
+            current_r = tt.r_multiple(trade, trade.get("current_ltp"))
+            r_note = ""
+            if current_r is not None:
+                hit = sorted(float(m) for m in trade.get("rr_milestones_hit", {}))
+                r_note = f"  [{current_r:+.2f}R now, peak {trade.get('max_r_seen', 0):+.2f}R"
+                r_note += f", hit {max(hit):g}R]" if hit else ", no milestone yet]"
             log.info(
                 f"    {trade['strike']} {trade['option_type']}  entry {trade['entry']} "
                 f"target {trade['target']} stop {trade['stop']}  "
                 f"current {trade.get('current_ltp', '?')}  "
                 f"running pnl {trade.get('running_pnl_pct', 0):+.1f}% (Rs {trade.get('running_pnl_inr', 0):+,.0f})"
-                f"{max_seen_note}"
+                f"{max_seen_note}{r_note}"
             )
 
     setups = scan(snapshot, price_levels=price_levels, context=context)
@@ -204,12 +214,26 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
         tt.save_open_trades(state)
         return snapshot
 
+    # Recompute the risk gates from live state EVERY cycle. These used to
+    # be static 0.0 arguments threaded down from __main__, which silently
+    # disabled both the total-exposure cap and the daily-loss circuit
+    # breaker entirely. Computed AFTER update_open_trades() above, so
+    # realized P&L includes anything that closed this cycle and unrealized
+    # reflects this cycle's marks.
+    current_open_exposure_pct, current_daily_loss_pct = tt.compute_risk_state(state)
+    log.info(
+        f"  Risk state: exposure {current_open_exposure_pct:.2f}% of {config.MAX_TOTAL_EXPOSURE_PCT}% cap, "
+        f"day P&L drawdown {current_daily_loss_pct:.2f}% of {config.MAX_DAILY_LOSS_PCT}% breaker"
+    )
+    if current_daily_loss_pct >= config.MAX_DAILY_LOSS_PCT:
+        log.info("  DAILY LOSS BREAKER TRIPPED -- no new trades will be opened for the rest of today.")
+
     bias_label, bias_score, bias_reasons = compute_market_bias(snapshot, context)
     log.info(f"  Market bias: {bias_label} (score {bias_score})  [{', '.join(bias_reasons) if bias_reasons else 'no strong signal'}]")
 
     results = []
     for setup in setups:
-        plan = build_plan(snapshot, setup)
+        plan = build_plan(snapshot, setup, atr=atr)
         verdict = check(
             plan,
             current_open_exposure_pct=current_open_exposure_pct,
@@ -252,10 +276,15 @@ def run_once(expiry: str, state: dict, current_open_exposure_pct: float, current
             # trade" confusion on 2026-07-24).
             best_setup, best_plan, best_verdict = results[0]
             adjusted_score, learn_notes = tt.apply_learned_adjustment(best_setup.score, best_setup.reasons)
+            conviction_bar, expiry_blocked = tt.expiry_day_rules(best_setup.expiry, snapshot.timestamp)
             if best_verdict.decision != "APPROVED":
                 reason = f"risk check: {'; '.join(best_verdict.reasons) if best_verdict.reasons else best_verdict.decision}"
-            elif adjusted_score < config.MIN_CONVICTION_SCORE_TO_TRACK:
-                reason = f"adjusted score {adjusted_score} < bar {config.MIN_CONVICTION_SCORE_TO_TRACK}"
+            elif expiry_blocked:
+                reason = expiry_blocked
+            elif tt.is_repeat_of_stopped_plan(state, best_setup.strike, best_setup.option_type, best_plan.entry):
+                reason = f"repeat of a plan already stopped out today near entry {best_plan.entry}"
+            elif adjusted_score < conviction_bar:
+                reason = f"adjusted score {adjusted_score} < bar {conviction_bar}"
                 if learn_notes:
                     reason += f" ({'; '.join(learn_notes)})"
             else:
@@ -330,7 +359,7 @@ def check_open_trades_fast(state: dict, expiry: str):
     tt.save_open_trades(state)
 
 
-def run_forever(current_open_exposure_pct: float = 0.0, current_daily_loss_pct: float = 0.0):
+def run_forever():
     log.info("Fetching nearest expiry...")
     expiry = get_nearest_expiry()
     log.info(f"Tracking expiry: {expiry}. Polling every {POLL_INTERVAL_SECONDS}s during market hours.")
@@ -401,7 +430,7 @@ def run_forever(current_open_exposure_pct: float = 0.0, current_daily_loss_pct: 
             now = time.monotonic()
             if now - last_full_cycle_at >= POLL_INTERVAL_SECONDS:
                 try:
-                    last_good_snapshot = run_once(expiry, state, current_open_exposure_pct, current_daily_loss_pct)
+                    last_good_snapshot = run_once(expiry, state)
                 except Exception as e:
                     log.info(f"  Error this cycle (will retry next cycle): {e}")
                 last_full_cycle_at = now
@@ -425,8 +454,13 @@ def run_forever(current_open_exposure_pct: float = 0.0, current_daily_loss_pct: 
 
 
 if __name__ == "__main__":
-    # NOTE: current_open_exposure_pct and current_daily_loss_pct are still
-    # manual inputs here. Wire these to Dhan's positions/funds endpoints
-    # (https://dhanhq.co/docs/v2/portfolio/, https://dhanhq.co/docs/v2/funds/)
-    # once you want the risk gate to reflect your real live account state.
-    run_forever(current_open_exposure_pct=0.0, current_daily_loss_pct=0.0)
+    # Exposure and daily-loss are now computed live each cycle by
+    # tt.compute_risk_state() from this tool's OWN journal + open trades
+    # (see run_once), so the total-exposure cap and daily-loss circuit
+    # breaker are actually enforced rather than being passed a permanent
+    # 0.0. NOTE: that means they reflect trades THIS TOOL tracked, not
+    # your real broker account. Wiring them to Dhan's positions/funds
+    # endpoints (https://dhanhq.co/docs/v2/portfolio/,
+    # https://dhanhq.co/docs/v2/funds/) is still the right move if you
+    # trade the same account manually alongside this.
+    run_forever()

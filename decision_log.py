@@ -28,6 +28,7 @@ LOG_PATH.parent.mkdir(exist_ok=True)
 
 def _candidate_record(setup, plan, verdict, state: dict, opened_trade: dict) -> dict:
     adjusted_score, learn_notes = tt.apply_learned_adjustment(setup.score, setup.reasons)
+    conviction_bar, expiry_blocked = tt.expiry_day_rules(setup.expiry, datetime.now())
     open_keys = {(t["strike"], t["option_type"]) for t in state["trades"]}
     is_this_the_opened_one = (
         opened_trade is not None
@@ -39,14 +40,25 @@ def _candidate_record(setup, plan, verdict, state: dict, opened_trade: dict) -> 
         final_decision, detail = "OPENED", "This candidate was opened this cycle."
     elif (setup.strike, setup.option_type) in open_keys:
         final_decision, detail = "ALREADY_OPEN", "A trade on this strike/type is already being tracked."
+    elif plan is not None and tt.is_repeat_of_stopped_plan(state, setup.strike, setup.option_type, plan.entry):
+        final_decision = "REJECTED_REPEAT_OF_STOPPED_PLAN"
+        detail = (
+            f"A trade on this strike/type already stopped out today at an entry within "
+            f"{config.REENTRY_PRICE_TOLERANCE_PCT}% of {plan.entry} -- same entry means the same "
+            f"stop and target, i.e. re-running a plan that already failed."
+        )
     elif verdict.decision != "APPROVED":
         final_decision = "REJECTED_RISK"
         detail = "; ".join(verdict.reasons) if verdict.reasons else "Risk check rejected this plan."
-    elif adjusted_score < config.MIN_CONVICTION_SCORE_TO_TRACK:
+    elif expiry_blocked:
+        final_decision = "REJECTED_EXPIRY_DAY_CUTOFF"
+        detail = f"Blocked: {expiry_blocked}"
+    elif adjusted_score < conviction_bar:
         final_decision = "REJECTED_BELOW_BAR_AFTER_ADJUSTMENT"
         detail = (
-            f"Raw score {setup.score} adjusted to {adjusted_score} "
-            f"(bar is {config.MIN_CONVICTION_SCORE_TO_TRACK}) -- "
+            f"Raw score {setup.score} adjusted to {adjusted_score} (bar is {conviction_bar}"
+            + (" -- raised because this contract expires today" if conviction_bar != config.MIN_CONVICTION_SCORE_TO_TRACK else "")
+            + ") -- "
             + ("; ".join(learn_notes) if learn_notes else "no learned adjustment applied, still below bar")
         )
     elif state["opened_today"] >= config.MAX_NEW_TRADES_PER_DAY:
@@ -62,10 +74,14 @@ def _candidate_record(setup, plan, verdict, state: dict, opened_trade: dict) -> 
         "raw_score": setup.score,
         "reasons": list(setup.reasons),
         "adjusted_score": adjusted_score,
+        "conviction_bar": conviction_bar,
         "learned_adjustment_notes": learn_notes,
         "risk_decision": verdict.decision,
         "risk_reasons": verdict.reasons,
-        "plan": {"entry": plan.entry, "target": plan.target, "stop": plan.stop, "lots": plan.lots} if plan else None,
+        "plan": {
+            "entry": plan.entry, "target": plan.target, "stop": plan.stop,
+            "lots": plan.lots, "stop_basis": getattr(plan, "stop_basis", ""),
+        } if plan else None,
         "final_decision": final_decision,
         "detail": detail,
     }

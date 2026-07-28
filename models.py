@@ -27,6 +27,17 @@ class OptionQuote:
     vega: Optional[float] = None
     price_change_pct: Optional[float] = None   # premium change vs a comparable baseline
     buildup_type: Optional[str] = None         # "long_buildup" | "short_buildup" | "short_covering" | "long_unwinding" | None
+    # OI and premium change over a RECENT INTRADAY window, as opposed to
+    # oi_change_pct / price_change_pct above, which are both measured
+    # against the previous session's close and therefore only ever grow
+    # through the day. `buildup_type` is classified from these when they're
+    # available, so "long buildup" means positioning built up in the last
+    # few minutes rather than at any point since yesterday. None until
+    # enough history has accumulated this session, or on sources that
+    # don't track it (NSE/CSV) -- consumers fall back to the daily figures.
+    oi_change_pct_intraday: Optional[float] = None
+    price_change_pct_intraday: Optional[float] = None
+    buildup_window_minutes: Optional[float] = None   # actual span the intraday deltas cover
     timestamp: datetime = field(default_factory=datetime.now)
 
 
@@ -82,6 +93,13 @@ class PriceLevel:
     high: float
     note: str
     strength: float = 1.0   # e.g. number of touches for S/R, move size for OB/FVG
+    # Index of the candle this level formed at, used to age levels out.
+    # Without it, price_action.analyze() returned every level ever detected
+    # in the series with no way to tell a fresh zone from a stale one, so
+    # scanner.py's per-level score only ever ratcheted upward through a
+    # session (measured 0 -> 14 levels on a single strike on 2026-07-28).
+    # None means "age unknown" and is treated as always-current.
+    formed_at_index: Optional[int] = None
 
 
 @dataclass
@@ -121,6 +139,10 @@ class TradePlan:
     capital_at_risk: float
     risk_pct_of_capital: float
     risk_level: str         # "Low", "Medium", "High"
+    # How the stop distance was arrived at (ATR x delta, or the flat
+    # percentage fallback and why). Recorded so a plan's geometry is
+    # auditable after the fact rather than an unexplained pair of numbers.
+    stop_basis: str = ""
 
 
 @dataclass

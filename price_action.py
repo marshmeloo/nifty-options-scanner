@@ -41,32 +41,55 @@ def find_swing_points(candles, lookback=None):
     return swing_highs, swing_lows
 
 
-def detect_fair_value_gaps(candles) -> list:
-    """3-candle imbalance: gap between candle[i-1] and candle[i+1]."""
+def _is_mitigated(level, candles, formed_at: int) -> bool:
+    """
+    True once price has traded back through the level's zone after it
+    formed. A "filled" FVG is spent -- standard SMC treatment is that the
+    imbalance it represented has been rebalanced and it stops acting as a
+    zone of interest. Without this check every gap detected since the
+    session open stayed live forever, which is what let a single strike
+    accumulate 14 supposedly-active levels by mid-afternoon on 2026-07-28
+    while genuinely fresh structure was indistinguishable from stale.
+    """
+    for c in candles[formed_at + 1:]:
+        if c.low <= level.high and c.high >= level.low:
+            return True
+    return False
+
+
+def detect_fair_value_gaps(candles, include_mitigated: bool = False) -> list:
+    """
+    3-candle imbalance: gap between candle[i-1] and candle[i+1].
+    Gaps that price has since traded back through are dropped unless
+    `include_mitigated` is set (used by tests and for diagnostics).
+    """
     levels = []
     for i in range(1, len(candles) - 1):
         prev_c, next_c = candles[i - 1], candles[i + 1]
 
         if prev_c.high < next_c.low:  # bullish FVG (gap up)
-            levels.append(
-                PriceLevel(
-                    kind="fvg_bullish",
-                    low=prev_c.high,
-                    high=next_c.low,
-                    note=f"Bullish FVG between candles at {prev_c.timestamp} and {next_c.timestamp}",
-                    strength=_pct(next_c.low, prev_c.high),
-                )
+            level = PriceLevel(
+                kind="fvg_bullish",
+                low=prev_c.high,
+                high=next_c.low,
+                note=f"Bullish FVG between candles at {prev_c.timestamp} and {next_c.timestamp}",
+                strength=_pct(next_c.low, prev_c.high),
+                formed_at_index=i + 1,
             )
         elif prev_c.low > next_c.high:  # bearish FVG (gap down)
-            levels.append(
-                PriceLevel(
-                    kind="fvg_bearish",
-                    low=next_c.high,
-                    high=prev_c.low,
-                    note=f"Bearish FVG between candles at {prev_c.timestamp} and {next_c.timestamp}",
-                    strength=_pct(prev_c.low, next_c.high),
-                )
+            level = PriceLevel(
+                kind="fvg_bearish",
+                low=next_c.high,
+                high=prev_c.low,
+                note=f"Bearish FVG between candles at {prev_c.timestamp} and {next_c.timestamp}",
+                strength=_pct(prev_c.low, next_c.high),
+                formed_at_index=i + 1,
             )
+        else:
+            continue
+
+        if include_mitigated or not _is_mitigated(level, candles, i + 1):
+            levels.append(level)
     return levels
 
 
@@ -94,6 +117,7 @@ def detect_order_blocks(candles) -> list:
                     high=c.open,
                     note=f"Bullish OB at {c.timestamp}, preceded a {move_pct:.2f}% up move",
                     strength=move_pct,
+                    formed_at_index=i,
                 )
             )
         elif is_up_candle and not move_up:
@@ -104,6 +128,7 @@ def detect_order_blocks(candles) -> list:
                     high=c.high,
                     note=f"Bearish OB at {c.timestamp}, preceded a {move_pct:.2f}% down move",
                     strength=move_pct,
+                    formed_at_index=i,
                 )
             )
     return levels
@@ -169,6 +194,7 @@ def detect_liquidity_sweeps(candles) -> list:
                         high=c.high,
                         note=f"Swept resistance {level:.1f} then closed back below at {c.timestamp}",
                         strength=wick_pct,
+                        formed_at_index=i,
                     )
                 )
 
@@ -183,6 +209,7 @@ def detect_liquidity_sweeps(candles) -> list:
                         high=level,
                         note=f"Swept support {level:.1f} then closed back above at {c.timestamp}",
                         strength=wick_pct,
+                        formed_at_index=i,
                     )
                 )
     return levels
@@ -252,6 +279,28 @@ def compute_roc(candles, period=None) -> float:
     return round((new_close - old_close) / old_close * 100, 2)
 
 
+def compute_atr(candles, period=None) -> float:
+    """
+    Average True Range over `period` candles, in underlying points.
+    True range is max(high-low, |high-prev_close|, |low-prev_close|), so
+    it accounts for gaps rather than just the visible bar range.
+    Returns None if there isn't enough data.
+    """
+    period = period or config.ATR_PERIOD
+    if len(candles) < period + 1:
+        return None
+
+    true_ranges = []
+    for i in range(1, len(candles)):
+        c, prev_close = candles[i], candles[i - 1].close
+        true_ranges.append(
+            max(c.high - c.low, abs(c.high - prev_close), abs(c.low - prev_close))
+        )
+
+    recent = true_ranges[-period:]
+    return round(sum(recent) / len(recent), 2) if recent else None
+
+
 def compute_volume_context(candles, period=None) -> tuple:
     """Returns (avg_volume, latest_volume, ratio, is_spike)."""
     period = period or config.VOLUME_MA_PERIOD
@@ -299,7 +348,7 @@ def detect_breakouts(candles, sr_levels) -> list:
     """
     levels = []
     for lvl in sr_levels:
-        for c in candles:
+        for i, c in enumerate(candles):
             if lvl.kind == "resistance" and c.close > lvl.high:
                 move_pct = _pct(c.close, lvl.high)
                 if move_pct >= config.BREAKOUT_CONFIRM_PCT:
@@ -310,6 +359,7 @@ def detect_breakouts(candles, sr_levels) -> list:
                             high=lvl.high,
                             note=f"Broke above resistance {lvl.high:.1f} at {c.timestamp}",
                             strength=move_pct,
+                            formed_at_index=i,
                         )
                     )
                     break  # one breakout flag per level is enough
@@ -323,6 +373,7 @@ def detect_breakouts(candles, sr_levels) -> list:
                             high=lvl.high,
                             note=f"Broke below support {lvl.low:.1f} at {c.timestamp}",
                             strength=move_pct,
+                            formed_at_index=i,
                         )
                     )
                     break
@@ -338,7 +389,11 @@ def detect_pullbacks(candles, breakouts) -> list:
     levels = []
     for bo in breakouts:
         mid = (bo.low + bo.high) / 2
-        for c in candles:
+        # Only look for the retest AFTER the breakout candle -- scanning
+        # from index 0 could match a "pullback" that happened before the
+        # breakout it supposedly retests.
+        start = (bo.formed_at_index or 0) + 1
+        for i, c in enumerate(candles[start:], start=start):
             near = _pct(c.close, mid) <= config.PULLBACK_PROXIMITY_PCT
 
             if bo.kind == "breakout_bullish" and near and c.close > bo.high:
@@ -349,6 +404,7 @@ def detect_pullbacks(candles, breakouts) -> list:
                         high=bo.high,
                         note=f"Pullback retest of broken resistance {bo.high:.1f} at {c.timestamp}",
                         strength=bo.strength,
+                        formed_at_index=i,
                     )
                 )
                 break
@@ -360,14 +416,46 @@ def detect_pullbacks(candles, breakouts) -> list:
                         high=bo.high,
                         note=f"Pullback retest of broken support {bo.low:.1f} at {c.timestamp}",
                         strength=bo.strength,
+                        formed_at_index=i,
                     )
                 )
                 break
     return levels
 
 
+def prune_stale_levels(levels, candle_count: int, max_age=None) -> list:
+    """
+    Drop levels that formed longer than `max_age` candles ago.
+
+    Support/resistance is deliberately EXEMPT: an S/R level is defined by
+    repeated touches over time, so ageing it out by formation index would
+    defeat the point. Everything else (FVG, OB, sweep, breakout, pullback)
+    is a discrete event that goes stale.
+
+    This is the second half of the ratchet fix (mitigation being the
+    first): without it, a session's worth of events all stayed "current"
+    simultaneously, so scanner.py's per-level score grew monotonically
+    through the day regardless of what price was actually doing.
+    """
+    max_age = max_age or config.LEVEL_MAX_AGE_CANDLES
+    if not max_age:
+        return levels
+    kept = []
+    for lvl in levels:
+        if lvl.kind in ("support", "resistance") or lvl.formed_at_index is None:
+            kept.append(lvl)
+        elif candle_count - lvl.formed_at_index <= max_age:
+            kept.append(lvl)
+    return kept
+
+
 def analyze(candles) -> list:
-    """Run all structure detectors and return one combined list of PriceLevel signals."""
+    """
+    Run all structure detectors and return one combined list of
+    currently-relevant PriceLevel signals: mitigated FVGs are dropped at
+    detection time, and stale one-off events are aged out by
+    prune_stale_levels().
+    """
     if len(candles) < (2 * config.SWING_LOOKBACK + 1):
         return []  # not enough candles to detect swings reliably
 
@@ -382,7 +470,7 @@ def analyze(candles) -> list:
     levels += breakouts
     levels += detect_pullbacks(candles, breakouts)
 
-    return levels
+    return prune_stale_levels(levels, len(candles))
 
 
 def analyze_with_context(candles) -> tuple:

@@ -25,6 +25,73 @@ _KIND_LABELS = {
 }
 
 
+def _level_direction(kind: str) -> str:
+    """"bullish" / "bearish" / "neutral" reading of a PriceLevel kind."""
+    if kind.endswith("_bullish"):
+        return "bullish"
+    if kind.endswith("_bearish"):
+        return "bearish"
+    # Support is a floor (bullish); resistance is a ceiling (bearish).
+    if kind == "support":
+        return "bullish"
+    if kind == "resistance":
+        return "bearish"
+    return "neutral"
+
+
+def _score_levels(nearby, option_type: str) -> tuple:
+    """
+    Turn the structural levels near a strike into ONE netted, capped,
+    direction-aware score contribution. Returns (score, reasons).
+
+    Two things this fixes, both seen in the 2026-07-28 24050 PE trades:
+
+    1. DIRECTION. The old code added a flat positive score for EVERY
+       nearby level regardless of which way it pointed -- so a *bullish*
+       FVG raised the conviction on a PE (a bearish instrument). A level
+       that argues against the contract should count against it.
+
+    2. CONTRADICTION. Overlapping bull and bear levels each scored
+       positive, so a chopping market that printed both a bullish and a
+       bearish FVG across the same price zone read as DOUBLE confluence
+       when it actually means the opposite -- no one is in control there.
+       Netting them means genuine one-sided structure still scores, while
+       two-sided noise cancels toward zero.
+
+    The net is then capped by MAX_LEVEL_SCORE_CONTRIBUTION so structure
+    can support a thesis but never dominate the score on count alone.
+    """
+    favours = "bullish" if option_type == "CE" else "bearish"
+    opposes = "bearish" if option_type == "CE" else "bullish"
+
+    raw = 0.0
+    reasons = []
+    for lvl in nearby:
+        weight = config.SWEEP_SCORE_EACH if "sweep" in lvl.kind else config.LEVEL_SCORE_EACH
+        direction = _level_direction(lvl.kind)
+        label = _KIND_LABELS.get(lvl.kind, lvl.kind)
+
+        if direction == favours:
+            raw += weight
+            note = "supports this contract"
+        elif direction == opposes:
+            raw -= weight
+            note = "argues AGAINST this contract"
+        else:
+            note = "neutral"
+
+        reasons.append(f"{label} at this strike ({lvl.low:.1f}-{lvl.high:.1f}) -- {note}")
+
+    cap = config.MAX_LEVEL_SCORE_CONTRIBUTION
+    capped = max(-cap, min(cap, raw))
+    if capped != raw:
+        reasons.append(
+            f"Structure score capped at {capped:+.2f} (raw {raw:+.2f} from "
+            f"{len(nearby)} levels) -- confluence count alone shouldn't dominate conviction"
+        )
+    return round(capped, 2), reasons
+
+
 def scan(snapshot, price_levels=None, context=None) -> list:
     """
     price_levels: optional list of PriceLevel from price_action.analyze(),
@@ -68,10 +135,25 @@ def scan(snapshot, price_levels=None, context=None) -> list:
         }
         if q.buildup_type and q.buildup_type in buildup_labels:
             label, weight = buildup_labels[q.buildup_type]
-            magnitude = min(abs(q.oi_change_pct) / config.OI_BUILDUP_PCT, 3.0)
-            reasons.append(
-                f"{label}: OI {q.oi_change_pct:+.1f}%, premium {q.price_change_pct:+.1f}%"
-            )
+            # Score the magnitude of the move the classification was
+            # actually made on. The daily figure is measured against
+            # YESTERDAY's close, so it only grows through the session and
+            # saturates the 3.0 cap almost immediately (anything past a
+            # 45% day-cumulative change) -- which made the multiplier a
+            # near-constant rather than a measure of conviction.
+            if q.oi_change_pct_intraday is not None:
+                magnitude = min(abs(q.oi_change_pct_intraday) / config.OI_INTRADAY_BUILDUP_PCT, 3.0)
+                reasons.append(
+                    f"{label}: OI {q.oi_change_pct_intraday:+.1f}%, premium "
+                    f"{q.price_change_pct_intraday:+.1f}% over the last "
+                    f"{q.buildup_window_minutes:g} min (OI {q.oi_change_pct:+.1f}% vs prev close)"
+                )
+            else:
+                magnitude = min(abs(q.oi_change_pct) / config.OI_BUILDUP_PCT, 3.0)
+                reasons.append(
+                    f"{label}: OI {q.oi_change_pct:+.1f}%, premium {q.price_change_pct:+.1f}% "
+                    f"(vs previous close -- not enough intraday history yet)"
+                )
             score += weight * magnitude
         elif abs(q.oi_change_pct) >= config.OI_BUILDUP_PCT:
             # OI moved enough to flag but no price baseline yet to classify
@@ -80,13 +162,18 @@ def scan(snapshot, price_levels=None, context=None) -> list:
             direction = "buildup" if q.oi_change_pct > 0 else "unwinding"
             reasons.append(f"OI {direction}: {q.oi_change_pct:+.1f}% (unclassified, no price baseline yet)")
 
-        # IV percentile
+        # IV percentile. Asymmetric on purpose: this scanner only buys
+        # premium, so rich IV is a cost, not a signal. See config's
+        # IV_CHEAP_SCORE / IV_RICH_SCORE for the full reasoning.
         if q.iv_percentile >= config.IV_PERCENTILE_HIGH:
-            reasons.append(f"IV rich: {q.iv_percentile:.0f}th percentile")
-            score += 1.0
+            reasons.append(
+                f"IV rich: {q.iv_percentile:.0f}th percentile "
+                f"(costly to BUY -- vega works against a long-premium position)"
+            )
+            score += config.IV_RICH_SCORE
         elif q.iv_percentile <= config.IV_PERCENTILE_LOW:
             reasons.append(f"IV cheap: {q.iv_percentile:.0f}th percentile")
-            score += 1.0
+            score += config.IV_CHEAP_SCORE
 
         # PCR bias (applies to whole chain, but noted per-candidate for context)
         if snapshot.pcr >= config.PCR_BULLISH_ABOVE:
@@ -106,10 +193,9 @@ def scan(snapshot, price_levels=None, context=None) -> list:
         # strikes actually sitting near a zone get flagged.
         if price_levels:
             nearby = levels_near_price(price_levels, q.strike)
-            for lvl in nearby:
-                label = _KIND_LABELS.get(lvl.kind, lvl.kind)
-                reasons.append(f"{label} at this strike ({lvl.low:.1f}-{lvl.high:.1f})")
-                score += 0.75 if "sweep" in lvl.kind else 0.5
+            level_score, level_reasons = _score_levels(nearby, q.option_type)
+            reasons.extend(level_reasons)
+            score += level_score
 
         # Trend, momentum, and volume context (chain-wide, applied once per setup)
         if context:

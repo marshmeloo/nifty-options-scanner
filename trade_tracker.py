@@ -64,11 +64,13 @@ def load_open_trades() -> dict:
     if OPEN_TRADES_PATH.exists():
         data = json.loads(OPEN_TRADES_PATH.read_text())
         if data.get("date") == date.today().isoformat():
+            data.setdefault("stop_cooldowns", {})
             return data
         if data.get("trades"):
             data["_stale_from_previous_session"] = True
+            data.setdefault("stop_cooldowns", {})
             return data
-    return {"date": date.today().isoformat(), "trades": [], "opened_today": 0}
+    return {"date": date.today().isoformat(), "trades": [], "opened_today": 0, "stop_cooldowns": {}}
 
 
 def settle_stale_trades(state: dict, snapshot=None) -> list:
@@ -85,8 +87,25 @@ def settle_stale_trades(state: dict, snapshot=None) -> list:
     """
     quote_lookup = {(q.strike, q.option_type): q for q in snapshot.chain} if snapshot else {}
     recovered = []
+    already_journaled = _journaled_trade_ids()
 
     for trade in state["trades"]:
+        # Recovery must be idempotent. It runs at startup, before the
+        # market is necessarily reachable, and can legitimately be
+        # attempted more than once (a failed quote fetch, a supervisor
+        # restart, a second manual start later the same morning). Without
+        # this guard the same trade gets a SECOND journal entry with a
+        # different exit price -- which is exactly what happened on
+        # 2026-07-24, when 8 trades from the 2026-07-23 session were
+        # journaled once at 00:39 (no quote available) and again at 07:28
+        # (fresh quote), double-counting Rs -1,976 of P&L and inflating
+        # every downstream read of the journal.
+        if trade.get("id") in already_journaled:
+            log.info(
+                f"  Skipping recovery for {trade['strike']} {trade['option_type']} "
+                f"({trade.get('id')}) -- already present in the journal."
+            )
+            continue
         quote = quote_lookup.get((trade["strike"], trade["option_type"]))
         if quote is not None:
             exit_ltp = quote.ltp
@@ -118,6 +137,13 @@ def settle_stale_trades(state: dict, snapshot=None) -> list:
         _append_journal(trade)
         recovered.append(trade)
 
+    # Clear the settled trades from state HERE, the same way
+    # force_close_end_of_day() does. Leaving that to the caller made the
+    # whole operation non-idempotent: anything that interrupted the
+    # process between journaling and the caller's save_open_trades() left
+    # the trades still marked OPEN on disk, so the next start recovered
+    # and journaled them all over again.
+    state["trades"] = []
     return recovered
 
 
@@ -133,6 +159,23 @@ def save_open_trades(state: dict):
 def _append_journal(entry: dict):
     with open(JOURNAL_PATH, "a") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+def _journaled_trade_ids() -> set:
+    """Every trade id already written to the journal, for idempotency checks."""
+    if not JOURNAL_PATH.exists():
+        return set()
+    ids = set()
+    for line in JOURNAL_PATH.read_text().strip().split("\n"):
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("id"):
+            ids.add(entry["id"])
+    return ids
 
 
 def _load_recent_journal(limit=None) -> list:
@@ -211,6 +254,93 @@ def apply_learned_adjustment(score: float, reasons: list) -> tuple:
     return round(adjusted, 2), notes
 
 
+def rr_milestone_stats(limit=None) -> dict:
+    """
+    Across closed journal entries: how many trades ever reached each
+    configured R milestone, and what the actual exits looked like.
+
+    This is the dataset for answering "what should DEFAULT_TARGET_RR be?"
+    with evidence instead of intuition. `reached` counts trades whose
+    BEST excursion touched that multiple at any point while open -- i.e.
+    the trades a target set there would have converted into winners.
+
+    Entries from before R-tracking existed simply have no max_r_reached
+    and are excluded from `sample`, rather than silently counted as
+    zero -- an unmeasured trade is not a failed one.
+    """
+    entries = [
+        e for e in _load_recent_journal(limit)
+        if e.get("max_r_reached") is not None and e.get("outcome") not in (None, "OPEN")
+    ]
+    if not entries:
+        return {"sample": 0, "milestones": [], "median_max_r": None}
+
+    max_rs = sorted(e["max_r_reached"] for e in entries)
+    median_max_r = max_rs[len(max_rs) // 2]
+
+    milestones = []
+    for m in config.RR_MILESTONES:
+        reached = sum(1 for e in entries if e["max_r_reached"] >= m)
+
+        # Simulated expectancy if the target had been set here: a trade
+        # whose peak reached this level would have exited AT it; every
+        # other trade keeps the R it actually finished at.
+        #
+        # This matters because hit-rate alone is actively misleading --
+        # a low target hits far more often but wins less each time, and
+        # can easily be WORSE overall. Expectancy is the number that
+        # decides it. Still a simulation: it assumes a fill exactly at
+        # target and that reaching the level early wouldn't have changed
+        # anything afterwards.
+        simulated = [
+            m if e["max_r_reached"] >= m else (e.get("r_at_exit") or 0.0)
+            for e in entries
+        ]
+        milestones.append({
+            "r": m,
+            "reached": reached,
+            "pct": round(reached / len(entries) * 100, 1),
+            "expectancy_r": round(sum(simulated) / len(simulated), 3),
+        })
+
+    return {
+        "sample": len(entries),
+        "median_max_r": median_max_r,
+        "best_max_r": max_rs[-1],
+        "milestones": milestones,
+        "current_target_r": config.DEFAULT_TARGET_RR,
+    }
+
+
+def summarize_rr_milestones(limit=None) -> str:
+    """Human-readable version of rr_milestone_stats(), for session startup."""
+    stats = rr_milestone_stats(limit)
+    if not stats["sample"]:
+        return ("R-multiple history: none yet (tracking starts with trades opened "
+                "from now on -- earlier journal entries predate it).")
+
+    lines = [
+        f"R-multiple history ({stats['sample']} closed trades, "
+        f"current target {stats['current_target_r']:g}R):"
+    ]
+    best_exp = max(m["expectancy_r"] for m in stats["milestones"])
+    for m in stats["milestones"]:
+        marker = "  <-- current" if m["r"] == stats["current_target_r"] else ""
+        if m["expectancy_r"] == best_exp and best_exp > 0:
+            marker += "  [best expectancy]"
+        lines.append(
+            f"  {m['r']:>4g}R reached by {m['reached']:>3} ({m['pct']:>5.1f}%), "
+            f"simulated expectancy {m['expectancy_r']:+.3f}R{marker}"
+        )
+    lines.append(f"  median best excursion: {stats['median_max_r']:+.2f}R, best ever: {stats['best_max_r']:+.2f}R")
+    if best_exp <= 0:
+        lines.append(
+            "  NOTE: every simulated target has negative expectancy on this sample -- "
+            "that points at entry quality, not target placement."
+        )
+    return "\n".join(lines)
+
+
 def summarize_recent_lessons(limit=None) -> str:
     """One-line-per-tag summary of what's worked/not, for session startup."""
     rates = tag_win_rates(limit)
@@ -223,15 +353,58 @@ def summarize_recent_lessons(limit=None) -> str:
     return "Recent signal performance:\n" + "\n".join(lines)
 
 
-def _update_excursion(trade: dict, current_ltp: float):
+def risk_unit(trade: dict) -> float:
+    """
+    1R for this trade: the distance from entry to stop. Returns None if
+    that distance is zero or missing, so callers can skip R math rather
+    than divide by zero.
+    """
+    entry, stop = trade.get("entry"), trade.get("stop")
+    if entry is None or stop is None:
+        return None
+    unit = entry - stop
+    return unit if unit > 0 else None
+
+
+def r_multiple(trade: dict, price: float) -> float:
+    """How many R above entry `price` sits. Negative below entry."""
+    unit = risk_unit(trade)
+    if unit is None or price is None:
+        return None
+    return round((price - trade["entry"]) / unit, 2)
+
+
+def _update_excursion(trade: dict, current_ltp: float, timestamp=None):
     """
     Track the running best/worst LTP seen this trade, regardless of
     whether this cycle closes it -- see open_new_trade()'s comment on
     why this exists. Called every single cycle a trade is evaluated,
     including the cycle that ends up closing it.
+
+    Also records which R-multiple milestones the trade has touched and
+    WHEN it first touched each. That timing is the part intuition can't
+    reconstruct afterwards: "reached 1.2R at 11:04, then gave it all back
+    and stopped out at 14:05" is a completely different lesson from
+    "never got going." See config.RR_MILESTONES.
     """
     trade["max_ltp_seen"] = max(trade.get("max_ltp_seen", trade["entry"]), current_ltp)
     trade["min_ltp_seen"] = min(trade.get("min_ltp_seen", trade["entry"]), current_ltp)
+
+    current_r = r_multiple(trade, current_ltp)
+    if current_r is None:
+        return
+
+    prior_max_r = trade.get("max_r_seen")
+    if prior_max_r is None or current_r > prior_max_r:
+        trade["max_r_seen"] = current_r
+
+    hits = trade.setdefault("rr_milestones_hit", {})
+    stamp = (timestamp.isoformat() if hasattr(timestamp, "isoformat")
+             else (timestamp or datetime.now().isoformat(timespec="seconds")))
+    for milestone in config.RR_MILESTONES:
+        key = str(milestone)
+        if key not in hits and current_r >= milestone:
+            hits[key] = stamp
 
 
 def _excursion_summary(trade: dict) -> dict:
@@ -255,7 +428,7 @@ def _excursion_summary(trade: dict) -> dict:
     if pnl_pct is not None and max_favorable_pct > 0:
         capture_efficiency_pct = round(pnl_pct / max_favorable_pct * 100, 1)
 
-    return {
+    summary = {
         "max_ltp_seen": max_ltp,
         "min_ltp_seen": min_ltp,
         "max_favorable_pct": max_favorable_pct,
@@ -264,6 +437,24 @@ def _excursion_summary(trade: dict) -> dict:
         "max_adverse_inr": _pnl_inr(entry, min_ltp, trade["lots"]),
         "capture_efficiency_pct": capture_efficiency_pct,
     }
+
+    # R-multiple view of the same excursion. `max_r_reached` is the
+    # headline: the best R this trade was EVER worth, whether or not the
+    # exit captured it. `rr_would_have_won_at` lists every configured
+    # target that this trade did in fact reach -- i.e. the targets under
+    # which it would have been a winner instead of the outcome it got.
+    unit = risk_unit(trade)
+    if unit is not None:
+        max_r = round((max_ltp - entry) / unit, 2)
+        summary["max_r_reached"] = max_r
+        summary["min_r_reached"] = round((min_ltp - entry) / unit, 2)
+        summary["rr_milestones_hit"] = trade.get("rr_milestones_hit", {})
+        summary["rr_would_have_won_at"] = [m for m in config.RR_MILESTONES if max_r >= m]
+        exit_ltp = trade.get("exit_ltp")
+        if exit_ltp is not None:
+            summary["r_at_exit"] = round((exit_ltp - entry) / unit, 2)
+
+    return summary
 
 
 def _build_lesson(trade: dict, outcome: str) -> str:
@@ -291,6 +482,21 @@ def _build_lesson(trade: dict, outcome: str) -> str:
             f"that favorable move. Worth reviewing whether the target/stop or an exit rule should adapt "
             f"once a trade has moved this far in its favor."
         )
+
+    # The R view: which targets this trade WOULD have hit. Stated plainly
+    # because it's the single most actionable line for deciding
+    # DEFAULT_TARGET_RR later, and it's invisible in a pass/fail outcome.
+    max_r = trade.get("max_r_reached")
+    would_have_won = trade.get("rr_would_have_won_at")
+    if max_r is not None:
+        if would_have_won and outcome != "WIN":
+            targets = ", ".join(f"{m:g}R" for m in would_have_won)
+            base += (
+                f" Peaked at {max_r:+.2f}R (aiming for {config.DEFAULT_TARGET_RR:g}R) -- "
+                f"would have hit target at: {targets}."
+            )
+        elif not would_have_won:
+            base += f" Never got beyond {max_r:+.2f}R, so no configured target was ever in reach."
     return base
 
 
@@ -305,6 +511,7 @@ def open_new_trade(setup, plan, snapshot) -> dict:
         "entry": plan.entry,
         "target": plan.target,
         "stop": plan.stop,
+        "stop_basis": getattr(plan, "stop_basis", ""),
         "lots": plan.lots,
         "score_at_entry": setup.score,
         "reasons_at_entry": list(setup.reasons),
@@ -319,6 +526,10 @@ def open_new_trade(setup, plan, snapshot) -> dict:
         # since it only ever looks at the current tick.
         "max_ltp_seen": plan.entry,
         "min_ltp_seen": plan.entry,
+        # R-multiple milestones touched while open -> {"1.0": timestamp}.
+        # Evidence for choosing a target later; see config.RR_MILESTONES.
+        "max_r_seen": 0.0,
+        "rr_milestones_hit": {},
     }
 
 
@@ -352,7 +563,7 @@ def update_open_trades(state: dict, snapshot) -> list:
             continue
 
         current_ltp = quote.ltp
-        _update_excursion(trade, current_ltp)
+        _update_excursion(trade, current_ltp, snapshot.timestamp)
 
         outcome = None
         if current_ltp >= trade["target"]:
@@ -369,6 +580,8 @@ def update_open_trades(state: dict, snapshot) -> list:
             trade.update(_excursion_summary(trade))
             trade["lesson"] = _build_lesson(trade, outcome)
             _append_journal(trade)
+            if outcome == "LOSS":
+                _record_stop_cooldown(state, trade)
             closed_this_cycle.append(trade)
         else:
             trade["current_ltp"] = current_ltp
@@ -406,7 +619,7 @@ def force_close_end_of_day(state: dict, snapshot) -> list:
         else:
             exit_ltp = quote.ltp
             trade["exit_price_estimated"] = False
-            _update_excursion(trade, exit_ltp)  # in case this final tick is a new high/low not yet captured
+            _update_excursion(trade, exit_ltp, snapshot.timestamp)  # in case this final tick is a new high/low not yet captured
 
         trade["closed_at"] = snapshot.timestamp.isoformat()
         trade["exit_ltp"] = exit_ltp
@@ -423,12 +636,120 @@ def force_close_end_of_day(state: dict, snapshot) -> list:
     return closed
 
 
+def compute_risk_state(state: dict) -> tuple:
+    """
+    Live (open_exposure_pct, daily_loss_pct) for risk_checker.check().
+
+    These two numbers gate MAX_TOTAL_EXPOSURE_PCT and the
+    MAX_DAILY_LOSS_PCT circuit breaker. Until now main_live.py passed
+    hardcoded 0.0 for both and never updated them, which meant BOTH gates
+    were dead code -- the daily-loss breaker could never trip no matter
+    how much the day lost. Everything needed to compute them was already
+    on disk (today's journal entries + the open-trades state), it just
+    was never read back.
+
+      - open_exposure_pct: capital at risk across open trades, expressed
+        the same way plan.risk_pct_of_capital is (stop distance x lot
+        size x lots, as a % of TOTAL_CAPITAL) so the two are additive.
+      - daily_loss_pct: today's REALIZED loss (from the journal) plus
+        current UNREALIZED loss (from open trades), as a positive % of
+        capital. Returns 0.0 when the day is net flat or up -- the
+        breaker only cares about losses.
+    """
+    capital = config.TOTAL_CAPITAL
+    lot_size = getattr(config, "NIFTY_LOT_SIZE", 65)
+
+    open_exposure_inr = sum(
+        (t["entry"] - t["stop"]) * lot_size * t["lots"] for t in state.get("trades", [])
+    )
+
+    unrealized_inr = sum(t.get("running_pnl_inr", 0.0) or 0.0 for t in state.get("trades", []))
+
+    # Deduplicate by trade id. The journal is append-only and a
+    # pre-2026-07-28 recovery bug left genuine duplicate entries in it
+    # (same id, two different exit prices). Summing blind would
+    # double-count those into the daily-loss breaker and trip it early.
+    today = date.today().isoformat()
+    realized_by_id = {}
+    for entry in _load_recent_journal(limit=500):
+        closed_at = entry.get("closed_at") or ""
+        if closed_at.startswith(today):
+            key = entry.get("id") or f"{closed_at}_{entry.get('strike')}_{entry.get('option_type')}"
+            realized_by_id[key] = entry.get("pnl_inr", 0.0) or 0.0
+    realized_inr = sum(realized_by_id.values())
+
+    net_inr = realized_inr + unrealized_inr
+    daily_loss_pct = round(-net_inr / capital * 100, 3) if net_inr < 0 else 0.0
+
+    return round(open_exposure_inr / capital * 100, 3), daily_loss_pct
+
+
+def expiry_day_rules(expiry: str, now: datetime) -> tuple:
+    """
+    Returns (conviction_bar, blocked_reason_or_None) for a contract
+    expiring on `expiry`, evaluated at `now`.
+
+    Only applies when the contract expires TODAY. See the config comment
+    on EXPIRY_DAY_* for why same-day expiry is treated differently: this
+    tool only buys premium, and on expiry day that premium is nearly all
+    extrinsic value decaying to zero by the close.
+    """
+    bar = config.MIN_CONVICTION_SCORE_TO_TRACK
+    if expiry != now.date().isoformat():
+        return bar, None
+
+    bar += config.EXPIRY_DAY_EXTRA_CONVICTION
+
+    cutoff_h, cutoff_m = (int(x) for x in config.EXPIRY_DAY_NO_NEW_TRADES_AFTER.split(":"))
+    if (now.hour, now.minute) >= (cutoff_h, cutoff_m):
+        return bar, (
+            f"expiry day and past {config.EXPIRY_DAY_NO_NEW_TRADES_AFTER} -- "
+            f"buying same-day-expiry premium this late is mostly paying theta"
+        )
+    return bar, None
+
+
+def _cooldown_key(strike, option_type) -> str:
+    return f"{strike}_{option_type}"
+
+
+def is_repeat_of_stopped_plan(state: dict, strike, option_type, entry: float) -> bool:
+    """
+    True if a trade on this strike+type was already stopped out today at
+    an entry price within config.REENTRY_PRICE_TOLERANCE_PCT of `entry`.
+
+    Same entry price means the same stop and the same target (both are
+    derived from entry), i.e. the identical failed plan -- not a new read
+    on the same strike. A materially different premium produces different
+    geometry and is allowed through. See the config comment for why this
+    replaced a time-based cooldown.
+    """
+    prior_entries = state.get("stop_cooldowns", {}).get(_cooldown_key(strike, option_type), [])
+    tolerance = config.REENTRY_PRICE_TOLERANCE_PCT
+    for prior in prior_entries:
+        prior_entry = prior["entry"]
+        if prior_entry and abs(entry - prior_entry) / prior_entry * 100 <= tolerance:
+            return True
+    return False
+
+
+def _record_stop_cooldown(state: dict, trade: dict):
+    """Arm the re-entry gate for this strike+type at the price that failed."""
+    state.setdefault("stop_cooldowns", {})
+    key = _cooldown_key(trade["strike"], trade["option_type"])
+    state["stop_cooldowns"].setdefault(key, []).append(
+        {"entry": trade["entry"], "closed_at": trade["closed_at"]}
+    )
+
+
 def try_open_new_trade(setups_with_plans, state, snapshot):
     """
     setups_with_plans: list of (Setup, TradePlan, RiskVerdict), best-first.
     Opens AT MOST ONE new trade per cycle, only if: daily cap not reached,
-    conviction clears the raised bar (after the learned adjustment), and
-    there isn't already an open trade on the same strike+type.
+    conviction clears the raised bar (after the learned adjustment),
+    there isn't already an open trade on the same strike+type, and it
+    isn't a repeat of a plan that already stopped out today at the same
+    price (see is_repeat_of_stopped_plan).
     Returns the newly opened trade dict, or None.
     """
     if state["opened_today"] >= config.MAX_NEW_TRADES_PER_DAY:
@@ -441,9 +762,15 @@ def try_open_new_trade(setups_with_plans, state, snapshot):
             continue
         if (setup.strike, setup.option_type) in open_keys:
             continue
+        if is_repeat_of_stopped_plan(state, setup.strike, setup.option_type, plan.entry):
+            continue
+
+        conviction_bar, blocked = expiry_day_rules(setup.expiry, snapshot.timestamp)
+        if blocked:
+            continue
 
         adjusted_score, learn_notes = apply_learned_adjustment(setup.score, setup.reasons)
-        if adjusted_score < config.MIN_CONVICTION_SCORE_TO_TRACK:
+        if adjusted_score < conviction_bar:
             continue
 
         trade = open_new_trade(setup, plan, snapshot)

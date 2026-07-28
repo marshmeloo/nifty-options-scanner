@@ -40,6 +40,7 @@ OI/IV data itself doesn't update meaningfully every few seconds.
 
 import os
 import json
+import time
 import statistics
 from datetime import datetime, date
 from pathlib import Path
@@ -131,6 +132,62 @@ def _load_price_baseline() -> dict:
 
 def _save_price_baseline(state: dict):
     atomic_write_json(PRICE_BASELINE_PATH, state)
+
+
+OI_HISTORY_PATH = STATE_DIR / "oi_history.json"
+
+
+def _load_oi_history() -> dict:
+    """
+    Short rolling per-contract history of (timestamp, oi, ltp), reset
+    daily. Exists so buildup can be classified on what OI did in the last
+    few MINUTES rather than versus yesterday's close -- see the
+    OI_INTRADAY_* block in config.py for the incident that motivated it.
+    """
+    if OI_HISTORY_PATH.exists():
+        try:
+            data = json.loads(OI_HISTORY_PATH.read_text())
+            if data.get("date") == date.today().isoformat():
+                return data
+        except (json.JSONDecodeError, OSError):
+            pass  # corrupt or unreadable -> start fresh, this is only a cache
+    return {"date": date.today().isoformat(), "samples": {}}
+
+
+def _save_oi_history(history: dict):
+    atomic_write_json(OI_HISTORY_PATH, history)
+
+
+def _intraday_change(samples: list, now_ts: float, oi: float, ltp: float):
+    """
+    Compare current OI/LTP against the oldest sample still inside the
+    lookback window. Returns (oi_change_pct, price_change_pct,
+    window_minutes), or (None, None, None) when there isn't enough
+    history yet -- which is normal for the first few minutes of a session
+    and must NOT be silently reported as "no change".
+    """
+    lookback_seconds = cfg.OI_INTRADAY_LOOKBACK_MINUTES * 60
+    in_window = [s for s in samples if now_ts - s["t"] <= lookback_seconds]
+    if not in_window:
+        return None, None, None
+
+    baseline = min(in_window, key=lambda s: s["t"])
+    span_minutes = round((now_ts - baseline["t"]) / 60, 1)
+    # A baseline from seconds ago says nothing about a buildup; require at
+    # least a third of the intended window before trusting the comparison.
+    if span_minutes < cfg.OI_INTRADAY_LOOKBACK_MINUTES / 3:
+        return None, None, None
+
+    prev_oi, prev_ltp = baseline["oi"], baseline["ltp"]
+    oi_change = round((oi - prev_oi) / prev_oi * 100, 2) if prev_oi else None
+    price_change = round((ltp - prev_ltp) / prev_ltp * 100, 2) if prev_ltp else None
+    return oi_change, price_change, span_minutes
+
+
+def _prune_samples(samples: list, now_ts: float) -> list:
+    """Keep only what the lookback window can still use, plus a margin."""
+    keep_seconds = cfg.OI_INTRADAY_LOOKBACK_MINUTES * 60 * 2
+    return [s for s in samples if now_ts - s["t"] <= keep_seconds]
 
 
 def _classify_buildup(oi_change_pct: float, price_change_pct, oi_threshold: float):
@@ -305,6 +362,14 @@ def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
     price_baseline = _load_price_baseline()
     baseline_prices = price_baseline["prices"]
 
+    oi_history = _load_oi_history()
+    history_samples = oi_history["samples"]
+    now_ts = time.time()
+    # The fast position check re-fetches the chain every few seconds; only
+    # append a new sample when enough time has passed since the last one,
+    # so history stays small and the window means what it says.
+    record_sample = (now_ts - oi_history.get("last_sample_t", 0)) >= cfg.OI_HISTORY_SAMPLE_SPACING_SECONDS
+
     for strike, opt_type, side, oi, oi_change_pct in raw_quotes:
         iv = side["implied_volatility"]
         iv_pct = _cross_sectional_percentile(iv, ce_ivs if opt_type == "CE" else pe_ivs)
@@ -328,7 +393,24 @@ def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
         if prev_price:
             price_change_pct = round((ltp - prev_price) / prev_price * 100, 2)
 
-        buildup_type = _classify_buildup(oi_change_pct, price_change_pct, cfg.OI_BUILDUP_PCT)
+        # Intraday deltas over the rolling window, then record this tick.
+        samples = history_samples.get(key, [])
+        oi_intraday, price_intraday, window_minutes = _intraday_change(samples, now_ts, oi, ltp)
+        if record_sample:
+            samples = _prune_samples(samples, now_ts)
+            samples.append({"t": now_ts, "oi": oi, "ltp": ltp})
+            history_samples[key] = samples
+
+        # Classify on the INTRADAY move when we have it -- that's the whole
+        # point of this history. Fall back to the day-cumulative figures
+        # only during the session's opening minutes, before enough samples
+        # exist to say anything about recent positioning.
+        if oi_intraday is not None and price_intraday is not None:
+            buildup_type = _classify_buildup(
+                oi_intraday, price_intraday, cfg.OI_INTRADAY_BUILDUP_PCT
+            )
+        else:
+            buildup_type = _classify_buildup(oi_change_pct, price_change_pct, cfg.OI_BUILDUP_PCT)
 
         chain.append(
             OptionQuote(
@@ -347,10 +429,16 @@ def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
                 vega=side.get("greeks", {}).get("vega"),
                 price_change_pct=price_change_pct,
                 buildup_type=buildup_type,
+                oi_change_pct_intraday=oi_intraday,
+                price_change_pct_intraday=price_intraday,
+                buildup_window_minutes=window_minutes,
             )
         )
 
     _save_price_baseline(price_baseline)
+    if record_sample:
+        oi_history["last_sample_t"] = now_ts
+        _save_oi_history(oi_history)
 
     # PCR reflects the whole chain's OI sentiment, computed BEFORE the
     # premium filter narrows things down to the strikes we actually score.

@@ -16,6 +16,17 @@ NIFTY_LOT_SIZE = 65             # update if NSE revises lot size
 # --- Scanner thresholds ---
 IV_PERCENTILE_HIGH = 75         # flag as "IV rich" above this percentile
 IV_PERCENTILE_LOW = 25          # flag as "IV cheap" below this percentile
+
+# This tool only ever BUYS premium (plan_generator.py always places the
+# stop below entry and the target above it -- there is no short-premium
+# path in the momentum scanner). So rich and cheap IV are NOT symmetric:
+# buying expensive volatility means vega works against you and the move
+# has to be bigger just to break even. Both used to score +1.0, which
+# rewarded buying an overpriced option exactly as much as an underpriced
+# one. If you ever add a premium-SELLING strategy here, this asymmetry
+# has to flip for it (config_condor.py is separate and unaffected).
+IV_CHEAP_SCORE = 1.0
+IV_RICH_SCORE = -1.0
 OI_BUILDUP_PCT = 15.0           # % change in OI (single expiry, single strike) to flag buildup
 PCR_BULLISH_ABOVE = 1.2         # put-call ratio above this = bullish bias
 PCR_BEARISH_BELOW = 0.8         # put-call ratio below this = bearish bias
@@ -25,6 +36,30 @@ VWAP_DEVIATION_PCT = 0.3        # % deviation from VWAP to flag as a momentum si
 # Raw OI% alone doesn't tell you if buyers or writers are behind the move;
 # combined with premium direction it does. See _classify_buildup in
 # dhan_source.py for the four cases.
+# --- Intraday OI freshness ---
+# Dhan's `previous_oi` is the PREVIOUS SESSION's closing OI, so
+# oi_change_pct is a day-cumulative figure that only grows as the session
+# runs. Classifying buildup from it means a day-scale read is driving
+# 30-second-cadence entry decisions: on 2026-07-28 the 24050 PE was
+# classified "long_buildup" at 10:21 (+112%), 13:14 (+338%) and 14:32
+# (+217%) -- three entries, all reading the same, through completely
+# different intraday price action, because OI vs YESTERDAY had of course
+# risen in all three cases.
+#
+# dhan_source.py now keeps a short rolling per-contract history and
+# classifies buildup from the change over the last
+# OI_INTRADAY_LOOKBACK_MINUTES instead. The day-cumulative figure is kept
+# alongside it (oi_analytics.py's "OI added today" genuinely needs it,
+# and "OI is 3x yesterday" is useful context in its own right).
+OI_INTRADAY_LOOKBACK_MINUTES = 15
+# Don't append a new history sample more often than this. The fast
+# position check re-fetches the chain every 5s; without spacing, history
+# would balloon and every write would rewrite a large file.
+OI_HISTORY_SAMPLE_SPACING_SECONDS = 60
+# Minimum intraday OI move (%) to classify a buildup. Much smaller than
+# OI_BUILDUP_PCT because this measures minutes, not a whole session.
+OI_INTRADAY_BUILDUP_PCT = 2.0
+
 LONG_BUILDUP_SCORE = 1.0        # price up + OI up: buyers accumulating, genuinely bullish for this contract
 SHORT_COVERING_SCORE = 0.75     # price up + OI down: writers exiting, also bullish for this contract
 SHORT_BUILDUP_SCORE = -1.0      # price down + OI up: writers piling in, bearish for THIS contract's premium
@@ -34,6 +69,49 @@ LONG_UNWINDING_SCORE = -0.5     # price down + OI down: longs capitulating, bear
 DEFAULT_STOP_LOSS_PCT = 30.0    # % of premium, used only if no explicit stop is computed
 DEFAULT_TARGET_RR = 2.0         # target expressed as reward:risk multiple of the stop distance
 
+# --- R-multiple milestone tracking ---
+# "R" is the trade's own risk unit: 1R = entry - stop. A trade that gains
+# exactly its risk distance has reached +1.0R. DEFAULT_TARGET_RR above is
+# therefore literally "how many R we're aiming for."
+#
+# Every open trade records which of these multiples it actually touched
+# and when. This is evidence-gathering ONLY -- it changes no behaviour and
+# does not move the target. The point is to be able to answer, from real
+# data rather than intuition, "if the target had been 1.2R instead of
+# 2.0R, how many of these trades would have won?"
+#
+# Motivation: across the first 29 journalled trades only 2 ever reached
+# +60% (the 2.0R target on a 30% stop) at ANY point while open, and the
+# median best-move-ever was +20.3%. That suggests the target is set well
+# beyond what these setups deliver -- but 29 trades is far too small a
+# sample to retune a live parameter on, so the system keeps trading its
+# current target while logging what it WOULD have hit.
+RR_MILESTONES = [0.5, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0]
+
+# --- Volatility-derived plan geometry ---
+# The flat percentages above take no account of what the underlying is
+# actually capable of moving. On 2026-07-28's 24050 PE (real intraday
+# range 51.15 - 102.55) the fixed +60% target sat at 122.72, about 20
+# points ABOVE the highest price the option traded all day -- unreachable
+# from the moment it was set -- while the -30% stop at 53.69 sat INSIDE
+# the option's normal oscillation band. Stop inside the noise and target
+# outside the range is losing geometry no matter how good the signal is.
+#
+# When enabled and the data allows it, stop/target distance is derived
+# from what the underlying actually moves: ATR over ATR_PERIOD candles,
+# scaled into premium terms by the option's delta, since a delta-0.4
+# option moves ~0.4 points per point of NIFTY.
+USE_VOLATILITY_BASED_PLAN = True
+ATR_PERIOD = 14
+# How many ATRs of adverse underlying movement the stop should sit beyond.
+# Below 1.0 the stop is inside a single average candle's range and will be
+# taken out by noise alone.
+STOP_ATR_MULTIPLE = 1.5
+# Guard rails: even volatility-derived stops stay inside these premium
+# percentages, so a freak ATR reading can't produce an absurd plan.
+MIN_STOP_PCT = 15.0
+MAX_STOP_PCT = 40.0
+
 # --- Price-action / structure thresholds (OB, FVG, S/R, sweeps) ---
 SWING_LOOKBACK = 5               # candles on each side to confirm a swing high/low
 OB_MIN_MOVE_PCT = 0.3            # min % move away from a candle to qualify it as an order block
@@ -42,6 +120,27 @@ SR_MIN_TOUCHES = 2               # minimum touches for a cluster to count as a r
 SWEEP_WICK_MIN_PCT = 0.1         # min wick-beyond-level size (%) to count as a liquidity sweep
 PRICE_LEVEL_PROXIMITY_PCT = 0.25 # how close spot must be to a level for it to count as confluence
 CANDLE_INTERVAL_MINUTES = "5"    # Dhan intraday interval: "1","5","15","25","60"
+
+# How many candles a one-off structural event (FVG, OB, sweep, breakout,
+# pullback) stays "current" for. Support/resistance is exempt -- it's
+# defined by repeated touches over time, not a single event.
+#
+# Why this exists: price_action.analyze() used to return every level ever
+# detected in the series, forever. Combined with scanner.py adding a flat
+# score per nearby level, a strike's score could only ever ratchet UPWARD
+# through a session. Measured on 2026-07-28's 24050 PE: 0 levels at 09:16,
+# 14 by 14:00, never once decreasing -- and the raw score climbed 6.0 ->
+# 11.0 almost entirely on that count, which is what let the same failed
+# setup re-qualify at a HIGHER conviction after being stopped out twice.
+# 24 candles at the default 5-minute interval is about two hours.
+LEVEL_MAX_AGE_CANDLES = 24
+
+# Cap on how much ALL price-action levels combined can contribute to one
+# strike's score, and how much a single level is worth. Uncapped
+# per-level accumulation is what let structure noise dominate the score.
+MAX_LEVEL_SCORE_CONTRIBUTION = 2.0
+LEVEL_SCORE_EACH = 0.5
+SWEEP_SCORE_EACH = 0.75
 
 # --- Strike range filter ---
 # Only strikes within this many points of spot are pulled into the chain.
@@ -190,7 +289,44 @@ FAST_CHECK_INTERVAL_SECONDS = 5
 # per day and follow each one to its actual outcome instead.
 MAX_NEW_TRADES_PER_DAY = 999         # effectively uncapped -- training/evaluation phase, more trades = faster sample building
 MIN_CONVICTION_SCORE_TO_TRACK = 5.0  # well above the 1.5 watchlist bar — only strong setups get tracked
+# --- Expiry-day rules ---
+# On 2026-07-28 all four trades were same-day-expiry LONG options, and
+# nothing in the scanner, plan generator, or risk checker knew it. That
+# matters for a premium BUYER specifically: on expiry day an option is
+# almost entirely extrinsic value decaying to zero by 15:30, so theta is
+# at its most brutal and a fixed reward-multiple target gets less
+# reachable with every hour that passes. The last trade of that day was
+# opened at 14:32 and closed at 15:29 for -16.8%.
+#
+# These are deliberately conservative rather than a ban: same-day expiry
+# is tradeable, it just needs a higher bar and a cutoff after which
+# buying decaying premium stops making sense.
+EXPIRY_DAY_EXTRA_CONVICTION = 1.5   # added to MIN_CONVICTION_SCORE_TO_TRACK on expiry day
+EXPIRY_DAY_NO_NEW_TRADES_AFTER = "14:00"   # IST; no new same-day-expiry longs after this
+
 JOURNAL_LOOKBACK_FOR_LEARNING = 100  # how many recent journal entries to consider for tag win-rate adjustment
 MIN_TAG_SAMPLES_FOR_ADJUSTMENT = 3   # don't trust a win rate until a tag has at least this many outcomes
 WEAK_TAG_WIN_RATE = 0.4              # below this win rate, penalize the tag's contribution to score
 STRONG_TAG_WIN_RATE = 0.65           # above this win rate, small bonus to the tag's contribution
+
+# Re-entry gate after a stop-loss.
+#
+# The pathology this targets (seen on 2026-07-28) isn't "re-entered the
+# same strike" -- it's "re-entered the same strike at the same PRICE with
+# the same plan that just failed." 24050 PE was entered at 75.7, stopped;
+# re-entered at 76.7, stopped; re-entered at 76.7 again. All three had
+# effectively identical entry/target/stop, so the third attempt was
+# re-running an experiment that had already failed twice.
+#
+# A blanket time cooldown was considered first and rejected: it both
+# over-blocks (a genuinely different setup at a different premium is a
+# different bet, and shouldn't be blocked just because the clock hasn't
+# run out) and under-blocks (on the real 2026-07-28 data a 60-minute
+# window caught only one of the two re-entries -- the other came 2h31m
+# after its stop). Price similarity catches BOTH, with no arbitrary clock.
+#
+# A new entry is blocked if a trade on the same strike+type was stopped
+# out earlier today at an entry price within this % of the new one.
+# Only a LOSS arms this -- a WIN or EOD_CLOSE isn't evidence the setup
+# was wrong. State resets daily along with the rest of open_trades.json.
+REENTRY_PRICE_TOLERANCE_PCT = 3.0
