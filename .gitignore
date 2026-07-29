@@ -20,6 +20,10 @@ state/*.json
 logs/premarket_brief_*.md
 logs/condor_*.log
 logs/condor_journal.jsonl
+# Per-cycle audit trail: runtime data, ~5 MB/day. Was tracked, which made
+# every sync_from_prod.py run dirty the tree and broke the clean-tree
+# check in the promotion procedure. History retains past versions.
+logs/decision_log.jsonl
 
 # Python
 __pycache__/

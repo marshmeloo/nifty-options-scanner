@@ -59,10 +59,17 @@ def is_production() -> bool:
 
 
 def _git(*args) -> str:
+    """
+    Raw stdout with only the trailing newline removed. Deliberately NOT
+    .strip() -- `git status --porcelain` encodes state in the first two
+    columns, so " M file" (unstaged) and "M  file" (staged) differ only
+    by leading whitespace. Stripping it made every unstaged change look
+    staged and broke the clean-tree check.
+    """
     try:
         out = subprocess.run(["git", *args], cwd=REPO_DIR,
                              capture_output=True, text=True, timeout=5)
-        return out.stdout.strip() if out.returncode == 0 else ""
+        return out.stdout.rstrip("\n") if out.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
 
@@ -73,8 +80,8 @@ def git_state() -> dict:
     # which never represents a real change.
     real_changes = [ln for ln in dirty.splitlines() if ln and not ln.startswith(" M ")]
     return {
-        "branch": _git("rev-parse", "--abbrev-ref", "HEAD") or "?",
-        "commit": _git("rev-parse", "--short", "HEAD") or "?",
+        "branch": _git("rev-parse", "--abbrev-ref", "HEAD").strip() or "?",
+        "commit": _git("rev-parse", "--short", "HEAD").strip() or "?",
         "dirty": bool(real_changes),
         "changed_files": len(real_changes),
     }
