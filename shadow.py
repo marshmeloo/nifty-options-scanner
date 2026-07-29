@@ -74,7 +74,14 @@ class Policy:
     start_time: str = "09:15"
     end_time: str = "15:30"
     max_trades_per_day: int = None     # None -> unlimited
-    stop_after_loss: bool = False      # end the day on the first losing trade
+    # End the day after the first genuine stop-out (outcome == "LOSS").
+    # Deliberately does NOT trigger on a trade that merely finishes
+    # negative at EOD_CLOSE -- that outcome is only knowable at 15:30,
+    # by which point there is no more day left to stop trading during.
+    # Only a real stop-hit is a discrete, real-time event a live trader
+    # could act on, and it only takes effect from the moment it actually
+    # happens (see loss_known_at in run_policy), not retroactively.
+    stop_after_loss: bool = False
     # Defaults MIRROR LIVE. main_live.py allows concurrent positions on
     # different strikes (open_keys is keyed on strike+type), so a shadow
     # default of "one at a time" would silently model a different system
@@ -273,13 +280,25 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
     trades = []
     open_until = None       # timestamp the current position closes at
     traded_keys = set()
-    stopped_for_day = False
+    # Timestamp a real stop-out becomes KNOWN, not the timestamp of the
+    # trade that caused it. A trade opened at 09:30 that doesn't hit its
+    # stop until 11:00 cannot inform a decision made at 09:45 -- yet
+    # because every trade here is resolved instantly by walking forward
+    # through recorded prices, a naive "stop for the day" flag set the
+    # moment a losing trade resolves would retroactively block entries
+    # that, in real time, happened BEFORE the loss was knowable. Gating
+    # on this timestamp instead of a boolean fixed a look-ahead bug this
+    # exact policy had: EOD_CLOSE outcomes (only knowable at 15:30, by
+    # which point the day is over anyway) were also wrongly counted as
+    # "a loss" that ended the day, when only a genuine stop-out (outcome
+    # == "LOSS") is a discrete, real-time event a live trader would act on.
+    loss_known_at = None
 
     with tt.journal_writes_disabled():
         for snapshot, candles, _meta in cycles:
-            if stopped_for_day:
-                break
             ts = snapshot.timestamp
+            if loss_known_at is not None and ts >= loss_known_at:
+                break
             if not (start <= ts.time() <= end):
                 continue
             if policy.max_trades_per_day and len(trades) >= policy.max_trades_per_day:
@@ -345,8 +364,10 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
                 if verbose:
                     print(f"  {ts.time()} {setup.strike:.0f}{setup.option_type} "
                           f"score {adjusted:.2f} -> {trade.outcome} {trade.net_r:+.2f}R")
-                if policy.stop_after_loss and (trade.net_r or 0) <= 0:
-                    stopped_for_day = True
+                if policy.stop_after_loss and trade.outcome == "LOSS" and trade.closed_at:
+                    closed = datetime.fromisoformat(trade.closed_at)
+                    if loss_known_at is None or closed < loss_known_at:
+                        loss_known_at = closed
                 break   # at most one new position per cycle, as live does
 
     return trades
