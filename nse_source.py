@@ -135,6 +135,13 @@ def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
                     iv=side.get("impliedVolatility", 0.0),
                     iv_percentile=50.0,  # NSE doesn't give us history to rank against; neutral placeholder
                     price_change_pct=side.get("pChange"),
+                    # NSE publishes top of book on the option chain, so
+                    # even this fallback tier can price fills at the side
+                    # actually crossed rather than at LTP.
+                    bid=side.get("bidprice") or None,
+                    ask=side.get("askPrice") or None,
+                    bid_qty=side.get("bidQty") or None,
+                    ask_qty=side.get("askQty") or None,
                     # No Greeks and no cross-session buildup classification in this
                     # fallback tier -- those need Dhan's greeks payload / our own
                     # tracked baseline respectively. Structural signals (OI/IV/PCR)

@@ -69,6 +69,19 @@ def replay_day(day: str, verbose: bool = False) -> dict:
     opened, decisions = [], Counter()
     cycles = 0
 
+    with tt.journal_writes_disabled():
+        return _replay_cycles(day, state, opened, decisions, cycles, verbose)
+
+
+def _replay_cycles(day, state, opened, decisions, cycles, verbose):
+    """
+    Inner loop. Runs entirely inside journal_writes_disabled(): replay
+    exercises the REAL close/settle path, which appends to
+    logs/trade_journal.jsonl. Without suppression, replaying history
+    silently writes replayed trades into the live trade record as though
+    they had really happened -- corrupting the exact dataset every
+    performance conclusion is drawn from.
+    """
     for snapshot, candles, _meta in snapshot_recorder.load_day(day):
         cycles += 1
 

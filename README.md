@@ -72,6 +72,7 @@ Pipeline: `SCAN -> SIGNALS -> PLAN -> RISK -> DECISION`
 | `snapshot_recorder.py` | Records the raw chain + candles behind every cycle, so any future logic version can be replayed against identical history |
 | `replay.py` | Re-runs the pipeline over recorded history; diffs two logic versions; forward-return evaluation of every candidate |
 | `logic_version.py` | Fingerprints the decision-relevant config + git SHA so results are never pooled across versions |
+| `costs.py` | Round-trip transaction costs (brokerage/STT/exchange/GST/stamp), applied at trade close so P&L is net as well as gross |
 
 ## Setup
 
@@ -946,6 +947,71 @@ to Dhan directly:
 Each tier has a cooldown after a failure so a genuinely-down source
 doesn't add latency/log-noise to every 30s poll — see
 `FALLBACK_RETRY_COOLDOWN_SECONDS` in `config.py`.
+
+## Execution realism: costs, fills, liquidity, and the bias gate
+
+Four fixes from a pipeline audit. The first three all make recorded
+performance look **worse** -- that is the point. They remove optimistic
+bias that was making a negative-expectancy system read as nearly
+break-even.
+
+**1. Transaction costs (`costs.py`).** Every P&L figure was previously
+GROSS. On a Rs 76.70 premium with a 1R stop of 23 points, a round trip
+costs ~Rs 56 in statutory charges -- about 0.038R, against a measured
+gross expectancy of -0.028R at the 2R target. Costs were larger than the
+entire measured edge deficit. Closed trades now carry `costs_inr`,
+`pnl_inr_net`, `cost_r` and `r_at_exit_net` **alongside** the gross
+figures, which are kept so the difference stays visible.
+
+Measured over the real 29-trade journal, mean round-trip cost is
+**0.056R**, and it shifts every target's expectancy down by that amount:
+
+```
+ target     gross       net
+   0.5R    -0.179    -0.235
+     1R    -0.111    -0.168
+     2R    -0.029    -0.085   <-- current target
+   2.5R    -0.016    -0.072
+```
+
+The ordering is unchanged, so this does not alter the earlier conclusion
+that lowering the target would be worse -- but every figure is now
+honest. Rates in `config.py` are discount-broker assumptions; **replace
+them with your own contract-note values.** Note STT applies to the SELL
+side only, on premium.
+
+**2. Side-correct fills.** `OptionQuote` gained `bid`/`ask`, and a long
+position is now opened at the **ask** and closed at the **bid** rather
+than marking both at LTP. LTP is the last *traded* price: it can be
+stale and it sits on whichever side that trade happened to hit, so
+pricing both legs there books profit that never existed. Falls back to
+LTP per-quote where the source publishes no book (CSV/TradingView), and
+records which basis was used on the plan (`entry_basis`).
+
+Dhan's top-of-book field names aren't clearly documented, so several
+plausible spellings are tried. **Verify on first run** that
+`snapshot.chain[0].has_book` is True against a live session -- if it
+isn't, none matched and fills are silently falling back to LTP.
+
+**3. Liquidity screen.** `q.volume` was populated and never consulted;
+there was no OI, volume, or spread filter at all. A tradeable premium is
+not a tradeable contract. `MIN_OI_TO_TRADE`, `MIN_VOLUME_TO_TRADE` and
+`MAX_SPREAD_PCT` now gate candidate selection -- at selection time only,
+never at chain-build time (the 2026-07-22 lesson). A missing book skips
+the spread check rather than rejecting the chain.
+
+**4. Market-bias gating.** `compute_market_bias()` produced a top-down
+bullish/bearish/neutral read that was logged and then **discarded** --
+nothing filtered candidates by it, so the system could buy puts while
+its own bias module read the tape the other way. `tag_bias_conflicts()`
+noticed CE and PE both approved at one strike and responded by appending
+a string; the trade still opened.
+
+Counter-bias candidates are now penalised (default) or blocked, per
+`BIAS_GATING_MODE`, and rejections surface as `REJECTED_BIAS_CONFLICT`
+in the decision log. Default is `"penalise"` rather than `"block"` on
+purpose: the bias read is itself unvalidated, and hard-blocking on an
+unvalidated signal can halve the trade count for reasons nobody notices.
 
 ## How do we know if a change helped? (measurement methodology)
 

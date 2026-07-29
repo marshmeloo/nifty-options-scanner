@@ -69,6 +69,75 @@ LONG_UNWINDING_SCORE = -0.5     # price down + OI down: longs capitulating, bear
 DEFAULT_STOP_LOSS_PCT = 30.0    # % of premium, used only if no explicit stop is computed
 DEFAULT_TARGET_RR = 2.0         # target expressed as reward:risk multiple of the stop distance
 
+# --- Market-bias gating (see scanner.compute_market_bias) ---
+# compute_market_bias() produces a top-down bullish/bearish/neutral read
+# from trend, RSI, ROC and PCR. Until this setting existed it was logged
+# and then DISCARDED -- nothing filtered candidates by it, so the system
+# could and did buy puts while its own bias module read the tape the
+# other way. tag_bias_conflicts() noticed CE and PE both being approved
+# at one strike and responded by appending a string; the trade still
+# opened.
+#
+#   "block"    -- reject candidates opposing a strong directional bias
+#   "penalise" -- subtract BIAS_CONFLICT_PENALTY from their score instead
+#   "off"      -- previous behaviour: log the bias, gate nothing
+#
+# Starting at "penalise" rather than "block" on purpose: the bias read is
+# itself unvalidated, and a hard block on an unvalidated signal can
+# silently halve the trade count for reasons nobody notices. Penalising
+# keeps genuinely strong counter-bias setups reachable while making the
+# conflict cost something. Revisit once there is replay evidence that
+# counter-bias trades really do underperform.
+BIAS_GATING_MODE = "penalise"
+BIAS_CONFLICT_PENALTY = 1.0
+# |bias score| at or above which the read counts as "strong" enough to
+# act on at all. compute_market_bias labels +-1.0 as directional.
+BIAS_STRONG_THRESHOLD = 1.5
+
+# --- Transaction costs (see costs.py) ---
+# Every P&L figure was GROSS until these existed. At this trade size that
+# is not a rounding error: a round trip on a ~Rs 77 premium costs roughly
+# 0.038R in statutory charges alone, versus a measured gross expectancy
+# of -0.028R at the 2R target. Costs are larger than the entire measured
+# edge deficit.
+#
+# THESE ARE ASSUMPTIONS -- replace with your broker's actual contract
+# note values. Brokerage models differ and statutory rates change by
+# circular. Note that STT on options is charged on the SELL side only,
+# and on premium rather than notional.
+BROKERAGE_PER_ORDER = 20.0      # flat per executed order (typical discount broker)
+STT_RATE_SELL = 0.001           # 0.10% of premium, sell side only
+EXCHANGE_TXN_RATE = 0.00035     # NSE options, applied to both legs
+SEBI_TURNOVER_RATE = 0.000001   # SEBI turnover fee
+STAMP_DUTY_RATE_BUY = 0.00003   # buy side only
+GST_RATE = 0.18                 # on brokerage + exchange + SEBI
+
+# --- Realistic fills (see models.OptionQuote.buy_price / sell_price) ---
+# When True, a new position is priced at the ASK and an exit at the BID,
+# instead of marking both at LTP. LTP is the last TRADED price: it can be
+# stale and it sits on whichever side that trade hit, so pricing both
+# legs there quietly books a profit that never existed. On a 76-rupee
+# premium with a 1-point spread that bias is ~2.4% of premium per round
+# trip, against a 1R stop of ~30% -- roughly 0.08R of pure fiction on
+# every trade, which is larger than the entire measured edge.
+#
+# Falls back to LTP per-quote wherever the source publishes no book
+# (CSV/TradingView tiers), and flags on the trade which basis was used.
+USE_BID_ASK_FILLS = True
+
+# --- Liquidity screen (applied at candidate selection, see scanner.py) ---
+# A tradeable premium is not the same as a tradeable contract. Without
+# these, a strike showing a plausible price on 50 lots of volume can be
+# planned, sized and journalled at a fill that could never have happened.
+# Set any of these to None to disable that particular check.
+#
+# NOTE: like PREMIUM_MIN/MAX, these apply ONLY to NEW candidate selection
+# and must never filter the chain itself -- open trades still need their
+# quote found even if the strike goes illiquid (2026-07-22 lesson).
+MIN_OI_TO_TRADE = 5000        # contracts of open interest
+MIN_VOLUME_TO_TRADE = 1000    # contracts traded today
+MAX_SPREAD_PCT = 3.0          # bid-ask spread as % of mid; None to disable
+
 # --- Snapshot recording (see snapshot_recorder.py / replay.py) ---
 # Records the raw option chain + candles behind every decision cycle, so
 # any future version of the decision logic can be replayed against the

@@ -108,6 +108,27 @@ def _fetch_raw_chain(expiry: str) -> dict:
 PRICE_BASELINE_PATH = STATE_DIR / "price_baseline.json"
 _PREV_CLOSE_KEYS = ("previous_close_price", "prev_close_price", "close_price", "previous_close")
 
+# Top-of-book field names. Dhan's option-chain docs don't pin these down
+# as clearly as last_price/oi, so several plausible spellings are tried --
+# the same defensive approach already used for previous close above.
+# VERIFY ON FIRST RUN: if `snapshot.chain[0].has_book` is False against a
+# live session, none of these matched and every fill silently falls back
+# to LTP. main_live.py logs a one-line warning per cycle when that's the
+# case, precisely so it can't go unnoticed.
+_BID_KEYS = ("top_bid_price", "bid_price", "best_bid_price", "bidprice", "bid")
+_ASK_KEYS = ("top_ask_price", "ask_price", "best_ask_price", "askprice", "ask")
+_BID_QTY_KEYS = ("top_bid_quantity", "bid_quantity", "bid_qty", "bidQty")
+_ASK_QTY_KEYS = ("top_ask_quantity", "ask_quantity", "ask_qty", "askQty")
+
+
+def _first_present(side: dict, keys):
+    """First non-zero value among `keys`, else None."""
+    for k in keys:
+        v = side.get(k)
+        if v:
+            return v
+    return None
+
 
 def _load_price_baseline() -> dict:
     """
@@ -432,6 +453,10 @@ def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
                 oi_change_pct_intraday=oi_intraday,
                 price_change_pct_intraday=price_intraday,
                 buildup_window_minutes=window_minutes,
+                bid=_first_present(side, _BID_KEYS),
+                ask=_first_present(side, _ASK_KEYS),
+                bid_qty=_first_present(side, _BID_QTY_KEYS),
+                ask_qty=_first_present(side, _ASK_QTY_KEYS),
             )
         )
 

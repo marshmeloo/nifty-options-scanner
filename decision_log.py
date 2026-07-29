@@ -21,15 +21,21 @@ from datetime import datetime
 
 import config
 import trade_tracker as tt
+import scanner
 import logic_version
 
 LOG_PATH = Path(__file__).parent / "logs" / "decision_log.jsonl"
 LOG_PATH.parent.mkdir(exist_ok=True)
 
 
-def _candidate_record(setup, plan, verdict, state: dict, opened_trade: dict) -> dict:
+def _candidate_record(setup, plan, verdict, state: dict, opened_trade: dict,
+                      bias_label=None, bias_score=None) -> dict:
     adjusted_score, learn_notes = tt.apply_learned_adjustment(setup.score, setup.reasons)
     conviction_bar, expiry_blocked = tt.expiry_day_rules(setup.expiry, datetime.now())
+    bias_blocked, bias_penalty, bias_note = scanner.apply_bias_gate(setup, bias_label, bias_score)
+    adjusted_score = round(adjusted_score - bias_penalty, 2)
+    if bias_note:
+        learn_notes = list(learn_notes) + [bias_note]
     open_keys = {(t["strike"], t["option_type"]) for t in state["trades"]}
     is_this_the_opened_one = (
         opened_trade is not None
@@ -54,6 +60,9 @@ def _candidate_record(setup, plan, verdict, state: dict, opened_trade: dict) -> 
     elif expiry_blocked:
         final_decision = "REJECTED_EXPIRY_DAY_CUTOFF"
         detail = f"Blocked: {expiry_blocked}"
+    elif bias_blocked:
+        final_decision = "REJECTED_BIAS_CONFLICT"
+        detail = bias_note
     elif adjusted_score < conviction_bar:
         final_decision = "REJECTED_BELOW_BAR_AFTER_ADJUSTMENT"
         detail = (
@@ -137,7 +146,8 @@ def log_cycle(snapshot, context, bias_label, bias_score, bias_reasons, banknifty
         "opening_gap": opening_gap,
         "volume_profile": volume_profile,
         "anchored_vwap": anchored_vwap,
-        "candidates": [_candidate_record(s, p, v, state, opened_trade) for s, p, v in results[:top_n]],
+        "candidates": [_candidate_record(s, p, v, state, opened_trade, bias_label, bias_score)
+            for s, p, v in results[:top_n]],
         "trade_opened": (
             {"strike": opened_trade["strike"], "option_type": opened_trade["option_type"]}
             if opened_trade else None

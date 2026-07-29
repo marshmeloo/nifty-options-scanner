@@ -25,6 +25,32 @@ _KIND_LABELS = {
 }
 
 
+def _is_liquid_enough(q) -> bool:
+    """
+    Can this contract realistically be traded at anything near its quoted
+    price? Checks open interest, today's volume, and bid-ask spread.
+
+    Each check is skipped when its config value is None, or when the data
+    isn't available (spread needs a book, which the CSV and TradingView
+    tiers don't provide) -- a missing input must not silently reject the
+    whole chain and leave the scanner finding nothing.
+    """
+    min_oi = getattr(config, "MIN_OI_TO_TRADE", None)
+    if min_oi and (q.oi or 0) < min_oi:
+        return False
+
+    min_vol = getattr(config, "MIN_VOLUME_TO_TRADE", None)
+    if min_vol and (q.volume or 0) < min_vol:
+        return False
+
+    max_spread = getattr(config, "MAX_SPREAD_PCT", None)
+    if max_spread is not None:
+        spread = getattr(q, "spread_pct", None)
+        if spread is not None and spread > max_spread:
+            return False
+    return True
+
+
 def _level_direction(kind: str) -> str:
     """"bullish" / "bearish" / "neutral" reading of a PriceLevel kind."""
     if kind.endswith("_bullish"):
@@ -116,6 +142,14 @@ def scan(snapshot, price_levels=None, context=None) -> list:
             continue
         if getattr(config, "PREMIUM_MAX", None) is not None and q.ltp > config.PREMIUM_MAX:
             continue
+        # Liquidity screen, same placement and for the same reason as the
+        # premium filter above -- candidate selection only, never the
+        # chain itself. A tradeable premium is not a tradeable contract:
+        # without this a strike showing a plausible price on a handful of
+        # lots gets planned, sized and journalled at a fill that could
+        # not have happened.
+        if not _is_liquid_enough(q):
+            continue
 
         reasons = []
         score = 0.0
@@ -150,8 +184,18 @@ def scan(snapshot, price_levels=None, context=None) -> list:
                 )
             else:
                 magnitude = min(abs(q.oi_change_pct) / config.OI_BUILDUP_PCT, 3.0)
+                # price_change_pct is normally present whenever a buildup
+                # was classified (the classifier requires it), but it is
+                # an Optional field and a source could legally populate
+                # buildup_type without it. Formatting None here would
+                # raise, and scan() runs inside main_live's per-cycle
+                # try/except -- so a display concern would silently cost
+                # an entire decision cycle. Not worth the risk.
+                premium_note = (
+                    f"{q.price_change_pct:+.1f}%" if q.price_change_pct is not None else "n/a"
+                )
                 reasons.append(
-                    f"{label}: OI {q.oi_change_pct:+.1f}%, premium {q.price_change_pct:+.1f}% "
+                    f"{label}: OI {q.oi_change_pct:+.1f}%, premium {premium_note} "
                     f"(vs previous close -- not enough intraday history yet)"
                 )
             score += weight * magnitude
@@ -311,6 +355,51 @@ def compute_market_bias(snapshot, context=None) -> tuple:
         label = "neutral/range"
 
     return label, round(score, 2), reasons
+
+
+def bias_conflict(option_type: str, bias_label: str, bias_score: float) -> bool:
+    """
+    Does this contract bet against a STRONG top-down bias?
+
+    A CE is a bullish bet, a PE a bearish one. Only acts when the bias is
+    strong enough to be worth respecting (BIAS_STRONG_THRESHOLD) --
+    "neutral/range" gates nothing, since in a range neither side is
+    fighting the tape.
+    """
+    if bias_label is None or bias_score is None:
+        return False
+    if abs(bias_score) < getattr(config, "BIAS_STRONG_THRESHOLD", 1.5):
+        return False
+    if bias_label == "bullish" and option_type == "PE":
+        return True
+    if bias_label == "bearish" and option_type == "CE":
+        return True
+    return False
+
+
+def apply_bias_gate(setup, bias_label: str, bias_score: float) -> tuple:
+    """
+    Returns (blocked, score_penalty, note).
+
+    Called at decision time rather than inside scan(), so the raw score
+    stays a pure read of the contract's own evidence and the bias
+    adjustment is visible as a separate, auditable step -- the same
+    reasoning behind keeping the learned tag adjustment out of the raw
+    score.
+    """
+    mode = getattr(config, "BIAS_GATING_MODE", "off")
+    if mode == "off" or not bias_conflict(setup.option_type, bias_label, bias_score):
+        return False, 0.0, None
+
+    side = "bullish" if setup.option_type == "CE" else "bearish"
+    note = (
+        f"{setup.option_type} is a {side} bet against a {bias_label} market bias "
+        f"(score {bias_score:+.2f})"
+    )
+    if mode == "block":
+        return True, 0.0, note + " -- blocked by BIAS_GATING_MODE=block"
+    penalty = getattr(config, "BIAS_CONFLICT_PENALTY", 1.0)
+    return False, penalty, note + f" -- score reduced by {penalty}"
 
 
 def tag_bias_conflicts(results) -> None:

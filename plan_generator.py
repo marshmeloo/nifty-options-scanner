@@ -67,7 +67,13 @@ def build_plan(snapshot, setup, atr=None) -> TradePlan:
     if quote is None:
         raise ValueError("Matching option quote not found in snapshot for this setup")
 
-    entry = quote.ltp
+    # Opening a long position crosses the ASK, not the last traded price.
+    use_book = getattr(config, "USE_BID_ASK_FILLS", False) and quote.has_book
+    entry = quote.buy_price if use_book else quote.ltp
+    entry_basis = (
+        f"ask {quote.ask} (bid {quote.bid}, spread {quote.spread_pct}%)"
+        if use_book else f"LTP {quote.ltp} (no book available from this source)"
+    )
     risk_per_unit, stop_basis = _stop_distance(entry, quote, atr)
     stop = round(max(0.05, entry - risk_per_unit), 2)
     risk_per_unit = entry - stop  # recompute after the floor/rounding
@@ -107,4 +113,5 @@ def build_plan(snapshot, setup, atr=None) -> TradePlan:
         risk_pct_of_capital=risk_pct_of_capital,
         risk_level=risk_level,
         stop_basis=stop_basis,
+        entry_basis=entry_basis,
     )

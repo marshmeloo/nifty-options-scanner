@@ -38,6 +38,38 @@ class OptionQuote:
     oi_change_pct_intraday: Optional[float] = None
     price_change_pct_intraday: Optional[float] = None
     buildup_window_minutes: Optional[float] = None   # actual span the intraday deltas cover
+    # Top of book. LTP is the last TRADED price -- it can be stale, and
+    # it sits on whichever side that trade happened to hit. A buyer pays
+    # the ask and a seller receives the bid, so marking both legs at LTP
+    # builds a systematic optimistic bias into every recorded outcome.
+    # None where the source doesn't publish a book (CSV / TradingView),
+    # in which case callers fall back to LTP and say so.
+    bid: Optional[float] = None
+    ask: Optional[float] = None
+    bid_qty: Optional[int] = None
+    ask_qty: Optional[int] = None
+
+    @property
+    def has_book(self) -> bool:
+        return bool(self.bid and self.ask and self.ask >= self.bid)
+
+    @property
+    def buy_price(self) -> float:
+        """What it actually costs to OPEN a long position (cross the ask)."""
+        return self.ask if self.has_book else self.ltp
+
+    @property
+    def sell_price(self) -> float:
+        """What is actually received when CLOSING a long position (hit the bid)."""
+        return self.bid if self.has_book else self.ltp
+
+    @property
+    def spread_pct(self) -> Optional[float]:
+        """Bid-ask spread as a % of mid -- the single best liquidity proxy here."""
+        if not self.has_book:
+            return None
+        mid = (self.bid + self.ask) / 2
+        return round((self.ask - self.bid) / mid * 100, 2) if mid else None
     timestamp: datetime = field(default_factory=datetime.now)
 
 
@@ -143,6 +175,9 @@ class TradePlan:
     # percentage fallback and why). Recorded so a plan's geometry is
     # auditable after the fact rather than an unexplained pair of numbers.
     stop_basis: str = ""
+    # Which price the entry was struck at (ask vs LTP fallback), so a
+    # journal reader can tell a realistic fill from an optimistic one.
+    entry_basis: str = ""
 
 
 @dataclass

@@ -262,7 +262,7 @@ def run_once(expiry: str, state: dict):
     if state["opened_today"] >= config.MAX_NEW_TRADES_PER_DAY:
         log.info(f"  Daily trade cap reached ({state['opened_today']}/{config.MAX_NEW_TRADES_PER_DAY}). Not opening new trades today.")
     else:
-        new_trade = tt.try_open_new_trade(results, state, snapshot)
+        new_trade = tt.try_open_new_trade(results, state, snapshot, bias_label, bias_score)
         if new_trade:
             log.info(
                 f"  [NEW TRADE OPENED] {new_trade['strike']} {new_trade['option_type']}  "

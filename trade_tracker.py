@@ -28,11 +28,14 @@ This module:
 import json
 import os
 import logging
+import contextlib
 from pathlib import Path
 from datetime import date, datetime
 
 import config
+import costs
 import logic_version
+import scanner
 from atomic_state import atomic_write_json
 
 log = logging.getLogger("nifty_scanner")
@@ -109,7 +112,7 @@ def settle_stale_trades(state: dict, snapshot=None) -> list:
             continue
         quote = quote_lookup.get((trade["strike"], trade["option_type"]))
         if quote is not None:
-            exit_ltp = quote.ltp
+            exit_ltp = exit_price_for(quote)
             estimated = False
             price_source = "fresh quote at recovery time"
         elif trade.get("current_ltp") is not None:
@@ -135,6 +138,7 @@ def settle_stale_trades(state: dict, snapshot=None) -> list:
             f"interrupted before end-of-day settlement (e.g. a Ctrl+C or crash before 15:30). "
             f"Exit price source: {price_source}. Treat this outcome as approximate, not a confirmed exit."
         )
+        trade.update(costs.apply_to_trade(trade))
         _append_journal(trade)
         recovered.append(trade)
 
@@ -157,7 +161,31 @@ def save_open_trades(state: dict):
     atomic_write_json(OPEN_TRADES_PATH, state, indent=2)
 
 
+# When False, closing a trade computes every field as normal but writes
+# nothing to disk. Replay and tests MUST set this: they run the real
+# close path over historical or synthetic data, and without it every
+# replayed trade is appended to the live journal as though it had really
+# happened -- silently corrupting the trade record that all performance
+# analysis depends on. Use the journal_writes_disabled() context manager
+# rather than setting this directly.
+JOURNAL_WRITES_ENABLED = True
+
+
+@contextlib.contextmanager
+def journal_writes_disabled():
+    """Run close/settle logic without persisting anything to the journal."""
+    global JOURNAL_WRITES_ENABLED
+    previous = JOURNAL_WRITES_ENABLED
+    JOURNAL_WRITES_ENABLED = False
+    try:
+        yield
+    finally:
+        JOURNAL_WRITES_ENABLED = previous
+
+
 def _append_journal(entry: dict):
+    if not JOURNAL_WRITES_ENABLED:
+        return
     with open(JOURNAL_PATH, "a") as f:
         f.write(json.dumps(entry) + "\n")
 
@@ -293,10 +321,19 @@ def rr_milestone_stats(limit=None) -> dict:
         # decides it. Still a simulation: it assumes a fill exactly at
         # target and that reaching the level early wouldn't have changed
         # anything afterwards.
-        simulated = [
-            m if e["max_r_reached"] >= m else (e.get("r_at_exit") or 0.0)
-            for e in entries
-        ]
+        #
+        # NET of costs wherever the trade recorded them. Costs are close
+        # to a fixed R-charge per round trip, so they penalise LOW targets
+        # disproportionately -- the charge is amortised over a smaller
+        # win. Comparing targets on gross numbers therefore flatters the
+        # low ones and would push the choice in the wrong direction.
+        simulated = []
+        for e in entries:
+            cost_r = e.get("cost_r") or 0.0
+            if e["max_r_reached"] >= m:
+                simulated.append(m - cost_r)
+            else:
+                simulated.append(e.get("r_at_exit_net", e.get("r_at_exit") or 0.0))
         milestones.append({
             "r": m,
             "reached": reached,
@@ -538,6 +575,18 @@ def open_new_trade(setup, plan, snapshot) -> dict:
     }
 
 
+def exit_price_for(quote) -> float:
+    """
+    What closing a LONG position in this contract would actually realise:
+    the bid, not the last traded price. Falls back to LTP when the source
+    publishes no book. Used for marking open trades AND for target/stop
+    checks -- a stop that triggers on an unreachable LTP is not a stop.
+    """
+    if getattr(config, "USE_BID_ASK_FILLS", False) and getattr(quote, "has_book", False):
+        return quote.sell_price
+    return quote.ltp
+
+
 def _pnl_inr(entry: float, exit_or_current: float, lots: int) -> float:
     """
     P&L in rupees for a long option position: (price move) * lot size *
@@ -567,7 +616,7 @@ def update_open_trades(state: dict, snapshot) -> list:
             still_open.append(trade)
             continue
 
-        current_ltp = quote.ltp
+        current_ltp = exit_price_for(quote)
         _update_excursion(trade, current_ltp, snapshot.timestamp)
 
         outcome = None
@@ -584,6 +633,7 @@ def update_open_trades(state: dict, snapshot) -> list:
             trade["pnl_inr"] = _pnl_inr(trade["entry"], current_ltp, trade["lots"])
             trade.update(_excursion_summary(trade))
             trade["lesson"] = _build_lesson(trade, outcome)
+            trade.update(costs.apply_to_trade(trade))
             _append_journal(trade)
             if outcome == "LOSS":
                 _record_stop_cooldown(state, trade)
@@ -622,7 +672,7 @@ def force_close_end_of_day(state: dict, snapshot) -> list:
             exit_ltp = trade["entry"]
             trade["exit_price_estimated"] = True
         else:
-            exit_ltp = quote.ltp
+            exit_ltp = exit_price_for(quote)
             trade["exit_price_estimated"] = False
             _update_excursion(trade, exit_ltp, snapshot.timestamp)  # in case this final tick is a new high/low not yet captured
 
@@ -635,6 +685,7 @@ def force_close_end_of_day(state: dict, snapshot) -> list:
         trade["lesson"] = _build_lesson(trade, "EOD_CLOSE")
         if trade["exit_price_estimated"]:
             trade["lesson"] += " NOTE: exit price could not be confirmed at close -- this P&L is an estimate, not a confirmed outcome."
+        trade.update(costs.apply_to_trade(trade))
         _append_journal(trade)
         closed.append(trade)
     state["trades"] = []
@@ -747,7 +798,7 @@ def _record_stop_cooldown(state: dict, trade: dict):
     )
 
 
-def try_open_new_trade(setups_with_plans, state, snapshot):
+def try_open_new_trade(setups_with_plans, state, snapshot, bias_label=None, bias_score=None):
     """
     setups_with_plans: list of (Setup, TradePlan, RiskVerdict), best-first.
     Opens AT MOST ONE new trade per cycle, only if: daily cap not reached,
@@ -774,7 +825,19 @@ def try_open_new_trade(setups_with_plans, state, snapshot):
         if blocked:
             continue
 
+        # Top-down bias gate. Applied AFTER the raw score so the score
+        # stays a pure read of the contract's own evidence, and the bias
+        # adjustment shows up as its own auditable step.
+        bias_blocked, bias_penalty, bias_note = scanner.apply_bias_gate(
+            setup, bias_label, bias_score
+        )
+        if bias_blocked:
+            continue
+
         adjusted_score, learn_notes = apply_learned_adjustment(setup.score, setup.reasons)
+        adjusted_score = round(adjusted_score - bias_penalty, 2)
+        if bias_note:
+            learn_notes = list(learn_notes) + [bias_note]
         if adjusted_score < conviction_bar:
             continue
 

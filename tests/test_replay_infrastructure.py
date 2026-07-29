@@ -229,6 +229,43 @@ def test_replay_of_empty_day_is_safe(snapshot_dir):
     assert result["opened"] == []
 
 
+def test_replay_never_writes_to_the_live_journal(snapshot_dir, tmp_path):
+    """
+    Replay exercises the REAL close/settle path, which appends to
+    logs/trade_journal.jsonl. Before this was guarded, replaying history
+    silently wrote replayed trades into the live trade record as though
+    they had really happened -- 35 synthetic entries landed in the real
+    journal during development, corrupting the exact dataset every
+    performance conclusion is drawn from.
+    """
+    import replay
+    import trade_tracker as tt
+
+    journal = tmp_path / "trade_journal.jsonl"
+    journal.write_text("")
+
+    original = tt.JOURNAL_PATH
+    tt.JOURNAL_PATH = journal
+    try:
+        for minute in range(0, 40, 5):
+            sr.record(_snapshot(ts=datetime.datetime(2026, 7, 28, 11, minute)), _candles(12), "v1")
+        replay.replay_day("2026-07-28")
+    finally:
+        tt.JOURNAL_PATH = original
+
+    assert journal.read_text() == "", "replay must not append anything to the journal"
+
+
+def test_journal_writes_resume_after_replay(snapshot_dir, tmp_path):
+    """The suppression must be scoped, not sticky -- live trading still journals."""
+    import replay
+    import trade_tracker as tt
+
+    sr.record(_snapshot(), _candles(12), "v1")
+    replay.replay_day("2026-07-28")
+    assert tt.JOURNAL_WRITES_ENABLED is True, "flag must be restored after replay"
+
+
 def test_compare_reports_added_and_removed_trades():
     import replay
     baseline = {"logic_version": "a", "opened": [
