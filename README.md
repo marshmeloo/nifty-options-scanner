@@ -69,6 +69,9 @@ Pipeline: `SCAN -> SIGNALS -> PLAN -> RISK -> DECISION`
 | `config.py` | Every threshold and risk parameter — tune to your own setup |
 | `tests/` | Regression tests pinning the 2026-07-28 scoring/risk/OI-freshness fixes (`python -m pytest tests/ -q`) |
 | `dedupe_journal.py` | One-off repair: removes duplicate `trade_journal.jsonl` entries left by the pre-fix recovery bug (dry-run by default, backs up before writing) |
+| `snapshot_recorder.py` | Records the raw chain + candles behind every cycle, so any future logic version can be replayed against identical history |
+| `replay.py` | Re-runs the pipeline over recorded history; diffs two logic versions; forward-return evaluation of every candidate |
+| `logic_version.py` | Fingerprints the decision-relevant config + git SHA so results are never pooled across versions |
 
 ## Setup
 
@@ -943,6 +946,89 @@ to Dhan directly:
 Each tier has a cooldown after a failure so a genuinely-down source
 doesn't add latency/log-noise to every 30s poll — see
 `FALLBACK_RETRY_COOLDOWN_SECONDS` in `config.py`.
+
+## How do we know if a change helped? (measurement methodology)
+
+A fair question once the system starts changing regularly: if the logic
+is edited every few sessions, what is any performance number actually
+measuring?
+
+**The uncomfortable arithmetic first.** With a per-trade R standard
+deviation around 1.0 and roughly 4 trades a day, distinguishing a real
+edge from zero at conventional confidence needs:
+
+| Detect | Trades | At ~4/day |
+|---|---|---|
+| 0.10R edge | 784-1,129 | **196-282 trading days** |
+| 0.05R edge | 3,136-4,516 | 784-1,129 trading days |
+
+So forward-testing alone cannot answer the question: nobody leaves logic
+untouched for 200 sessions, and shouldn't. Three problems compound it --
+the instrument and the subject change together, every fix is fitted to
+the most recent failure, and only ~4 of the 12-15 candidates evaluated
+each day are ever measured at all.
+
+**The fix is to stop welding data collection to decision logic.**
+
+- `snapshot_recorder.py` records the full option chain + candles behind
+  every cycle to `logs/snapshots/YYYYMMDD.jsonl.gz` (~1.5 MB/day
+  gzipped). Market history now accumulates regardless of what the code
+  does. Recording is best-effort and can never interrupt the live loop.
+- `replay.py` re-runs `scan -> plan -> risk -> decision` over recorded
+  cycles using whatever the logic currently is, and can diff two runs:
+
+  ```bash
+  python3 replay.py --day 2026-07-28 --save baseline.json
+  # ...change something...
+  python3 replay.py --day 2026-07-28 --compare baseline.json
+  ```
+
+  Output states plainly which trades are no longer opened, which are
+  newly opened, and which kept the same entry but changed geometry.
+- `logic_version.py` stamps every decision-log record and journal entry
+  with a hash of the decision-relevant config plus the git SHA, so
+  results from different versions can never be silently pooled. Purely
+  operational settings (poll intervals, cache durations) are excluded on
+  purpose -- they can't change a trade, so churning the version on them
+  would fragment samples for nothing.
+- `replay.py --forward-returns` evaluates the forward return of **every**
+  candidate the scanner flagged, not just the ones traded. That is the
+  only way to learn whether rejections are good rejections, and it turns
+  ~4 observations a day into hundreds.
+
+### What replay does NOT do
+
+It is **not** a backtest and must never be reported as one. Replaying a
+handful of recorded days while tweaking logic is textbook overfitting --
+run enough variants and something will look good on two sessions.
+
+What it legitimately buys: regression safety (did this change alter
+decisions I didn't intend?) and cheap rejection (a variant that's worse
+on recorded history is unlikely to be better live). Confirming an edge
+still requires out-of-sample forward sessions. Replay makes rejection
+fast; only forward data confirms.
+
+Replay also reproduces the decision path, not execution -- fills are
+modelled at recorded LTP, so replayed P&L carries the same optimistic
+bias as the live journal until bid/ask and costs land. Treat it as an
+upper bound.
+
+### Two classes of change
+
+Not every edit resets the evidence base, and conflating them causes
+needless paralysis:
+
+- **Correctness fixes** restore intended behaviour (the dead circuit
+  breaker, the structure-score ratchet, duplicate journalling). These
+  don't invalidate a strategy hypothesis -- they mean prior data was
+  measuring a broken implementation, so that data should be *discarded*,
+  not re-baselined. Nearly everything fixed on 2026-07-28 is this class,
+  which is why changing a lot at once was defensible: repair, not tuning.
+- **Strategy changes** alter the hypothesis (target R-multiple,
+  conviction bar, new signals). These need the metric and required
+  sample written down *before* the change, and a freeze while it's
+  collected. Otherwise it's a search over variants, and the winner is
+  whichever one best fits recent noise.
 
 ## Architecture
 

@@ -31,6 +31,8 @@ import opening_gap
 import decision_log
 import volume_profile as vp
 import anchored_vwap as avwap
+import snapshot_recorder
+import logic_version
 
 POLL_INTERVAL_SECONDS = 30   # OI/IV don't move meaningfully faster than this
 MARKET_OPEN = dtime(9, 15)
@@ -135,6 +137,11 @@ def run_once(expiry: str, state: dict):
         candles = get_nifty_intraday_candles()
         price_levels, context = analyze_with_context(candles)
         atr = compute_atr(candles)
+        # Record the raw inputs behind this cycle BEFORE any decision is
+        # taken, so the recorded history is exactly what the logic saw.
+        # Only on full cycles -- the 5s fast check doesn't come through
+        # here, which keeps the recording cadence at the scan interval.
+        snapshot_recorder.record(snapshot, candles, logic_version.compute())
         if atr is not None:
             log.info(f"  ATR({config.ATR_PERIOD}): {atr} pts -- stop/target sized from this")
         if price_levels:

@@ -69,6 +69,23 @@ LONG_UNWINDING_SCORE = -0.5     # price down + OI down: longs capitulating, bear
 DEFAULT_STOP_LOSS_PCT = 30.0    # % of premium, used only if no explicit stop is computed
 DEFAULT_TARGET_RR = 2.0         # target expressed as reward:risk multiple of the stop distance
 
+# --- Snapshot recording (see snapshot_recorder.py / replay.py) ---
+# Records the raw option chain + candles behind every decision cycle, so
+# any future version of the decision logic can be replayed against the
+# same market history offline.
+#
+# Why this is on by default: without it, data collection and decision
+# logic are welded together -- the only way to gather evidence is to run
+# the live logic, so every change to that logic throws away all prior
+# evidence. At ~4 trades/day and a per-trade R standard deviation near
+# 1.0, proving an edge forward would take 800+ trades (~200 trading days)
+# of UNCHANGED logic. Recording decouples the two: history accumulates no
+# matter what the code does.
+#
+# Cost is ~9 MB/day raw, roughly 1 MB/day gzipped at a 30s cadence.
+# Recording is best-effort and can never interrupt the live loop.
+RECORD_SNAPSHOTS = True
+
 # --- R-multiple milestone tracking ---
 # "R" is the trade's own risk unit: 1R = entry - stop. A trade that gains
 # exactly its risk distance has reached +1.0R. DEFAULT_TARGET_RR above is

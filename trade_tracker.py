@@ -32,6 +32,7 @@ from pathlib import Path
 from datetime import date, datetime
 
 import config
+import logic_version
 from atomic_state import atomic_write_json
 
 log = logging.getLogger("nifty_scanner")
@@ -514,6 +515,10 @@ def open_new_trade(setup, plan, snapshot) -> dict:
         "stop_basis": getattr(plan, "stop_basis", ""),
         "lots": plan.lots,
         "score_at_entry": setup.score,
+        # Which logic version opened this trade. Without it, journal
+        # statistics silently average across incompatible versions of the
+        # system -- see logic_version.py.
+        "logic_version": logic_version.compute(),
         "reasons_at_entry": list(setup.reasons),
         "reason_tags": _reason_tags(setup.reasons),
         "status": "OPEN",

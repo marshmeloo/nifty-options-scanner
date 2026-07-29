@@ -21,6 +21,7 @@ from datetime import datetime
 
 import config
 import trade_tracker as tt
+import logic_version
 
 LOG_PATH = Path(__file__).parent / "logs" / "decision_log.jsonl"
 LOG_PATH.parent.mkdir(exist_ok=True)
@@ -101,6 +102,10 @@ def log_cycle(snapshot, context, bias_label, bias_score, bias_reasons, banknifty
 
     record = {
         "timestamp": snapshot.timestamp.isoformat(),
+        # Fingerprint of the logic that produced this decision. Results
+        # from different versions must never be pooled -- a win rate
+        # averaged across a threshold change measures nothing.
+        "logic_version": logic_version.compute(),
         "spot": snapshot.spot,
         "vwap": snapshot.vwap,
         "pcr": snapshot.pcr,

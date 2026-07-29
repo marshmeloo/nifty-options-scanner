@@ -11,6 +11,9 @@ nifty_scan_*.log
 trade_journal.jsonl
 # dedupe_journal.py backups -- real trade records, never commit
 *.bak-*
+# Recorded market history (~1.5 MB/day gzipped). This is valuable data --
+# back it up somewhere, just not in git.
+logs/snapshots/
 cmd-print-*.txt
 sample_data.csv
 state/*.json
