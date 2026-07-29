@@ -951,6 +951,39 @@ Each tier has a cooldown after a failure so a genuinely-down source
 doesn't add latency/log-noise to every 30s poll — see
 `FALLBACK_RETRY_COOLDOWN_SECONDS` in `config.py`.
 
+## Fixed: 2026-07-29 -- condor never opened, "not the day after expiry" every cycle
+
+`main_condor.py`'s `is_day_after_expiry()` could structurally never
+return `True`. It compared today's date against
+`get_nearest_expiry()`'s return value -- but that function only ever
+returns an ACTIVE/UPCOMING expiry (Dhan's expirylist endpoint doesn't
+list past ones), so that date is always today-or-future.
+`days_since_expiry = today - expiry_date` was therefore always <= 0,
+and the intended `1 <= days_since_expiry <= 3` window could never be
+hit. The condor strategy logged "Not the day after expiry" every single
+cycle, forever, and never staged a position.
+
+There's no API that hands back the previously-settled expiry directly,
+so it's now derived from state (`state/condor_expiry_tracking.json`):
+whenever the value `get_nearest_expiry()` returns CHANGES from what was
+last observed, that change is itself the signal that the old value
+just settled. The old "current" becomes "previous" and stays frozen
+there (not overwritten again) until the next rollover, which is what
+keeps the 1-3 day grace window working across multiple days -- e.g. if
+staging fails on the rollover day itself (missing a leg in the chain),
+the next day's check still has the right previous expiry to retry
+against. Never assumes a fixed 7-day cycle, so a holiday-shifted or
+monthly-special expiry needs no special handling -- same philosophy as
+`premarket.py`'s expiry handling elsewhere in this project. Also safe
+after a long outage: a previous expiry reconstructed from weeks ago
+naturally falls outside the 1-3 day window rather than misfiring.
+
+Verified against the exact expiry-day transition: the check correctly
+stays `False` on expiry day itself (that's the day *of* expiry, not
+after) and flips `True` the very next day. 8 new tests covering first-run,
+grace-window persistence, window closing after day 3, long-outage safety,
+and holiday-shifted expiries.
+
 ## Execution realism: costs, fills, liquidity, and the bias gate
 
 Four fixes from a pipeline audit. The first three all make recorded

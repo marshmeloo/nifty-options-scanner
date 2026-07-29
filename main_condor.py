@@ -24,6 +24,7 @@ Run:
   python3 main_condor.py
 """
 
+import json
 import time
 import logging
 from datetime import datetime, time as dtime
@@ -37,6 +38,7 @@ import condor_plan_generator
 import condor_risk_checker
 import condor_tracker
 import trade_staging as staging
+from atomic_state import atomic_write_json
 
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
@@ -44,6 +46,10 @@ MARKET_CLOSE = dtime(15, 30)
 LOG_DIR = Path(__file__).parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 log_path = LOG_DIR / f"condor_{datetime.now().strftime('%Y%m%d')}.log"
+
+STATE_DIR = Path(__file__).parent / "state"
+STATE_DIR.mkdir(exist_ok=True)
+EXPIRY_TRACKING_PATH = STATE_DIR / "condor_expiry_tracking.json"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -60,18 +66,60 @@ def market_is_open(now: datetime = None) -> bool:
     return MARKET_OPEN <= now.time() <= MARKET_CLOSE
 
 
-def is_day_after_expiry(expiry_str: str) -> bool:
+def _load_expiry_tracking() -> dict:
+    if EXPIRY_TRACKING_PATH.exists():
+        try:
+            return json.loads(EXPIRY_TRACKING_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"current_expiry": None, "previous_expiry": None}
+
+
+def is_day_after_expiry(nearest_upcoming_expiry: str) -> bool:
     """
-    True if the most recently passed expiry was yesterday (the last
-    trading day) -- i.e. today is the first day of a fresh weekly cycle.
-    Determined from the actual expiry date the API returns, same
-    approach as premarket.py's expiry handling -- NSE has moved NIFTY's
-    weekly expiry weekday more than once, so this doesn't hardcode one.
-    Approximation: doesn't account for holidays between expiry and today.
+    True if the most recently PASSED expiry was within the last 1-3 days
+    -- i.e. today is (close to) the first day of a fresh weekly cycle.
+
+    BUG FIXED 2026-07-29: this used to receive the same value as
+    `nearest_upcoming_expiry` and compare it directly against today. But
+    Dhan's expirylist endpoint (get_nearest_expiry) only ever returns
+    ACTIVE/UPCOMING expiries -- so that date is always today-or-future,
+    days_since_expiry = today - expiry_date was therefore always <= 0,
+    and `1 <= days_since_expiry <= 3` could structurally never be True.
+    The condor strategy could never open a position; every cycle logged
+    "Not the day after expiry."
+
+    There is no API that returns the PREVIOUS (already-settled) expiry
+    directly, so it's derived from state: every time the value
+    get_nearest_expiry() returns CHANGES from what was last observed,
+    that change itself is the signal that the old value just settled.
+    The old "current" becomes the new "previous", and stays frozen there
+    (not overwritten again) until the NEXT rollover, which is what keeps
+    the 1-3 day grace window working across multiple cycles/days -- e.g.
+    if staging fails on the day of rollover itself, the next day's check
+    still has access to the same previous_expiry to retry against.
+
+    Self-corrects to whatever NSE's actual expiry calendar is (including
+    holiday-shifted or monthly-special expiries) since it never assumes
+    a fixed cycle length -- same philosophy as premarket.py's expiry
+    handling. Also naturally safe after a long outage: if the loop was
+    down for weeks, the "previous_expiry" it reconstructs on resuming
+    will be however-many-weeks-old, `days_since_expiry` will be large,
+    and the 1-3 day check correctly returns False rather than misfiring.
     """
-    expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+    state = _load_expiry_tracking()
+
+    if state["current_expiry"] != nearest_upcoming_expiry:
+        state["previous_expiry"] = state["current_expiry"]
+        state["current_expiry"] = nearest_upcoming_expiry
+        atomic_write_json(EXPIRY_TRACKING_PATH, state)
+
+    if not state["previous_expiry"]:
+        return False  # no prior expiry on record yet (e.g. first-ever run)
+
+    previous_expiry_date = datetime.strptime(state["previous_expiry"], "%Y-%m-%d").date()
     today = datetime.now().date()
-    days_since_expiry = (today - expiry_date).days
+    days_since_expiry = (today - previous_expiry_date).days
     return 1 <= days_since_expiry <= 3  # covers a weekend sitting between Tue expiry and Wed/Mon open
 
 
