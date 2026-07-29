@@ -224,3 +224,45 @@ class CondorPosition:
     exit_credit_inr: float = None   # what it cost to buy back (or 0 if let expire worthless -- the good outcome)
     pnl_inr: float = None
     pnl_pct_of_max_profit: float = None
+
+
+@dataclass
+class DirectionalSpreadPlan:
+    """
+    A proposed single-sided credit spread: sell one strike, buy a
+    further-OTM strike on the SAME side as protection. Bull put spread
+    (direction="PE") when the market bias is bullish -- profits if spot
+    stays above the short strike. Bear call spread (direction="CE") when
+    bearish -- profits if spot stays below it. Unlike CondorPlan (which
+    is market-neutral, both sides), this is a directional bet: it wins
+    on being right about which way price goes, not on price staying in
+    a range. See directional_spread_scanner.py for how the side is
+    chosen and directional_spread_plan_generator.py for how this is
+    priced.
+    """
+    expiry: str
+    direction: str              # "PE" (bull put spread) | "CE" (bear call spread)
+    bias_label: str             # the market_bias read that produced this trade, for audit
+    bias_score: float
+    short_strike: float
+    short_premium: float
+    hedge_strike: float
+    hedge_premium: float
+    lots: int
+    net_credit: float           # per share -- multiply by lot_size*lots for rupees
+    net_credit_inr: float
+    max_loss_inr: float
+    max_profit_inr: float       # = net_credit_inr (full credit retained if spot never breaches the short strike)
+    breakeven: float
+
+
+@dataclass
+class DirectionalSpreadPosition:
+    """Live-tracked state of an OPEN directional spread."""
+    plan: DirectionalSpreadPlan
+    opened_at: str
+    status: str = "OPEN"        # "OPEN" | "CLOSED" | "EXPIRED"
+    closed_at: str = None
+    close_reason: str = None    # "profit_target" | "stop_loss" | "expiry_settlement" | "breach_close" | "manual"
+    pnl_inr: float = None
+    pnl_pct_of_max_profit: float = None

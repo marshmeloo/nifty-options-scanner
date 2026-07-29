@@ -64,6 +64,13 @@ Pipeline: `SCAN -> SIGNALS -> PLAN -> RISK -> DECISION`
 | `condor_tracker.py` | Mark-to-market, breach-warning staging, expiry settlement |
 | `main_condor.py` | Standalone live loop for the condor strategy -- run alongside main_live.py |
 | `open_approved_condor.py` | Opens a condor exactly as staged + approved (see below) |
+| `config_directional_spread.py` | Dedicated config for the (separate) directional credit-spread strategy |
+| `directional_spread_scanner.py` | Picks a side (PE/CE) from market bias, finds the short strike + hedge leg |
+| `directional_spread_plan_generator.py` | Prices the 2-leg spread: net credit, max profit/loss, breakeven |
+| `directional_spread_risk_checker.py` | Concurrency/daily-cap/credit/capital-at-risk gate for opening a spread |
+| `directional_spread_tracker.py` | Mark-to-market, profit-target/stop-loss auto-exit, breach staging, expiry settlement |
+| `main_directional_spread.py` | Standalone live loop for the directional spread strategy -- run alongside main_live.py |
+| `open_approved_directional_spread.py` | Opens a directional spread exactly as staged + approved |
 | `data_source.py` | CSV-based snapshot loader (offline/testing) |
 | `models.py` | Shared dataclasses (snapshot, setup, plan, verdict) |
 | `config.py` | Every threshold and risk parameter — tune to your own setup |
@@ -920,6 +927,74 @@ Config to review before running this for real: `config_condor.py`'s
 `MAX_CAPITAL_AT_RISK`, and `MIN_NET_CREDIT` are starting assumptions, not
 researched optima -- tune them once you've seen real premium/strike data
 for a few cycles.
+
+## Directional credit spread strategy (a THIRD, separate strategy)
+
+Prompted by looking at a third-party marketplace "credit spread
+overnight" product and deciding to build an in-house equivalent instead
+of paying to deploy something with no visible logic. Where that
+evaluation actually landed: the vendor page exposed nothing beyond a
+single unqualified "39.63% (3 month)" return figure -- no drawdown, no
+trade count, no win rate, every performance tab gated behind login --
+and sibling strategies from the same shop on the same page, same
+instrument, same window ranged from -22% to +89%. That dispersion is the
+signature of small-sample noise, not demonstrated edge, and it's exactly
+what this project's own measurement tooling (costs, R-multiples, shadow
+replay) exists to stop us from fooling ourselves with on our own trades.
+Better to build a version we can actually audit and shadow-test.
+
+`main_directional_spread.py` is a third independent strategy alongside
+the momentum scanner and the iron condor, with its own state
+(`state/directional_spread_position.json`), journal
+(`logs/directional_spread_journal.jsonl`), and config
+(`config_directional_spread.py`).
+
+**How it differs from the iron condor, which it otherwise closely
+resembles in structure**: the condor is market-NEUTRAL (sells both a
+call spread and a put spread, wins if spot stays in a range), opens once
+a week, and runs to expiry unless breached. This strategy is
+DIRECTIONAL -- it sells only ONE side, chosen by `scanner.compute_market_bias()`
+(the same top-down bullish/bearish/range read that gates the momentum
+scanner's counter-bias candidates): bullish sells a **bull put spread**
+(short PE, wins if spot doesn't fall through the short strike), bearish
+sells a **bear call spread** (short CE, wins if spot doesn't rise
+through it). A neutral or weak bias picks no side at all -- there's no
+directional edge to sell against, so no trade. It can open on any day
+the bias reads strongly enough (checked every 30s, matching the momentum
+scanner's cadence, not just once a week like the condor), and rather
+than running to expiry it's **actively managed**: closes automatically
+at `PROFIT_TARGET_PCT_OF_MAX_PROFIT` (default 60%) of the max credit
+captured, or `STOP_LOSS_PCT_OF_MAX_LOSS` (default 50%) of the max
+possible loss -- standard credit-spread practice, since the bulk of
+theta decay is captured well before expiry and holding for the last few
+points disproportionately extends overnight gap-risk for little extra
+reward. A breach warning (spot within `BREACH_WARNING_BUFFER_POINTS` of
+the short strike) still stages for human review rather than
+auto-closing, same reasoning as the condor's identical mechanism.
+
+**Opening a position is the same two-step, human-approved process** as
+the condor: `main_directional_spread.py` stages a candidate via
+`trade_staging.py`, you review with `approve_orders.py`, then
+`open_approved_directional_spread.py` opens EXACTLY the plan you
+reviewed. Expiry settlement falls back to intrinsic value when a leg's
+quote is unavailable, same as the condor.
+
+Verified end-to-end against 2026-07-29's actual recorded market data
+(742 cycles): every bias score that day topped out at 1.5, never
+clearing this strategy's `BIAS_STRONG_THRESHOLD` of 2.0, so it correctly
+would have opened nothing all session -- a deliberately higher bar than
+the momentum scanner's counter-bias penalty threshold, since selling
+naked-side premium against a read deserves more confidence than merely
+penalising a candidate that opposes it. 30 tests cover direction
+selection, strike/hedge selection, plan pricing for both spread types,
+all four risk gates, and the full position lifecycle (open ->
+mark-to-market -> profit target / stop loss / breach warning / expiry
+settlement with intrinsic-value fallback).
+
+Config to review before running this for real, same caveat as the
+condor's: `config_directional_spread.py`'s `HEDGE_DISTANCE_POINTS`,
+`BIAS_STRONG_THRESHOLD`, `MAX_CAPITAL_AT_RISK`, and the profit-target/
+stop-loss percentages are starting assumptions, not researched optima.
 
 ## Order execution (placeholder, not active)
 
