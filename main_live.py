@@ -33,6 +33,7 @@ import volume_profile as vp
 import anchored_vwap as avwap
 import snapshot_recorder
 import logic_version
+import workspace
 
 POLL_INTERVAL_SECONDS = 30   # OI/IV don't move meaningfully faster than this
 MARKET_OPEN = dtime(9, 15)
@@ -367,6 +368,22 @@ def check_open_trades_fast(state: dict, expiry: str):
 
 
 def run_forever():
+    # Which checkout is this, and is it running released code? A live
+    # session started from the development checkout would write real
+    # trades into a journal that is only ever a COPY of production's --
+    # silently splitting the trade record across two places. Warn loudly
+    # rather than refuse: someone may legitimately be testing the loop.
+    ws = workspace.role()
+    git = workspace.git_state()
+    log.info(f"Workspace: {ws.upper()}  |  git {git['branch']} @ {git['commit']}"
+             + ("  [UNCOMMITTED CHANGES]" if git["dirty"] else ""))
+    if ws == workspace.DEVELOPMENT:
+        log.info("  WARNING: running a live session from the DEVELOPMENT checkout. Trades "
+                 "journalled here will not be in production's record.")
+    if ws == workspace.PRODUCTION and git["branch"] != "master":
+        log.info(f"  WARNING: production is on '{git['branch']}', not master -- this session "
+                 f"is running unreleased code.")
+
     log.info("Fetching nearest expiry...")
     expiry = get_nearest_expiry()
     log.info(f"Tracking expiry: {expiry}. Polling every {POLL_INTERVAL_SECONDS}s during market hours.")

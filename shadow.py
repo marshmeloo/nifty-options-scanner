@@ -46,7 +46,7 @@ suggestive-not-conclusive for accepting them. Same rule as replay.py.
 import argparse
 import statistics
 from collections import defaultdict
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, time as dtime
 from typing import Optional
 

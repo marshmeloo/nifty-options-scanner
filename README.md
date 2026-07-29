@@ -73,6 +73,9 @@ Pipeline: `SCAN -> SIGNALS -> PLAN -> RISK -> DECISION`
 | `replay.py` | Re-runs the pipeline over recorded history; diffs two logic versions; forward-return evaluation of every candidate |
 | `logic_version.py` | Fingerprints the decision-relevant config + git SHA so results are never pooled across versions |
 | `costs.py` | Round-trip transaction costs (brokerage/STT/exchange/GST/stamp), applied at trade close so P&L is net as well as gross |
+| `shadow.py` | Simulates any trading policy (score bar, R:R, time window, stop rules) against recorded history -- answers "how would this have done?" without capital |
+| `workspace.py` | Declares whether a checkout is production or development, and warns when that's violated |
+| `sync_from_prod.py` | One-way copy of recorded data production → development |
 
 ## Setup
 
@@ -1012,6 +1015,57 @@ Counter-bias candidates are now penalised (default) or blocked, per
 in the decision log. Default is `"penalise"` rather than `"block"` on
 purpose: the bias read is itself unvalidated, and hard-blocking on an
 unvalidated signal can halve the trade count for reasons nobody notices.
+
+## Development / production split
+
+Two checkouts, with different jobs and different rules:
+
+| | PRODUCTION | DEVELOPMENT |
+|---|---|---|
+| Path | `D:\AI Projects\nifty-options-scanner` | `D:\AI Projects\option-scanner\nifty-options-scanner` |
+| Runs | the live session | analysis and experiments |
+| Owns | the real data (snapshots, journal, state) | a **copy** of it |
+| Code | released only (`master`) | branches |
+| Modified during a session | **never** | freely |
+
+Each checkout declares its role in a `.workspace` file (gitignored, since
+it is environment-specific). `python3 workspace.py` prints the role, git
+state and data inventory, and warns if production is on a non-master
+branch or has uncommitted changes.
+
+**Code flows dev → prod, data flows prod → dev.** Never the reverse of
+either.
+
+### Why a copy of the data, not a shared path
+
+Pointing development straight at production's data directory would avoid
+duplication and staleness, and was rejected deliberately. Analysis code
+changes fast and occasionally has bugs, and a single stray write into
+production's trade journal is the worst outcome this system has. That
+already happened once: `replay.py` appended 35 simulated trades to the
+real journal before the guard existed. A one-way copy cannot corrupt
+production no matter what development does; a few MB a day is a cheap
+premium.
+
+```bash
+python3 sync_from_prod.py            # pull latest data into development
+python3 sync_from_prod.py --dry-run  # see what would be copied
+```
+
+### Promoting a change to production
+
+Never mid-session -- `supervisor.py` restarts `main_live.py` on failure,
+so a file changed during market hours can be picked up on the next
+restart, swapping decision logic underneath an open position.
+
+1. Develop and test in development; `python3 -m pytest tests/ -q` green.
+2. Where the change affects decisions, replay it against recorded history
+   and diff (see the measurement section below).
+3. Merge the branch to `master` in development.
+4. **After 15:30**, in production: `git pull` (or `git merge master`),
+   confirm `python3 workspace.py` shows `master` and a clean tree.
+5. Next session starts on the new code, and its `logic_version` stamp
+   changes accordingly, so results are never pooled across the change.
 
 ## How do we know if a change helped? (measurement methodology)
 
