@@ -8,12 +8,12 @@ main_live.py in another terminal; they share the data-fetching layer
 other's state.
 
 What it does each cycle:
-  - No position open, and today looks like the right day to open one
-    (the trading day right after the previous expiry) -> scan for a
-    condor, risk-check it, and STAGE it (via trade_staging.py) for you
-    to approve. Does NOT open a position automatically -- this strategy
-    ties up real capital with defined-but-real risk, and the strike
-    selection logic hasn't been battle-tested yet.
+  - No position open -> pick the nearest expiry with at least
+    MIN_DAYS_TO_EXPIRY_TO_OPEN days left (skipping past the nearest one
+    if it's today or too close -- see choose_expiry_to_open), scan for a
+    condor, risk-check it, and open it. AUTO_APPROVE_NEW_POSITIONS
+    (config_condor.py) controls whether that happens immediately or is
+    staged for manual review via approve_orders.py first.
   - Position open -> mark it to market, check for a breach warning
     (staged for review, not auto-closed -- see config_condor.py), and on
     expiry day, settle it.
@@ -24,7 +24,6 @@ Run:
   python3 main_condor.py
 """
 
-import json
 import time
 import logging
 from datetime import datetime, time as dtime
@@ -32,13 +31,12 @@ from pathlib import Path
 from dataclasses import asdict
 
 import config_condor as ccfg
-from resilient_source import get_nifty_snapshot, get_nearest_expiry
+from resilient_source import get_nifty_snapshot, get_expiry_list
 import condor_scanner
 import condor_plan_generator
 import condor_risk_checker
 import condor_tracker
 import trade_staging as staging
-from atomic_state import atomic_write_json
 
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
@@ -46,10 +44,6 @@ MARKET_CLOSE = dtime(15, 30)
 LOG_DIR = Path(__file__).parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 log_path = LOG_DIR / f"condor_{datetime.now().strftime('%Y%m%d')}.log"
-
-STATE_DIR = Path(__file__).parent / "state"
-STATE_DIR.mkdir(exist_ok=True)
-EXPIRY_TRACKING_PATH = STATE_DIR / "condor_expiry_tracking.json"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,66 +60,34 @@ def market_is_open(now: datetime = None) -> bool:
     return MARKET_OPEN <= now.time() <= MARKET_CLOSE
 
 
-def _load_expiry_tracking() -> dict:
-    if EXPIRY_TRACKING_PATH.exists():
-        try:
-            return json.loads(EXPIRY_TRACKING_PATH.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {"current_expiry": None, "previous_expiry": None}
-
-
-def is_day_after_expiry(nearest_upcoming_expiry: str) -> bool:
+def choose_expiry_to_open(expiry_list: list, min_days_out: int, today=None) -> str:
     """
-    True if the most recently PASSED expiry was within the last 1-3 days
-    -- i.e. today is (close to) the first day of a fresh weekly cycle.
+    First expiry in `expiry_list` (nearest-first, as every source returns
+    it) with at least `min_days_out` days remaining. Returns None if
+    nothing in the list qualifies (shouldn't normally happen -- Dhan
+    lists expiries months out).
 
-    BUG FIXED 2026-07-29: this used to receive the same value as
-    `nearest_upcoming_expiry` and compare it directly against today. But
-    Dhan's expirylist endpoint (get_nearest_expiry) only ever returns
-    ACTIVE/UPCOMING expiries -- so that date is always today-or-future,
-    days_since_expiry = today - expiry_date was therefore always <= 0,
-    and `1 <= days_since_expiry <= 3` could structurally never be True.
-    The condor strategy could never open a position; every cycle logged
-    "Not the day after expiry."
-
-    There is no API that returns the PREVIOUS (already-settled) expiry
-    directly, so it's derived from state: every time the value
-    get_nearest_expiry() returns CHANGES from what was last observed,
-    that change itself is the signal that the old value just settled.
-    The old "current" becomes the new "previous", and stays frozen there
-    (not overwritten again) until the NEXT rollover, which is what keeps
-    the 1-3 day grace window working across multiple cycles/days -- e.g.
-    if staging fails on the day of rollover itself, the next day's check
-    still has access to the same previous_expiry to retry against.
-
-    Self-corrects to whatever NSE's actual expiry calendar is (including
-    holiday-shifted or monthly-special expiries) since it never assumes
-    a fixed cycle length -- same philosophy as premarket.py's expiry
-    handling. Also naturally safe after a long outage: if the loop was
-    down for weeks, the "previous_expiry" it reconstructs on resuming
-    will be however-many-weeks-old, `days_since_expiry` will be large,
-    and the 1-3 day check correctly returns False rather than misfiring.
+    REPLACES the old is_day_after_expiry() approach entirely. That one
+    only allowed opening in a narrow 1-3 day window right after the
+    PREVIOUS expiry passed (and had a bug that meant it could never fire
+    at all -- see the 2026-07-29 README entry). This is simpler and does
+    more: it allows opening on ANY day the position is flat, and
+    correctly rolls straight to next week's expiry if run on expiry day
+    itself, when the "nearest" expiry has ~0 days of theta left to sell.
+    No state tracking needed -- every cycle just asks the list directly.
     """
-    state = _load_expiry_tracking()
-
-    if state["current_expiry"] != nearest_upcoming_expiry:
-        state["previous_expiry"] = state["current_expiry"]
-        state["current_expiry"] = nearest_upcoming_expiry
-        atomic_write_json(EXPIRY_TRACKING_PATH, state)
-
-    if not state["previous_expiry"]:
-        return False  # no prior expiry on record yet (e.g. first-ever run)
-
-    previous_expiry_date = datetime.strptime(state["previous_expiry"], "%Y-%m-%d").date()
-    today = datetime.now().date()
-    days_since_expiry = (today - previous_expiry_date).days
-    return 1 <= days_since_expiry <= 3  # covers a weekend sitting between Tue expiry and Wed/Mon open
+    today = today or datetime.now().date()
+    for expiry_str in expiry_list:
+        expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+        if (expiry_date - today).days >= min_days_out:
+            return expiry_str
+    return None
 
 
 def run_once(state: dict):
-    expiry = get_nearest_expiry()
-    snapshot = get_nifty_snapshot(expiry=expiry)
+    expiry_list = get_expiry_list()
+    nearest_expiry = expiry_list[0]
+    snapshot = get_nifty_snapshot(expiry=nearest_expiry)
     ts = snapshot.timestamp.strftime("%H:%M:%S")
     log.info(f"[{ts}] ({snapshot.source}) NIFTY spot {snapshot.spot}")
 
@@ -147,39 +109,47 @@ def run_once(state: dict):
             log.info(f"  [CONDOR SETTLED] pnl Rs {closed['pnl_inr']:,.0f} ({closed['pnl_pct_of_max_profit']}% of max profit)")
         return
 
-    if is_day_after_expiry(expiry):
-        legs = condor_scanner.find_condor_legs(snapshot.chain)
-        plan = condor_plan_generator.build_condor_plan(legs, expiry)
-        verdict = condor_risk_checker.check(plan, currently_open_positions=0)
+    expiry = choose_expiry_to_open(expiry_list, ccfg.MIN_DAYS_TO_EXPIRY_TO_OPEN)
+    if expiry is None:
+        log.info("  No expiry far enough out to open against this cycle.")
+        return
+    if expiry != nearest_expiry:
+        log.info(f"  Nearest expiry {nearest_expiry} is too close (< {ccfg.MIN_DAYS_TO_EXPIRY_TO_OPEN}d) -- "
+                 f"rolling to {expiry} instead.")
+        snapshot = get_nifty_snapshot(expiry=expiry)
 
-        if plan is None:
-            log.info("  No complete condor available this cycle (missing a leg in the chain).")
-            return
+    legs = condor_scanner.find_condor_legs(snapshot.chain)
+    plan = condor_plan_generator.build_condor_plan(legs, expiry)
+    verdict = condor_risk_checker.check(plan, currently_open_positions=0)
 
-        log.info(
-            f"  Candidate condor: sell {plan.short_ce_strike}CE/{plan.short_pe_strike}PE, "
-            f"hedge {plan.hedge_ce_strike}CE/{plan.hedge_pe_strike}PE  "
-            f"net credit Rs {plan.net_credit_inr:,.0f}  max loss Rs {plan.max_loss_inr:,.0f}"
+    if plan is None:
+        log.info("  No complete condor available this cycle (missing a leg in the chain).")
+        return
+
+    log.info(
+        f"  Candidate condor: sell {plan.short_ce_strike}CE/{plan.short_pe_strike}PE, "
+        f"hedge {plan.hedge_ce_strike}CE/{plan.hedge_pe_strike}PE  "
+        f"net credit Rs {plan.net_credit_inr:,.0f}  max loss Rs {plan.max_loss_inr:,.0f}"
+    )
+    log.info(f"  Risk check: {verdict.decision} -- {'; '.join(verdict.reasons) if verdict.reasons else 'all checks passed'}")
+
+    if verdict.decision == "APPROVED":
+        detail = (
+            f"Open condor: sell {plan.short_ce_strike}CE @ {plan.short_ce_premium} / "
+            f"sell {plan.short_pe_strike}PE @ {plan.short_pe_premium}, hedge with "
+            f"{plan.hedge_ce_strike}CE @ {plan.hedge_ce_premium} / {plan.hedge_pe_strike}PE @ {plan.hedge_pe_premium}. "
+            f"Net credit Rs {plan.net_credit_inr:,.0f}, max loss Rs {plan.max_loss_inr:,.0f}, "
+            f"breakevens {plan.breakeven_lower}/{plan.breakeven_upper}."
         )
-        log.info(f"  Risk check: {verdict.decision} -- {'; '.join(verdict.reasons) if verdict.reasons else 'all checks passed'}")
-
-        if verdict.decision == "APPROVED":
-            detail = (
-                f"Open condor: sell {plan.short_ce_strike}CE @ {plan.short_ce_premium} / "
-                f"sell {plan.short_pe_strike}PE @ {plan.short_pe_premium}, hedge with "
-                f"{plan.hedge_ce_strike}CE @ {plan.hedge_ce_premium} / {plan.hedge_pe_strike}PE @ {plan.hedge_pe_premium}. "
-                f"Net credit Rs {plan.net_credit_inr:,.0f}, max loss Rs {plan.max_loss_inr:,.0f}, "
-                f"breakevens {plan.breakeven_lower}/{plan.breakeven_upper}."
-            )
-            staging.stage_advisory(
-                kind="condor_open_candidate",
-                detail=detail,
-                note=f"expiry {expiry}",
-                data=asdict(plan),
-            )
+        record = staging.stage_and_maybe_auto_open(
+            kind="condor_open_candidate", detail=detail, note=f"expiry {expiry}",
+            data=asdict(plan), auto_approve=ccfg.AUTO_APPROVE_NEW_POSITIONS,
+            open_fn=condor_tracker.open_position, open_args=(state, plan),
+        )
+        if record["status"] == "EXECUTED":
+            log.info("  AUTO-APPROVED and opened immediately.")
+        else:
             log.info("  Staged for approval -- run approve_orders.py, then open_approved_condor.py once approved.")
-    else:
-        log.info("  Not the day after expiry -- no new condor considered this cycle.")
 
 
 def run_forever():

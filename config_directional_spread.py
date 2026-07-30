@@ -78,5 +78,14 @@ BREACH_WARNING_BUFFER_POINTS = 40
 # setups.
 POLL_INTERVAL_SECONDS = 30
 
+# --- Approval (see main_directional_spread.py) ---
+# Same meaning as config_condor.AUTO_APPROVE_NEW_POSITIONS: a candidate
+# that clears the risk check is still written through trade_staging.py
+# first (so it stays visible in the same audit trail/dashboard as a
+# manually-approved one), but auto-approved and auto-executed rather
+# than waiting for approve_orders.py. Nothing here ever calls a broker
+# API regardless of this setting.
+AUTO_APPROVE_NEW_POSITIONS = True
+
 STATE_PATH = "state/directional_spread_position.json"
 JOURNAL_PATH = "logs/directional_spread_journal.jsonl"

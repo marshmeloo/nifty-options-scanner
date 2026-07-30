@@ -897,14 +897,20 @@ capital per position than a single momentum trade. Mixing its state or
 journal into the momentum scanner's would corrupt the win-rate/tag stats
 you're building there.
 
-**Opening a position is a two-step, human-approved process, on purpose**:
+**Opening a position starts as a staged, reviewable proposal, same
+shape either way** (see "Changed: 2026-07-29 -- auto-approval" below for
+why the default changed from always-manual):
 1. `main_condor.py`, running on a 5-minute poll during market hours,
-   detects the first trading day after an expiry, scans for a complete
-   4-leg condor, risk-checks it (`condor_risk_checker.py`: minimum net
-   credit, max capital-at-risk cap, only one position at a time), and
-   -- if approved -- **stages it** via `trade_staging.py`'s
-   `stage_advisory()`, it does NOT open it automatically.
-2. Review it: `python3 approve_orders.py`. Once approved, run
+   picks a suitable expiry (`choose_expiry_to_open()` -- any day it's
+   flat, not just right after the previous expiry), scans for a
+   complete 4-leg condor, and risk-checks it (`condor_risk_checker.py`:
+   minimum net credit, max capital-at-risk cap, only one position at a
+   time). Every candidate that clears the risk check is always **staged**
+   via `trade_staging.py` first, so it's visible in the same audit
+   trail/dashboard either way.
+2. With `config_condor.AUTO_APPROVE_NEW_POSITIONS = True` (the
+   default), it's approved and opened immediately. With it set to
+   `False`: review with `python3 approve_orders.py`, then run
    `python3 open_approved_condor.py` -- this opens EXACTLY the plan you
    reviewed (strikes/premiums/credit/max-loss), not a fresh re-scan that
    may have drifted since the market moved.
@@ -972,9 +978,11 @@ reward. A breach warning (spot within `BREACH_WARNING_BUFFER_POINTS` of
 the short strike) still stages for human review rather than
 auto-closing, same reasoning as the condor's identical mechanism.
 
-**Opening a position is the same two-step, human-approved process** as
-the condor: `main_directional_spread.py` stages a candidate via
-`trade_staging.py`, you review with `approve_orders.py`, then
+**Opening a position works the same way as the condor** (see "Changed:
+2026-07-29 -- auto-approval"): every candidate is staged via
+`trade_staging.py` first, then either auto-approved and opened
+immediately (`config_directional_spread.AUTO_APPROVE_NEW_POSITIONS = True`,
+the default) or left for manual review -- `approve_orders.py`, then
 `open_approved_directional_spread.py` opens EXACTLY the plan you
 reviewed. Expiry settlement falls back to intrinsic value when a leg's
 quote is unavailable, same as the condor.
@@ -1058,6 +1066,52 @@ stays `False` on expiry day itself (that's the day *of* expiry, not
 after) and flips `True` the very next day. 8 new tests covering first-run,
 grace-window persistence, window closing after day 3, long-outage safety,
 and holiday-shifted expiries.
+
+## Changed: 2026-07-29 -- condor can open any day, and auto-approval
+
+Two further changes, same day, on top of the fix above.
+
+**1. Opening is no longer restricted to a narrow post-expiry window.**
+The `is_day_after_expiry()` / grace-window approach above is gone
+entirely, replaced by something simpler: `main_condor.choose_expiry_to_open()`
+scans the full expiry list (`resilient_source.get_expiry_list()`, new --
+Dhan/NSE only ever exposed the single nearest one before) and opens
+against the first expiry with at least `MIN_DAYS_TO_EXPIRY_TO_OPEN` days
+left (default 1). This means:
+- The condor can open on **any day** it's flat, not just the 1-3 days
+  right after the previous expiry -- selling a fresh weekly cycle on
+  Monday and selling a shorter-dated position on Wednesday are both now
+  reachable, not just the former.
+- Running the tool **on expiry day itself** correctly rolls straight
+  into the FOLLOWING week's expiry rather than trying to sell a contract
+  with ~0 days of theta left.
+- No state tracking needed any more -- every cycle just asks the expiry
+  list directly, which is simpler than the previous fix's rollover
+  detection and has no long-outage edge case to reason about.
+
+Worth knowing: a position opened with only 1-2 days left on the nearest
+expiry has a different risk/reward shape than a fresh 6-7 DTE cycle --
+less premium available for the same hedge width, faster gamma ramp into
+expiry. `MIN_DAYS_TO_EXPIRY_TO_OPEN` is the dial for how close is too
+close; raise it if you'd rather only ever sell fresh weekly cycles.
+
+**2. Auto-approval.** Both the condor and the new directional spread
+strategy staged every candidate for manual review via `approve_orders.py`
+-- deliberate, while the strike-selection logic was untested. With both
+now covered by real tests and verified against real recorded data,
+`config_condor.AUTO_APPROVE_NEW_POSITIONS` and
+`config_directional_spread.AUTO_APPROVE_NEW_POSITIONS` (both default
+`True`) let a risk-approved candidate open immediately instead of
+waiting. The staged audit record is still written either way
+(`trade_staging.stage_and_maybe_auto_open()`, shared by both
+strategies) -- auto-approval only skips the manual `approve_orders.py`
+step, it does not add order-execution capability that didn't exist
+before. **Nothing in this project calls a broker API in either mode**:
+"opening a position" has only ever meant writing that strategy's own
+local tracked state (`condor_tracker.py` / `directional_spread_tracker.py`),
+used for mark-to-market and the journal, same as the momentum scanner's
+`trade_tracker.py` has always done automatically without any staging
+step at all. Set either flag back to `False` to return to manual review.
 
 ## Execution realism: costs, fills, liquidity, and the bias gate
 

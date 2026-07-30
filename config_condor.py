@@ -35,6 +35,34 @@ MAX_CONCURRENT_POSITIONS = 1        # don't stack a new condor on top of one sti
 MIN_NET_CREDIT = 10.0               # reject if the 4-leg net credit is too thin to be worth the risk/margin tied up
 MAX_CAPITAL_AT_RISK = 50000.0       # reject if this cycle's max possible loss (see plan.max_loss_inr) exceeds this
 
+# --- Expiry selection (see main_condor.choose_expiry_to_open) ---
+# CHANGED 2026-07-29: this used to only open in a narrow 1-3 day window
+# right after the PREVIOUS expiry passed, and a bug meant that window
+# could never actually trigger (see the 2026-07-29 README entry) -- the
+# condor never opened at all. Now it can open ANY day the position is
+# flat, against whichever expiry has at least this many days left --
+# skipping past the nearest one if it's too close (e.g. running the
+# script ON expiry day itself correctly rolls straight into next week's
+# expiry rather than selling ~0 DTE premium). A low value on purpose:
+# 1 means "don't open with less than a day of theta left," not "only
+# open fresh weekly cycles." Selling with only 1-2 DTE remaining is a
+# different risk/reward shape than selling a fresh 6-7 DTE cycle (less
+# premium available for the same hedge width, faster gamma ramp into
+# expiry) -- know that if you see it open mid-week.
+MIN_DAYS_TO_EXPIRY_TO_OPEN = 1
+
+# --- Approval (see main_condor.py) ---
+# When True, a candidate that clears the risk check is opened
+# immediately -- still written through trade_staging.py first (so it
+# stays visible in the same audit trail/dashboard as a manually-approved
+# one), but auto-approved and auto-executed rather than waiting for
+# approve_orders.py. Nothing here ever calls a broker API regardless of
+# this setting -- "opening a position" only ever means writing this
+# strategy's own tracked state, same as it always has. Set to False to
+# go back to manual review if the strike-selection logic ever needs
+# another look before trusting it unattended.
+AUTO_APPROVE_NEW_POSITIONS = True
+
 # --- Position management ---
 # If spot gets within this many points of EITHER short strike, that's a
 # "breach warning" -- condor_tracker.py stages an early-close candidate

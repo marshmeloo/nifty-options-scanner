@@ -135,13 +135,15 @@ def run_once(state: dict):
             f"Net credit Rs {plan.net_credit_inr:,.0f}, max loss Rs {plan.max_loss_inr:,.0f}, "
             f"breakeven {plan.breakeven}. Bias: {plan.bias_label} (score {plan.bias_score})."
         )
-        staging.stage_advisory(
-            kind="directional_spread_open_candidate",
-            detail=detail,
-            note=f"expiry {expiry}",
-            data=asdict(plan),
+        record = staging.stage_and_maybe_auto_open(
+            kind="directional_spread_open_candidate", detail=detail, note=f"expiry {expiry}",
+            data=asdict(plan), auto_approve=dcfg.AUTO_APPROVE_NEW_POSITIONS,
+            open_fn=dst.open_position, open_args=(state, plan),
         )
-        log.info("  Staged for approval -- run approve_orders.py, then open_approved_directional_spread.py once approved.")
+        if record["status"] == "EXECUTED":
+            log.info("  AUTO-APPROVED and opened immediately.")
+        else:
+            log.info("  Staged for approval -- run approve_orders.py, then open_approved_directional_spread.py once approved.")
 
 
 def run_forever():

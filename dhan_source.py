@@ -77,8 +77,13 @@ def _headers():
     }
 
 
-def get_nearest_expiry() -> str:
-    """Fetch the list of active Nifty expiries and return the nearest one."""
+def get_expiry_list() -> list:
+    """
+    Full sorted list of active Nifty expiries (nearest first), not just
+    the nearest one. Needed by strategies that may need to look PAST the
+    nearest expiry -- e.g. the condor rolling to next week's expiry when
+    run on expiry day itself, when the "nearest" expiry has ~0 days left.
+    """
     resp = requests.post(
         f"{DHAN_BASE_URL}/optionchain/expirylist",
         headers=_headers(),
@@ -86,8 +91,12 @@ def get_nearest_expiry() -> str:
         timeout=10,
     )
     resp.raise_for_status()
-    expiries = resp.json()["data"]
-    return expiries[0]
+    return resp.json()["data"]
+
+
+def get_nearest_expiry() -> str:
+    """Fetch the list of active Nifty expiries and return the nearest one."""
+    return get_expiry_list()[0]
 
 
 def _fetch_raw_chain(expiry: str) -> dict:

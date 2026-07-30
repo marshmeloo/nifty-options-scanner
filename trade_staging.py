@@ -199,6 +199,40 @@ def mark_executed(order_id: str, broker_order_id: str, note: str = "") -> dict:
     raise KeyError(f"No staged order with id {order_id}")
 
 
+def stage_and_maybe_auto_open(kind: str, detail: str, note: str, data: dict,
+                              auto_approve: bool, open_fn, open_args: tuple = ()) -> dict:
+    """
+    Shared by every strategy that stages a candidate before opening it
+    (main_condor.py, main_directional_spread.py): write the SAME
+    stage_advisory() audit record regardless of `auto_approve`, so a
+    deployment stays visible in the dashboard/staged log either way,
+    then either open immediately or leave it PENDING for a human to
+    review via approve_orders.py + that strategy's own open_approved_*.py.
+
+    Nothing here ever calls a broker API in either branch -- "opening a
+    position" only ever means writing the calling strategy's own tracked
+    state (`open_fn`, e.g. condor_tracker.open_position). Auto-approval
+    only skips the manual approve_orders.py step; it does not add order
+    execution capability that didn't exist before.
+
+    `open_fn(*open_args)` is called only when auto-approving -- it's the
+    caller's own tracker.open_position, so this module doesn't need to
+    know each strategy's specific open-position signature. Returns the
+    staged record, whose `status` tells the caller which branch ran
+    ("PENDING" vs "EXECUTED") without needing its own auto_approve check.
+    """
+    record = stage_advisory(kind=kind, detail=detail, note=note, data=data)
+
+    if not auto_approve:
+        return record
+
+    approve(record["id"], note=f"auto-approved ({kind})")
+    record = mark_executed(record["id"], broker_order_id="auto",
+                           note="Opened automatically (auto-approval enabled)")
+    open_fn(*open_args)
+    return record
+
+
 def _set_status(order_id: str, status: str, note: str) -> dict:
     if status not in VALID_STATUSES:
         raise ValueError(f"Invalid status: {status}")

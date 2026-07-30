@@ -88,6 +88,12 @@ def get_fii_dii_activity() -> dict:
     }
 
 
+def get_expiry_list() -> list:
+    """Full sorted list of active Nifty expiries (nearest first) -- see dhan_source.get_expiry_list."""
+    raw = _fetch_raw_chain()
+    return raw["records"]["expiryDates"]
+
+
 def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
     """
     Fetch a live Nifty option chain from NSE's public API and return it in

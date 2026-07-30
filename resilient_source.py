@@ -50,17 +50,19 @@ def _mark_failed(name: str, err: Exception):
     log.info(f"  [data source] {name} failed, falling back: {err}")
 
 
-def get_nearest_expiry() -> str:
-    """Expiry list only exists on Dhan/NSE, not TradingView (no chain there)."""
+def get_expiry_list() -> list:
+    """Full sorted list of active Nifty expiries (nearest first). Dhan -> NSE fallback."""
     if _tier_available("dhan"):
         try:
-            return dhan_source.get_nearest_expiry()
+            return dhan_source.get_expiry_list()
         except Exception as e:
             _mark_failed("dhan", e)
-    # NSE returns expiries embedded in the chain response itself; grab the
-    # nearest one from a live fetch rather than a separate endpoint.
-    raw = nse_source._fetch_raw_chain()
-    return raw["records"]["expiryDates"][0]
+    return nse_source.get_expiry_list()
+
+
+def get_nearest_expiry() -> str:
+    """Expiry list only exists on Dhan/NSE, not TradingView (no chain there)."""
+    return get_expiry_list()[0]
 
 
 def get_nifty_snapshot(expiry: str = None):
