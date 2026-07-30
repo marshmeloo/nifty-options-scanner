@@ -80,6 +80,7 @@ Pipeline: `SCAN -> SIGNALS -> PLAN -> RISK -> DECISION`
 | `replay.py` | Re-runs the pipeline over recorded history; diffs two logic versions; forward-return evaluation of every candidate |
 | `logic_version.py` | Fingerprints the decision-relevant config + git SHA so results are never pooled across versions |
 | `costs.py` | Round-trip transaction costs (brokerage/STT/exchange/GST/stamp), applied at trade close so P&L is net as well as gross |
+| `market_regime.py` | Today's range vs a trailing 6-month distribution -- is this even a normal trading day? |
 | `shadow.py` | Simulates any trading policy (score bar, R:R, time window, stop rules) against recorded history -- answers "how would this have done?" without capital |
 | `workspace.py` | Declares whether a checkout is production or development, and warns when that's violated |
 | `sync_from_prod.py` | One-way copy of recorded data production → development |
@@ -1112,6 +1113,59 @@ local tracked state (`condor_tracker.py` / `directional_spread_tracker.py`),
 used for mark-to-market and the journal, same as the momentum scanner's
 `trade_tracker.py` has always done automatically without any staging
 step at all. Set either flag back to `False` to return to manual review.
+
+## Market regime context: is today even a normal day?
+
+Added 2026-07-30 after checking, for the first time, whether the sessions
+this system had been evaluated on were representative. They were not:
+
+| | Our 7 recorded sessions | Trailing 6 months |
+|---|---|---|
+| Median daily range | **0.61%** | **0.98%** |
+| Days >= 1.0% range | **0** | 58 of 121 (48%) |
+| Days >= 1.5% range | **0** | 24 of 121 (20%) |
+
+Every single recorded session fell below the 6-month median, between the
+1st and 45th percentile. 2026-07-28 (0.36%) matched the quietest day in
+six months. A directional/momentum strategy had been judged exclusively
+on the calmest sliver of conditions and **never once observed in the
+regime it exists for** -- which makes every "no edge" reading so far
+conditional on an unrepresentative sample.
+
+That is far too important to be something reconstructed from six months
+of history a week after the fact, so `market_regime.py` now reports it
+live: today's range as a percentile of the trailing
+`REGIME_LOOKBACK_DAYS` distribution, plus a quiet/normal/volatile label,
+logged every cycle and recorded into every `decision_log.py` entry so
+later analysis can segment results by regime directly.
+
+It reuses the intraday candles `main_live.py` already fetches (no extra
+call for today's part) and caches the trailing daily-range baseline once
+per day in `state/regime_baseline.json`.
+
+**The partial-day caveat is handled explicitly, not papered over**: an
+in-progress session's range is necessarily incomplete -- at 09:30 it is
+near zero and would score as the quietest day on record. So the reading
+always carries how much of the session has actually elapsed and stays
+flagged `PARTIAL` until it's nearly done:
+
+```
+Market regime: range 59.7 pts (0.25%)  |  p0 vs 121d history (median 0.98%)  |  QUIET
+   [PARTIAL -- 12% of session elapsed, range can only grow from here]
+```
+
+An early percentile is a floor on the final value, not an estimate of
+it. If the daily-history fetch fails the raw range is still reported,
+just without a percentile -- losing the benchmark shouldn't lose the
+observation.
+
+Note this answers a *different* question from
+`price_action.classify_trend()`, which reads trend direction from swing
+structure. This is about magnitude: how much the market moved at all.
+By efficiency ratio (net move / total path) all seven recorded sessions
+scored as chop, so the two readings have never yet disagreed -- but they
+would on a strongly trending day, which is precisely the case we haven't
+seen.
 
 ## Execution realism: costs, fills, liquidity, and the bias gate
 

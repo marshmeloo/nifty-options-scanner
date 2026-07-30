@@ -324,6 +324,49 @@ def get_nifty_intraday_candles(interval: str = None, from_date: str = None, to_d
     return candles
 
 
+def get_nifty_daily_candles(days_back: int = 180) -> list:
+    """
+    DAILY OHLC candles for the Nifty index, going `days_back` calendar
+    days into the past. Used by market_regime.py to build the reference
+    distribution of "what a normal day's range looks like" -- the
+    intraday endpoint above can't answer that, since it only covers the
+    current session.
+
+    Note this is /v2/charts/historical (daily), a different endpoint
+    from /v2/charts/intraday used above.
+    """
+    from datetime import timedelta
+
+    resp = requests.post(
+        f"{DHAN_BASE_URL}/charts/historical",
+        headers=_headers(),
+        json={
+            "securityId": str(NIFTY_UNDERLYING_SCRIP),
+            "exchangeSegment": NIFTY_UNDERLYING_SEG,
+            "instrument": "INDEX",
+            "fromDate": (date.today() - timedelta(days=days_back)).isoformat(),
+            "toDate": date.today().isoformat(),
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    candles = []
+    for i in range(len(data.get("timestamp", []))):
+        candles.append(
+            Candle(
+                timestamp=datetime.fromtimestamp(data["timestamp"][i]),
+                open=data["open"][i],
+                high=data["high"][i],
+                low=data["low"][i],
+                close=data["close"][i],
+                volume=data["volume"][i] if "volume" in data else 0,
+            )
+        )
+    return candles
+
+
 def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
     """
     Fetch a live Nifty option chain snapshot from Dhan and return it in the

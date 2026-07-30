@@ -99,7 +99,7 @@ def _candidate_record(setup, plan, verdict, state: dict, opened_trade: dict,
 
 def log_cycle(snapshot, context, bias_label, bias_score, bias_reasons, banknifty_ctx, banknifty_divergence,
               news_risk, opening_gap, results, state, opened_trade, volume_profile=None, anchored_vwap=None,
-              top_n: int = 5):
+              market_regime=None, top_n: int = 5):
     """
     Logs one full cycle's decision context. `results` is main_live.py's
     already-sorted (setup, plan, verdict) list -- only the top `top_n`
@@ -146,6 +146,10 @@ def log_cycle(snapshot, context, bias_label, bias_score, bias_reasons, banknifty
         "opening_gap": opening_gap,
         "volume_profile": volume_profile,
         "anchored_vwap": anchored_vwap,
+        # Was today even a normal trading day? Recorded per cycle so a
+        # later analysis can segment results by regime instead of
+        # reconstructing it from six months of history after the fact.
+        "market_regime": market_regime,
         "candidates": [_candidate_record(s, p, v, state, opened_trade, bias_label, bias_score)
             for s, p, v in results[:top_n]],
         "trade_opened": (

@@ -34,6 +34,7 @@ import anchored_vwap as avwap
 import snapshot_recorder
 import logic_version
 import workspace
+import market_regime
 
 POLL_INTERVAL_SECONDS = 30   # OI/IV don't move meaningfully faster than this
 MARKET_OPEN = dtime(9, 15)
@@ -134,6 +135,7 @@ def run_once(expiry: str, state: dict):
     vol_profile = {"error": "not computed"}
     anchored_vwap_ctx = {"error": "not computed"}
     atr = None
+    regime = {}
     try:
         candles = get_nifty_intraday_candles()
         price_levels, context = analyze_with_context(candles)
@@ -143,6 +145,11 @@ def run_once(expiry: str, state: dict):
         # Only on full cycles -- the 5s fast check doesn't come through
         # here, which keeps the recording cadence at the scan interval.
         snapshot_recorder.record(snapshot, candles, logic_version.compute())
+        # Regime context: is today even a normal day? Cheap -- reuses the
+        # candles above, and the trailing baseline is cached once a day.
+        regime = market_regime.classify(candles)
+        if regime:
+            log.info(f"  {market_regime.describe(regime)}")
         if atr is not None:
             log.info(f"  ATR({config.ATR_PERIOD}): {atr} pts -- stop/target sized from this")
         if price_levels:
@@ -306,7 +313,7 @@ def run_once(expiry: str, state: dict):
     decision_log.log_cycle(
         snapshot, context, bias_label, bias_score, bias_reasons,
         bn_ctx, divergence, news_risk, gap, results, state, new_trade,
-        volume_profile=vol_profile, anchored_vwap=anchored_vwap_ctx,
+        volume_profile=vol_profile, anchored_vwap=anchored_vwap_ctx, market_regime=regime,
     )
 
     tt.save_open_trades(state)

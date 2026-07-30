@@ -138,6 +138,22 @@ MIN_OI_TO_TRADE = 5000        # contracts of open interest
 MIN_VOLUME_TO_TRADE = 1000    # contracts traded today
 MAX_SPREAD_PCT = 3.0          # bid-ask spread as % of mid; None to disable
 
+# --- Market regime context (see market_regime.py) ---
+# How far back to build the "what does a normal day's range look like"
+# reference distribution. Refetched at most once a day and cached in
+# state/regime_baseline.json.
+#
+# Why this is logged every cycle: reconstructing it after the fact on
+# 2026-07-30 showed all seven recorded sessions had a daily range below
+# the 6-month median, between the 1st and 45th percentile -- while 48%
+# of normal NIFTY days move at least 1.0% and 20% move at least 1.5%,
+# neither of which we had recorded even once. A directional strategy was
+# being judged entirely on the calmest sliver of conditions. That should
+# be visible while a session runs, not excavated a week later.
+REGIME_LOOKBACK_DAYS = 180
+REGIME_QUIET_PERCENTILE = 25      # below this percentile of trailing range -> "quiet"
+REGIME_VOLATILE_PERCENTILE = 75   # above -> "volatile"
+
 # --- Snapshot recording (see snapshot_recorder.py / replay.py) ---
 # Records the raw option chain + candles behind every decision cycle, so
 # any future version of the decision logic can be replayed against the
