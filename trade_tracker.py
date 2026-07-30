@@ -242,6 +242,24 @@ def _reason_tags(reasons: list) -> list:
     return tags
 
 
+def base_win_rate(limit=None) -> tuple:
+    """
+    (base_win_rate, total_decided_trades) across the journal -- the
+    reference every tag is measured against.
+
+    This is the number the old design was missing. It compared each tag
+    to an absolute 0.4 threshold, but the journal's own base rate was
+    22%, so every tag fell below 0.4 and every tag got penalised -- even
+    the ones performing ABOVE this strategy's own average. A tag is only
+    informative relative to how the system does overall.
+    """
+    decided = [e for e in _load_recent_journal(limit) if e.get("outcome") in ("WIN", "LOSS")]
+    if not decided:
+        return 0.0, 0
+    wins = sum(1 for e in decided if e["outcome"] == "WIN")
+    return wins / len(decided), len(decided)
+
+
 def tag_win_rates(limit=None) -> dict:
     """{tag: (wins, losses, win_rate)} from recent journal history."""
     journal = _load_recent_journal(limit)
@@ -262,25 +280,75 @@ def tag_win_rates(limit=None) -> dict:
     }
 
 
+def shrunk_tag_rate(wins: int, losses: int, base: float) -> float:
+    """
+    Empirical-Bayes estimate of a tag's true win rate:
+        (wins + k*base) / (n + k)
+    where k = config.TAG_PRIOR_STRENGTH, i.e. the tag starts out with k
+    "virtual" trades sitting exactly at the base rate and has to earn
+    its way away from that with real evidence.
+
+    This is what makes small samples safe. At n=3, the observed rate can
+    be anything from 0% to 100% by luck; shrinkage pulls it to within a
+    rounding error of base, so the resulting adjustment is ~0 rather
+    than a confident -0.5.
+    """
+    n = wins + losses
+    k = config.TAG_PRIOR_STRENGTH
+    if n + k == 0:
+        return base
+    return (wins + k * base) / (n + k)
+
+
 def apply_learned_adjustment(score: float, reasons: list) -> tuple:
     """
-    Nudges a score based on historical win rate of its reason-tags.
-    Explicitly rule-based: a lookup over past outcomes, not a trained
+    Nudges a score based on how a candidate's reason-tags have performed
+    RELATIVE TO THE SYSTEM'S OWN BASE WIN RATE. Explicitly rule-based:
+    a lookup over past outcomes with a shrinkage prior, not a trained
     model. Returns (adjusted_score, notes_explaining_why).
+
+    Three guards, each fixing a specific failure of the previous design
+    (see the config.py block for the measured evidence):
+      - No adjustment at all below MIN_TRADES_FOR_ANY_ADJUSTMENT total
+        decided trades. With single digits there is nothing to learn.
+      - Each tag is shrunk toward the base rate, so a thin sample can't
+        produce a confident penalty.
+      - The total is capped at +/-MAX_TOTAL_TAG_ADJUSTMENT, because tags
+        co-occur heavily and uncapped summing double-counts one
+        underlying market condition -- which is what made the old
+        penalty grow with the raw score.
     """
+    base, total_trades = base_win_rate()
+    if total_trades < config.MIN_TRADES_FOR_ANY_ADJUSTMENT:
+        return round(score, 2), [
+            f"No learned adjustment applied -- only {total_trades} decided trade(s) on record, "
+            f"need {config.MIN_TRADES_FOR_ANY_ADJUSTMENT} before tag win rates mean anything."
+        ]
+
     rates = tag_win_rates()
     notes = []
-    adjusted = score
+    raw_delta = 0.0
     for tag in _reason_tags(reasons):
-        if tag in rates:
-            w, l, rate = rates[tag]
-            if rate < config.WEAK_TAG_WIN_RATE:
-                adjusted -= 0.5
-                notes.append(f"'{tag}' historically weak ({w}W/{l}L, {rate:.0%}) — score reduced")
-            elif rate > config.STRONG_TAG_WIN_RATE:
-                adjusted += 0.25
-                notes.append(f"'{tag}' historically strong ({w}W/{l}L, {rate:.0%}) — score boosted")
-    return round(adjusted, 2), notes
+        if tag not in rates:
+            continue
+        w, l, observed = rates[tag]
+        shrunk = shrunk_tag_rate(w, l, base)
+        delta = (shrunk - base) * config.TAG_ADJUSTMENT_SCALE
+        if abs(delta) < 0.05:
+            continue  # not meaningfully different from average; stay quiet
+        raw_delta += delta
+        direction = "above" if delta > 0 else "below"
+        notes.append(
+            f"'{tag}' {observed:.0%} vs {base:.0%} base ({w}W/{l}L) -- "
+            f"{direction} average, {delta:+.2f}"
+        )
+
+    cap = config.MAX_TOTAL_TAG_ADJUSTMENT
+    total_delta = max(-cap, min(cap, raw_delta))
+    if total_delta != raw_delta:
+        notes.append(f"Total tag adjustment capped at {total_delta:+.2f} (uncapped {raw_delta:+.2f})")
+
+    return round(score + total_delta, 2), notes
 
 
 def rr_milestone_stats(limit=None) -> dict:

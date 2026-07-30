@@ -391,9 +391,64 @@ EXPIRY_DAY_EXTRA_CONVICTION = 1.5   # added to MIN_CONVICTION_SCORE_TO_TRACK on 
 EXPIRY_DAY_NO_NEW_TRADES_AFTER = "14:00"   # IST; no new same-day-expiry longs after this
 
 JOURNAL_LOOKBACK_FOR_LEARNING = 100  # how many recent journal entries to consider for tag win-rate adjustment
-MIN_TAG_SAMPLES_FOR_ADJUSTMENT = 3   # don't trust a win rate until a tag has at least this many outcomes
-WEAK_TAG_WIN_RATE = 0.4              # below this win rate, penalize the tag's contribution to score
-STRONG_TAG_WIN_RATE = 0.65           # above this win rate, small bonus to the tag's contribution
+
+# --- Learned tag adjustment (see trade_tracker.apply_learned_adjustment) ---
+# REWRITTEN 2026-07-30. The previous design penalised a tag by a flat
+# -0.5 whenever its win rate sat below an ABSOLUTE 0.4, with only 3
+# samples required. Measured against two real sessions, that was wrong
+# in three separate ways at once:
+#
+#   1. NOT ENOUGH DATA. At n=3, a 1W/2L record has a 95% confidence
+#      interval of roughly 6%-79% -- indistinguishable from a coin flip.
+#      Every penalised tag's interval spanned 50%.
+#   2. WRONG BASELINE. The journal's own base win rate was 22%, so ALL
+#      five tags with samples sat below the 0.4 threshold and every one
+#      was penalised -- while every one was actually AT OR ABOVE the
+#      system's own average. The adjustment was penalising tags for the
+#      strategy's overall losing record, not discriminating between them.
+#   3. PERVERSE SCALING. Because every tag was "weak" and penalties
+#      stacked across correlated tags (fvg and long_buildup co-occur
+#      constantly), the total penalty grew with the raw score
+#      (correlation +0.385; mean penalty 0.5 at weak candidates rising
+#      to 1.88 at score 5.0). More confirming signals meant a bigger
+#      handicap -- a progressive tax on conviction, exactly backwards.
+#      On 2026-07-30 it alone blocked 15 candidates that had cleared
+#      the raw bar, contributing to a second consecutive zero-trade day.
+#
+# The replacement measures each tag against the journal's OWN base win
+# rate and shrinks toward it (empirical Bayes), so a small sample barely
+# moves the score at all and only a genuinely differentiated tag with
+# real weight behind it can shift anything.
+
+# Below this many closed WIN/LOSS trades in total, apply NO adjustment
+# whatsoever. With single-digit trade counts there is nothing to learn
+# and pretending otherwise actively suppressed trading.
+MIN_TRADES_FOR_ANY_ADJUSTMENT = 30
+
+# A tag needs at least this many of its own outcomes before it's
+# considered at all. Shrinkage below already handles small samples
+# gracefully; this is a second, blunter floor.
+MIN_TAG_SAMPLES_FOR_ADJUSTMENT = 10
+
+# Strength of the prior, in "virtual trades held at the base rate".
+# A tag's effective rate is (wins + k*base) / (n + k). At n=9 with k=25
+# a 2W/7L tag shrinks to within 0.1pp of the base rate -- i.e. ~zero
+# adjustment, which is the correct answer for that little evidence.
+TAG_PRIOR_STRENGTH = 25
+
+# Score points per 1.0 of (shrunk_rate - base_rate). A tag genuinely
+# running 25pp above base with heavy sample weight earns about +0.5.
+TAG_ADJUSTMENT_SCALE = 2.0
+
+# Hard cap on the TOTAL adjustment across all of a candidate's tags,
+# in either direction. Tags are strongly correlated, so uncapped
+# summing double-counts the same underlying market condition.
+MAX_TOTAL_TAG_ADJUSTMENT = 1.0
+
+# Display-only labels for summarize_recent_lessons(); these no longer
+# drive the adjustment itself (see the base-relative logic above).
+WEAK_TAG_WIN_RATE = 0.4
+STRONG_TAG_WIN_RATE = 0.65
 
 # Re-entry gate after a stop-loss.
 #
