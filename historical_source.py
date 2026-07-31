@@ -356,6 +356,111 @@ def _chunks(from_date: str, to_date: str, days: int = MAX_DAYS_PER_CALL):
         start = stop + timedelta(days=1)
 
 
+def apply_oi_buildup(cycles: list):
+    """
+    Fill in OI-buildup fields across a day's cycles, in place.
+
+    WHY THIS IS ESSENTIAL, NOT AN EXTRA
+    -----------------------------------
+    OI buildup is the single largest scoring input the momentum scanner
+    has. Measured on a real live day it fired 5,517 times, more than any
+    other reason; on a reconstructed day it fired ZERO times, because the
+    rolling-option endpoint gives a per-bar OI snapshot with no history
+    attached and every quote was written with buildup_type=None.
+
+    The consequence was not a slightly weaker backtest -- it was a dead
+    one. Historical scores topped out at 3.0 against a
+    MIN_CONVICTION_SCORE_TO_TRACK of 5.0, so the momentum strategy took
+    exactly zero trades across the whole 2-year pull. Reported without
+    this, "no trades in 493 days" would have looked like a devastating
+    verdict on the strategy when it was really a missing column.
+
+    HOW
+    ---
+    dhan_source builds these live from a rolling window of its own past
+    samples. Sequential snapshots ARE that history, so the same window can
+    be reconstructed offline -- this is exactly the recomputability
+    snapshot_recorder's docstring describes.
+
+    _intraday_change and _classify_buildup are imported from dhan_source
+    rather than reimplemented, so the classification cannot drift from
+    what live does. The day-cumulative `oi_change_pct` stays 0.0: it needs
+    the previous session's closing OI, which this endpoint doesn't
+    provide. Live falls back to the cumulative figure only in the opening
+    minutes before enough samples exist, so the intraday path -- the one
+    reconstructed here -- is what runs for nearly the whole session.
+    """
+    import config as cfg
+    from dhan_source import _intraday_change, _classify_buildup, _prune_samples
+
+    samples = {}  # (strike, option_type) -> [{"t", "oi", "ltp"}, ...]
+
+    for snapshot, _candles, _meta in cycles:
+        now_ts = snapshot.timestamp.timestamp()
+        for q in snapshot.chain:
+            key = (q.strike, q.option_type)
+            past = samples.get(key, [])
+
+            oi_intraday, price_intraday, window = _intraday_change(
+                past, now_ts, q.oi, q.ltp
+            )
+            q.oi_change_pct_intraday = oi_intraday
+            q.price_change_pct_intraday = price_intraday
+            q.buildup_window_minutes = window
+            if oi_intraday is not None and price_intraday is not None:
+                q.buildup_type = _classify_buildup(
+                    oi_intraday, price_intraday, cfg.OI_INTRADAY_BUILDUP_PCT
+                )
+
+            past = _prune_samples(past, now_ts)
+            past.append({"t": now_ts, "oi": q.oi, "ltp": q.ltp})
+            samples[key] = past
+
+
+def repair_oi_buildup(days: list = None) -> dict:
+    """
+    Recompute OI-buildup fields on already-written historical days.
+
+    Pure recomputation from chains already on disk -- no API calls, so the
+    2-year pull needs no re-fetching. Refuses to touch live recordings,
+    which already carry what dhan_source computed at the time.
+    """
+    import gzip
+    import json
+    import snapshot_recorder
+
+    days = days or snapshot_recorder.available_days()
+    repaired = {}
+
+    for day in days:
+        path = snapshot_recorder.path_for(day)
+        if not path.exists():
+            continue
+        cycles = list(snapshot_recorder.load_day(day))
+        if not cycles or cycles[0][0].source != "dhan_historical":
+            continue
+
+        apply_oi_buildup(cycles)
+
+        with gzip.open(path, "wt", encoding="utf-8") as f:
+            for snap, candles, meta in cycles:
+                f.write(json.dumps({
+                    "timestamp": snap.timestamp.isoformat(),
+                    "logic_version": meta.get("logic_version"),
+                    "spot": snap.spot,
+                    "vwap": snap.vwap,
+                    "pcr": snap.pcr,
+                    "source": snap.source,
+                    "chain": [snapshot_recorder._quote_to_dict(q) for q in snap.chain],
+                    "candles": [snapshot_recorder._candle_to_dict(c) for c in candles],
+                }, default=str) + "\n")
+        repaired[day] = sum(
+            1 for snap, _c, _m in cycles for q in snap.chain if q.buildup_type
+        )
+
+    return repaired
+
+
 def repair_iv_percentiles(days: list = None) -> dict:
     """
     Recompute `iv_percentile` in place on already-written historical days.
@@ -572,6 +677,8 @@ def main():
                              "(second pass; 1 API call per day)")
     parser.add_argument("--repair-iv", dest="repair_iv", action="store_true",
                         help="recompute iv_percentile on already-written days (no API calls)")
+    parser.add_argument("--repair-buildup", dest="repair_buildup", action="store_true",
+                        help="recompute OI buildup fields on already-written days (no API calls)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -579,6 +686,13 @@ def main():
     if args.repair_iv:
         repaired = repair_iv_percentiles()
         print(f"{len(repaired)} day(s) had iv_percentile recomputed")
+        return
+
+    if args.repair_buildup:
+        repaired = repair_oi_buildup()
+        total = sum(repaired.values())
+        print(f"{len(repaired)} day(s) had OI buildup recomputed "
+              f"({total:,} classified quotes)")
         return
 
     if args.candles:

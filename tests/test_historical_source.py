@@ -317,6 +317,66 @@ def test_iv_percentile_ranks_ce_and_pe_independently(monkeypatch):
         assert min(q.iv_percentile for q in side) < 50.0
 
 
+def _buildup_cycles(oi_series, ltp_series, start="2026-06-01T09:20:00"):
+    """One strike tracked across cycles 5 minutes apart."""
+    from models import MarketSnapshot, OptionQuote
+
+    base = datetime.fromisoformat(start)
+    cycles = []
+    for i, (oi, ltp) in enumerate(zip(oi_series, ltp_series)):
+        ts = base + timedelta(minutes=5 * i)
+        q = OptionQuote(symbol="NIFTY", expiry="rolling:week1", strike=24000.0,
+                        option_type="CE", ltp=ltp, oi=oi, oi_change_pct=0.0,
+                        volume=10, iv=15.0, iv_percentile=50.0, timestamp=ts)
+        cycles.append((MarketSnapshot(symbol="NIFTY", spot=24000.0, vwap=24000.0,
+                                      pcr=1.0, chain=[q], timestamp=ts,
+                                      source="dhan_historical"), [], {}))
+    return cycles
+
+
+def test_oi_buildup_is_classified_from_sequential_snapshots():
+    """
+    OI buildup is the momentum scanner's largest scoring input -- it fired
+    5,517 times on a live day and zero times on a reconstructed one, which
+    capped historical scores at 3.0 against a 5.0 threshold and produced a
+    backtest that took no trades at all.
+    """
+    # OI rising and price rising together = long buildup.
+    cycles = _buildup_cycles([1000, 1100, 1210, 1330], [100.0, 105.0, 110.0, 116.0])
+    hs.apply_oi_buildup(cycles)
+
+    kinds = [c[0].chain[0].buildup_type for c in cycles]
+    assert kinds[0] is None, "first cycle has no history to compare against"
+    assert "long_buildup" in kinds
+
+
+def test_oi_buildup_distinguishes_short_buildup_from_long():
+    """OI up with price DOWN is writers piling in, the opposite read."""
+    cycles = _buildup_cycles([1000, 1100, 1210, 1330], [100.0, 95.0, 90.0, 85.0])
+    hs.apply_oi_buildup(cycles)
+    assert "short_buildup" in [c[0].chain[0].buildup_type for c in cycles]
+
+
+def test_oi_buildup_leaves_early_cycles_unclassified_not_zero():
+    """
+    Too little history must read as "unknown", never as "no change" --
+    the distinction _intraday_change exists to preserve.
+    """
+    cycles = _buildup_cycles([1000], [100.0])
+    hs.apply_oi_buildup(cycles)
+    q = cycles[0][0].chain[0]
+    assert q.buildup_type is None
+    assert q.oi_change_pct_intraday is None
+    assert q.price_change_pct_intraday is None
+
+
+def test_oi_buildup_ignores_moves_below_the_threshold():
+    """A flat book must not be classified as a buildup in either direction."""
+    cycles = _buildup_cycles([1000, 1001, 1002, 1003], [100.0, 100.1, 100.2, 100.3])
+    hs.apply_oi_buildup(cycles)
+    assert all(c[0].chain[0].buildup_type is None for c in cycles)
+
+
 def test_coverage_of_empty_chain_is_zero_not_a_crash():
     from models import MarketSnapshot
     snap = MarketSnapshot(symbol="NIFTY", spot=24000.0, vwap=24000.0, pcr=0.0,
