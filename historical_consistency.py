@@ -51,6 +51,16 @@ MAX_OI_STEP_RATIO = 2.0
 # An IV jump this large between adjacent bars for the SAME strike is a
 # decode/misalignment symptom, not a real vol move -- see the 2026-07-31
 # incident where a wrong shift corrupted price without erroring.
+#
+# Zero IV is EXCLUDED from this check rather than treated as a value.
+# Dhan doesn't publish IV for thinner strikes and reports 0.0 instead, so
+# a strike flickering in and out of coverage produces 0.0 -> 22.9 -> 0.0
+# steps all day. That is missing data, not a vol move: an option with a
+# real traded price cannot have zero implied volatility, and 483 of 554
+# zero-IV quotes on a sample day had LTP >= 1. Counting them flagged 391
+# of 493 days and buried the real signal. The live recording shows the
+# same 18.6% zero rate, which is itself evidence the reconstruction is
+# faithful rather than broken.
 MAX_IV_STEP_POINTS = 15.0
 
 
@@ -114,7 +124,7 @@ def check_day(snapshots: list, interval_minutes: int = 5) -> dict:
                         issues.append(
                             f"OI jump {prev_oi}->{q.oi} at {q.strike}{q.option_type}, {snap.timestamp}"
                         )
-                if abs(q.iv - prev_iv) > MAX_IV_STEP_POINTS:
+                if prev_iv > 0 and q.iv > 0 and abs(q.iv - prev_iv) > MAX_IV_STEP_POINTS:
                     issues.append(
                         f"IV jump {prev_iv:.1f}->{q.iv:.1f} at {q.strike}{q.option_type}, {snap.timestamp}"
                     )

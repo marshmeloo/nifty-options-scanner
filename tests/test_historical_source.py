@@ -269,6 +269,54 @@ def test_backfill_candles_leaves_day_intact_when_fetch_fails(tmp_path, monkeypat
     assert len(list(snapshot_recorder.load_day(day))) == 3
 
 
+def test_iv_percentile_is_ranked_not_left_flat(monkeypatch):
+    """
+    scanner.py scores IV rich/cheap off iv_percentile and nothing else
+    reads it. A constant 50.0 sits between IV_PERCENTILE_LOW and HIGH, so
+    neither branch could ever fire and the backtest would evaluate a
+    momentum scorer with its IV component amputated.
+    """
+    def fake_fetch(offset, option_type, *a, **kw):
+        block = _block(24000 + offset * 50, 24000.0, [100.0])
+        block["iv"] = [10.0 + offset]  # a spread of IVs across strikes
+        return block
+
+    monkeypatch.setattr(hs, "fetch_series", fake_fetch)
+    snap = hs.reconstruct_range("2026-07-01", "2026-07-02", max_offset=5)[0]
+
+    ce = [q for q in snap.chain if q.option_type == "CE"]
+    pcts = sorted(q.iv_percentile for q in ce)
+    assert len(set(pcts)) > 1, "percentiles must vary across strikes"
+    assert pcts[0] < 50.0 < pcts[-1]
+    # Lowest IV ranks lowest, highest ranks 100.
+    assert max(ce, key=lambda q: q.iv).iv_percentile == 100.0
+
+
+def test_iv_percentile_stays_neutral_when_too_few_strikes(monkeypatch):
+    """Mirrors dhan_source's <5-strike bail-out rather than inventing a rank."""
+    monkeypatch.setattr(hs, "fetch_series",
+                        lambda o, t, *a, **kw: _block(24000 + o * 50, 24000.0, [100.0]))
+    snap = hs.reconstruct_range("2026-07-01", "2026-07-02", max_offset=1)[0]
+    assert all(q.iv_percentile == 50.0 for q in snap.chain)
+
+
+def test_iv_percentile_ranks_ce_and_pe_independently(monkeypatch):
+    """Live ranks each option type against its own side; a pooled rank would differ."""
+    def fake_fetch(offset, option_type, *a, **kw):
+        block = _block(24000 + offset * 50, 24000.0, [100.0])
+        # PE IVs sit entirely above CE IVs; if pooled, every PE would rank high.
+        block["iv"] = [10.0 + offset if option_type == "CE" else 50.0 + offset]
+        return block
+
+    monkeypatch.setattr(hs, "fetch_series", fake_fetch)
+    snap = hs.reconstruct_range("2026-07-01", "2026-07-02", max_offset=5)[0]
+
+    for opt in ("CE", "PE"):
+        side = [q for q in snap.chain if q.option_type == opt]
+        assert max(q.iv_percentile for q in side) == 100.0
+        assert min(q.iv_percentile for q in side) < 50.0
+
+
 def test_coverage_of_empty_chain_is_zero_not_a_crash():
     from models import MarketSnapshot
     snap = MarketSnapshot(symbol="NIFTY", spot=24000.0, vwap=24000.0, pcr=0.0,

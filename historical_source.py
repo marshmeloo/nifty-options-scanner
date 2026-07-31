@@ -267,6 +267,7 @@ def reconstruct_range(from_date: str, to_date: str, interval: str = "5",
         spot = spot_by_time.get(ts)
         if spot is None:
             continue  # no spot means no ATM reference; the cycle is unusable
+        _apply_iv_percentiles(chain)
         total_ce = sum(q.oi for q in chain if q.option_type == "CE")
         total_pe = sum(q.oi for q in chain if q.option_type == "PE")
         snapshots.append(
@@ -282,6 +283,42 @@ def reconstruct_range(from_date: str, to_date: str, interval: str = "5",
             )
         )
     return snapshots
+
+
+def _apply_iv_percentiles(chain: list):
+    """
+    Rank each quote's IV against the other strikes of its OWN option type
+    in the same cycle, in place.
+
+    WHY THIS IS NOT LEFT AT A FLAT 50.0
+    -----------------------------------
+    scanner.py scores "IV rich" and "IV cheap" off `iv_percentile`, and
+    nothing else reads it. A constant 50.0 sits between
+    IV_PERCENTILE_LOW and IV_PERCENTILE_HIGH, so neither branch can ever
+    fire -- the backtest would silently evaluate a momentum scorer with
+    its IV component amputated and report the result as if it were the
+    live strategy. Measured on a real live day, iv_percentile spans
+    3.0-100.0 across 64 distinct values, so this is a large part of the
+    scoring surface, not a rounding detail.
+
+    Deliberately mirrors dhan_source's `_cross_sectional_percentile`
+    exactly, INCLUDING its treatment of zero IVs as ordinary values and
+    its <5-strike bail-out. Roughly 18% of quotes carry iv == 0.0 --
+    Dhan simply doesn't publish IV for thinner strikes, and the live
+    recording shows the identical 18.6% rate, so this is normal data
+    rather than corruption. "Correct" here means matching what the live
+    system actually does with these numbers, not what would be
+    theoretically better: the backtest exists to evaluate the code that
+    runs, warts included.
+    """
+    for option_type in ("CE", "PE"):
+        side = [q for q in chain if q.option_type == option_type]
+        ivs = sorted(q.iv for q in side)
+        if len(ivs) < 5:
+            continue  # leave the neutral 50.0; too few strikes to rank meaningfully
+        for q in side:
+            below = sum(1 for x in ivs if x <= q.iv)
+            q.iv_percentile = round(below / len(ivs) * 100, 1)
 
 
 def coverage(snapshot: MarketSnapshot) -> dict:
@@ -317,6 +354,55 @@ def _chunks(from_date: str, to_date: str, days: int = MAX_DAYS_PER_CALL):
         stop = min(start + timedelta(days=days - 1), end)
         yield start.isoformat(), stop.isoformat()
         start = stop + timedelta(days=1)
+
+
+def repair_iv_percentiles(days: list = None) -> dict:
+    """
+    Recompute `iv_percentile` in place on already-written historical days.
+
+    Needed because the first backfill wrote a flat 50.0 (see
+    _apply_iv_percentiles for why that silently amputates scanner.py's IV
+    scoring). iv_percentile is derived entirely from the chain, which is
+    already on disk, so this is pure recomputation -- no API calls, and
+    the 2-year pull does not need re-fetching.
+
+    Refuses to touch live recordings, same reasoning as backfill_candles:
+    those hold the percentiles dhan_source computed at the time, which
+    are what the live system actually saw.
+    """
+    import gzip
+    import json
+    import snapshot_recorder
+
+    days = days or snapshot_recorder.available_days()
+    repaired = {}
+
+    for day in days:
+        path = snapshot_recorder.path_for(day)
+        if not path.exists():
+            continue
+        cycles = list(snapshot_recorder.load_day(day))
+        if not cycles or cycles[0][0].source != "dhan_historical":
+            continue
+
+        for snap, _candles, _meta in cycles:
+            _apply_iv_percentiles(snap.chain)
+
+        with gzip.open(path, "wt", encoding="utf-8") as f:
+            for snap, candles, meta in cycles:
+                f.write(json.dumps({
+                    "timestamp": snap.timestamp.isoformat(),
+                    "logic_version": meta.get("logic_version"),
+                    "spot": snap.spot,
+                    "vwap": snap.vwap,
+                    "pcr": snap.pcr,
+                    "source": snap.source,
+                    "chain": [snapshot_recorder._quote_to_dict(q) for q in snap.chain],
+                    "candles": [snapshot_recorder._candle_to_dict(c) for c in candles],
+                }, default=str) + "\n")
+        repaired[day] = len(cycles)
+
+    return repaired
 
 
 def backfill_candles(days: list = None, interval: str = "5") -> dict:
@@ -484,9 +570,16 @@ def main():
     parser.add_argument("--candles", action="store_true",
                         help="attach real index candles to already-reconstructed days "
                              "(second pass; 1 API call per day)")
+    parser.add_argument("--repair-iv", dest="repair_iv", action="store_true",
+                        help="recompute iv_percentile on already-written days (no API calls)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if args.repair_iv:
+        repaired = repair_iv_percentiles()
+        print(f"{len(repaired)} day(s) had iv_percentile recomputed")
+        return
 
     if args.candles:
         updated = backfill_candles(interval=args.interval)

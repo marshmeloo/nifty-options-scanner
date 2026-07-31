@@ -102,6 +102,29 @@ def test_iv_jump_flagged():
     assert any("IV jump" in i for i in result["issues"])
 
 
+def test_iv_flickering_through_zero_is_not_flagged():
+    """
+    Dhan reports 0.0 for strikes it doesn't publish IV on, so a thin
+    strike drifting in and out of coverage yields 0.0 -> 22.9 -> 0.0 all
+    day. That is missing data, not a vol move -- counting it flagged 391
+    of 493 days and buried every real signal.
+    """
+    snaps = _day("2026-01-05", [24000.0] * 75, iv=20.0)
+    for i, snap in enumerate(snaps):
+        snap.chain[0].iv = 0.0 if i % 2 else 20.0
+    result = hc.check_day(snaps, interval_minutes=5)
+    assert result["passed"], result["issues"]
+
+
+def test_real_iv_jump_between_two_nonzero_values_is_still_flagged():
+    """The zero exemption must not blind the check to a genuine decode error."""
+    snaps = _day("2026-01-05", [24000.0] * 75, iv=15.0)
+    snaps[5].chain[0].iv = 45.0
+    result = hc.check_day(snaps, interval_minutes=5)
+    assert not result["passed"]
+    assert any("IV jump" in i for i in result["issues"])
+
+
 def test_empty_day_fails_rather_than_silently_passing():
     result = hc.check_day([], interval_minutes=5)
     assert not result["passed"]
