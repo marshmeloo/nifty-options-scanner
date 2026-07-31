@@ -319,6 +319,93 @@ def _chunks(from_date: str, to_date: str, days: int = MAX_DAYS_PER_CALL):
         start = stop + timedelta(days=1)
 
 
+def backfill_candles(days: list = None, interval: str = "5") -> dict:
+    """
+    Attach real NIFTY index candles to reconstructed days.
+
+    WHY THIS IS A SEPARATE PASS
+    ---------------------------
+    The rolling-option endpoint returns a per-bar `spot` value but no
+    index OHLC, so backfill() writes `"candles": []`. That is not a
+    cosmetic gap: price_action.analyze() drives support/resistance levels
+    and the ATR that plan_generator uses to size every stop, so replaying
+    momentum against candle-less days would silently evaluate a crippled
+    version of the strategy and report the result as if it were the real
+    one.
+
+    Synthesising candles from the spot series was the obvious shortcut and
+    is deliberately NOT taken -- one spot print per 5-minute bar gives no
+    intra-bar high or low, so every ATR derived from it would be far too
+    small and every stop correspondingly too tight. Dhan's /charts/intraday
+    endpoint returns genuine index OHLC and was probed back two full years
+    (2024-08-01 returns a complete 74-candle session), so the real thing is
+    available for the entire backfill window.
+
+    Costs ONE extra API call per day, versus 42 for the option chain, which
+    is why this is worth doing as its own pass rather than folding into
+    backfill() and re-fetching everything.
+
+    Each cycle gets only the candles at or before its own timestamp, which
+    is exactly what main_live.py hands the recorder live -- a cycle must
+    never see a candle from its own future.
+    """
+    import gzip
+    import json
+    import dhan_source
+    import snapshot_recorder
+
+    days = days or snapshot_recorder.available_days()
+    updated = {}
+
+    for day in days:
+        path = snapshot_recorder.path_for(day)
+        if not path.exists():
+            continue
+
+        cycles = list(snapshot_recorder.load_day(day))
+        if not cycles:
+            continue
+        # Only ever touch reconstructed days. A live recording already has
+        # the candles main_live.py captured at the time, and rewriting one
+        # would replace what actually happened with a later re-fetch.
+        if cycles[0][0].source != "dhan_historical":
+            continue
+        if any(candles for _snap, candles, _meta in cycles):
+            continue  # already enriched
+
+        try:
+            day_candles = dhan_source.get_nifty_intraday_candles(
+                interval=interval,
+                from_date=f"{day} 09:15:00",
+                to_date=f"{day} 15:30:00",
+            )
+        except Exception as e:
+            log.info(f"  [historical] candles for {day} failed, leaving as-is: {e}")
+            continue
+        if not day_candles:
+            log.info(f"  [historical] no candles returned for {day}, leaving as-is")
+            continue
+
+        with gzip.open(path, "wt", encoding="utf-8") as f:
+            for snap, _old_candles, meta in cycles:
+                visible = [c for c in day_candles if c.timestamp <= snap.timestamp]
+                f.write(json.dumps({
+                    "timestamp": snap.timestamp.isoformat(),
+                    "logic_version": meta.get("logic_version"),
+                    "spot": snap.spot,
+                    "vwap": snap.vwap,
+                    "pcr": snap.pcr,
+                    "source": snap.source,
+                    "chain": [snapshot_recorder._quote_to_dict(q) for q in snap.chain],
+                    "candles": [snapshot_recorder._candle_to_dict(c) for c in visible],
+                }, default=str) + "\n")
+
+        updated[day] = len(day_candles)
+        log.info(f"  [historical] {day}: attached {len(day_candles)} candles")
+
+    return updated
+
+
 def backfill(from_date: str, to_date: str, interval: str = "5") -> dict:
     """
     Pull a date range and write it into logs/snapshots/ in the SAME
@@ -389,14 +476,25 @@ def backfill(from_date: str, to_date: str, interval: str = "5") -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    parser.add_argument("--from", dest="from_date", required=True, help="YYYY-MM-DD")
-    parser.add_argument("--to", dest="to_date", required=True, help="YYYY-MM-DD")
+    parser.add_argument("--from", dest="from_date", help="YYYY-MM-DD")
+    parser.add_argument("--to", dest="to_date", help="YYYY-MM-DD")
     parser.add_argument("--interval", default="5", choices=["1", "5", "15", "25", "60"])
     parser.add_argument("--probe", action="store_true",
                         help="fetch one range and report coverage without writing to disk")
+    parser.add_argument("--candles", action="store_true",
+                        help="attach real index candles to already-reconstructed days "
+                             "(second pass; 1 API call per day)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if args.candles:
+        updated = backfill_candles(interval=args.interval)
+        print(f"{len(updated)} day(s) enriched with index candles")
+        return
+
+    if not args.from_date or not args.to_date:
+        parser.error("--from and --to are required unless using --candles")
 
     if args.probe:
         snaps = reconstruct_range(args.from_date, args.to_date, interval=args.interval)

@@ -9,7 +9,7 @@ API enforces by returning HTTP 200 with an empty body instead of an error.
 Run: python -m pytest tests/ -q
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -171,6 +171,102 @@ def test_coverage_reports_narrowest_side_of_the_strike_window(monkeypatch):
     assert cov["min_strike"] == 23900.0 and cov["max_strike"] == 24100.0
     # spot 24080 sits nearer the top: 24100-24080 = 20, vs 24080-23900 = 180.
     assert cov["points_from_spot"] == 20.0
+
+
+def _write_day(tmp_path, monkeypatch, day, source="dhan_historical", candles=None):
+    """Put one reconstructed day on disk in the recorder's own format."""
+    import gzip
+    import json
+    import snapshot_recorder
+
+    monkeypatch.setattr(snapshot_recorder, "SNAPSHOT_DIR", tmp_path)
+    path = snapshot_recorder.path_for(day)
+    base = datetime.fromisoformat(f"{day}T09:20:00")
+    with gzip.open(path, "wt", encoding="utf-8") as f:
+        for i in range(3):
+            f.write(json.dumps({
+                "timestamp": (base + timedelta(minutes=5 * i)).isoformat(),
+                "logic_version": None,
+                "spot": 24000.0, "vwap": 24000.0, "pcr": 1.0, "source": source,
+                "chain": [], "candles": candles or [],
+            }) + "\n")
+    return path
+
+
+def test_backfill_candles_never_shows_a_cycle_its_own_future(tmp_path, monkeypatch):
+    """
+    A cycle at 09:25 must not see the 09:30 candle. Live, main_live.py can
+    only ever pass candles up to 'now'; a backtest that leaked later ones
+    would be reading the future and every result would be worthless.
+    """
+    import snapshot_recorder
+    from models import Candle
+
+    day = "2026-06-01"
+    _write_day(tmp_path, monkeypatch, day)
+
+    base = datetime.fromisoformat(f"{day}T09:20:00")
+    fake = [Candle(timestamp=base + timedelta(minutes=5 * i), open=1.0, high=2.0,
+                   low=0.5, close=1.5, volume=10) for i in range(5)]
+
+    import dhan_source
+    monkeypatch.setattr(dhan_source, "get_nifty_intraday_candles", lambda **kw: fake)
+    hs.backfill_candles(days=[day])
+
+    cycles = list(snapshot_recorder.load_day(day))
+    assert len(cycles) == 3
+    for snap, candles, _meta in cycles:
+        assert candles, "every cycle should have gained candles"
+        assert max(c.timestamp for c in candles) <= snap.timestamp
+
+
+def test_backfill_candles_refuses_to_touch_live_recordings(tmp_path, monkeypatch):
+    """
+    A live day already holds the candles main_live.py saw at the time.
+    Rewriting it would replace what actually happened with a re-fetch.
+    """
+    import dhan_source
+    import snapshot_recorder
+
+    day = "2026-06-02"
+    _write_day(tmp_path, monkeypatch, day, source="dhan")
+
+    called = []
+    monkeypatch.setattr(dhan_source, "get_nifty_intraday_candles",
+                        lambda **kw: called.append(1) or [])
+    assert hs.backfill_candles(days=[day]) == {}
+    assert not called, "must not even fetch candles for a live-recorded day"
+
+
+def test_backfill_candles_skips_already_enriched_days(tmp_path, monkeypatch):
+    import dhan_source
+
+    day = "2026-06-03"
+    existing = [{"timestamp": f"{day}T09:20:00", "open": 1.0, "high": 2.0,
+                 "low": 0.5, "close": 1.5, "volume": 10}]
+    _write_day(tmp_path, monkeypatch, day, candles=existing)
+
+    called = []
+    monkeypatch.setattr(dhan_source, "get_nifty_intraday_candles",
+                        lambda **kw: called.append(1) or [])
+    assert hs.backfill_candles(days=[day]) == {}
+    assert not called
+
+
+def test_backfill_candles_leaves_day_intact_when_fetch_fails(tmp_path, monkeypatch):
+    """A failed candle fetch must not destroy the option chain already on disk."""
+    import dhan_source
+    import snapshot_recorder
+
+    day = "2026-06-04"
+    _write_day(tmp_path, monkeypatch, day)
+
+    def boom(**kw):
+        raise RuntimeError("api down")
+
+    monkeypatch.setattr(dhan_source, "get_nifty_intraday_candles", boom)
+    assert hs.backfill_candles(days=[day]) == {}
+    assert len(list(snapshot_recorder.load_day(day))) == 3
 
 
 def test_coverage_of_empty_chain_is_zero_not_a_crash():
