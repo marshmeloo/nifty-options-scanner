@@ -49,6 +49,7 @@ import requests
 
 import config as cfg
 import oi_analytics
+import dhan_rate_limiter
 from models import OptionQuote, MarketSnapshot, Candle
 from atomic_state import atomic_write_json
 
@@ -84,6 +85,7 @@ def get_expiry_list() -> list:
     nearest expiry -- e.g. the condor rolling to next week's expiry when
     run on expiry day itself, when the "nearest" expiry has ~0 days left.
     """
+    dhan_rate_limiter.wait_for_slot()
     resp = requests.post(
         f"{DHAN_BASE_URL}/optionchain/expirylist",
         headers=_headers(),
@@ -100,6 +102,7 @@ def get_nearest_expiry() -> str:
 
 
 def _fetch_raw_chain(expiry: str) -> dict:
+    dhan_rate_limiter.wait_for_slot()
     resp = requests.post(
         f"{DHAN_BASE_URL}/optionchain",
         headers=_headers(),
@@ -291,6 +294,7 @@ def get_nifty_intraday_candles(interval: str = None, from_date: str = None, to_d
     if to_date is None:
         to_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    dhan_rate_limiter.wait_for_slot()
     resp = requests.post(
         f"{DHAN_BASE_URL}/charts/intraday",
         headers=_headers(),
@@ -337,6 +341,7 @@ def get_nifty_daily_candles(days_back: int = 180) -> list:
     """
     from datetime import timedelta
 
+    dhan_rate_limiter.wait_for_slot()
     resp = requests.post(
         f"{DHAN_BASE_URL}/charts/historical",
         headers=_headers(),

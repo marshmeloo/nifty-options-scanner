@@ -1035,6 +1035,56 @@ Each tier has a cooldown after a failure so a genuinely-down source
 doesn't add latency/log-noise to every 30s poll — see
 `FALLBACK_RETRY_COOLDOWN_SECONDS` in `config.py`.
 
+## Fixed: 2026-07-31 -- Dhan 429s reaching main_live.py mid-trade, not just main_condor.py
+
+The 2026-07-30 backlog entry on Dhan rate limiting (three processes
+sharing one account's 1 request/3s limit with no cross-process
+coordination) was tracked as a lower-urgency item until 2026-07-31,
+when the same storm hit `main_live.py` directly while a real trade was
+open: 48 of 72 failure-related log lines that day landed during that
+one position, including the 5s fast-check itself failing outright
+("Both dhan and nse sources are in cooldown"). Nothing broke only
+because that trade never approached its stop/target during the gaps --
+luck, not the system working as designed. A stop/target check silently
+not running during a real approach is a risk to the P&L data this
+whole project's measurement effort depends on being trustworthy.
+
+`resilient_source.py`'s tier-cooldown bookkeeping (`_last_failure`) is
+in-memory and per-process, so none of the three processes
+(`main_live.py`: 30s + a 5s fast-check; `main_condor.py`: 5 min;
+`main_directional_spread.py`: 30s) has any way to know the other two
+exist, let alone that they share a single account-level rate limit.
+
+New module `dhan_rate_limiter.py`: before every Dhan HTTP call, a
+process calls `wait_for_slot()`, which checks a small shared state file
+for the wall-clock time of the last Dhan request **by any process** and
+sleeps out the remainder of `MIN_INTERVAL_SECONDS` (3.5s, slightly
+above Dhan's documented limit) if needed. Coordination uses a lock file
+created with `os.O_CREAT | os.O_EXCL` -- a standard, portable advisory
+lock the OS guarantees is atomic, so two processes can never both
+believe they hold it. A lock older than `STALE_LOCK_SECONDS` (10s) is
+force-cleared rather than left to deadlock every process sharing the
+account, on the same "any process here can be killed at any time"
+assumption `supervisor.py` already makes. If the lock can't be acquired
+within `MAX_ACQUIRE_WAIT_SECONDS` (8s), a process proceeds without it --
+fails open, rather than ever blocking a trading loop indefinitely over
+a coordination mechanism. Wired into all 4 of `dhan_source.py`'s
+`requests.post()` call sites.
+
+Also widened `main_directional_spread.py`'s `POLL_INTERVAL_SECONDS`
+from 30 to 90: its entry signal is a bias score that doesn't move
+within seconds the way the momentum scanner's setups do, so there's no
+accuracy cost, and it cuts this process's share of shared Dhan request
+volume to a third of what it was.
+
+6 new tests in `tests/test_dhan_rate_limiter.py` (minimum spacing
+enforcement, stale-lock clearing, fail-open under lock contention).
+201 total passing.
+
+This does not fix the NSE fallback tier being blocked by tightened bot
+detection (separate backlog item, not being pursued -- see
+`BACKLOG.md`).
+
 ## Fixed: 2026-07-30 -- condor MTM silently going "unavailable" mid-position
 
 Live log with an open condor:

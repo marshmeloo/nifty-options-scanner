@@ -64,27 +64,40 @@ genuine external-service problem: both tiers occasionally failing
 together with no snapshot at all for that cycle. Same root causes,
 still diagnosed, not yet built:
 
-**1. Dhan 429 (rate limit).** Dhan's option-chain limit is documented
-as 1 request/3s **per account/token**, not per process. Three processes
-now poll the same Dhan credentials independently with no cross-process
-coordination: `main_live.py` (30s + a 5s fast-check), `main_condor.py`
-(5 min), and `main_directional_spread.py` (30s, added 2026-07-29).
-`resilient_source.py`'s tier-cooldown bookkeeping (`_last_failure`) is
-in-memory and per-process, so it can't see what the other two processes
-are doing. Adding the third poller at the same cadence as the momentum
-scanner's own frequent polling is the likely tipping point.
+**1. Dhan 429 (rate limit). FIXED 2026-07-31.** Confirmed the problem
+reached beyond `main_condor.py`: on 2026-07-31 the same rate-limit
+storm hit `main_live.py` directly while a real trade was open -- 48 of
+72 failure-related log lines that day landed during that one position,
+including the 5s fast-check itself failing outright ("Both dhan and
+nse sources are in cooldown"). Nothing broke only because that trade
+never approached its stop/target during the gaps -- luck, not the
+system working as designed. A stop/target check silently not running
+during a real approach is a risk to the P&L data this project's whole
+measurement effort depends on.
 
-  Fix directions, not yet built:
-  - Simplest: widen `main_directional_spread.py`'s
-    `POLL_INTERVAL_SECONDS` (currently 30, matching the momentum
-    scanner) -- it doesn't need reaction speed matching intraday price
-    action, since its entry signal is a bias score that doesn't change
-    within seconds.
-  - Real fix: a small file-based, cross-process request-spacing
-    mechanism (a shared "timestamp of last Dhan request" state file
-    that any process checks/updates atomically before firing, sleeping
-    if needed) so the combined rate across all three processes
-    respects Dhan's limit regardless of how many are running.
+  Built both fix directions:
+  - `dhan_rate_limiter.py`: a file-lock-based cross-process request
+    spacer. Before every Dhan HTTP call, each of the three processes
+    now calls `wait_for_slot()`, which checks a shared state file for
+    the wall-clock time of the last Dhan request **by any process**
+    and sleeps out the remainder of `MIN_INTERVAL_SECONDS` (3.5s) if
+    needed. Uses `os.O_CREAT | os.O_EXCL` for an atomic, portable
+    advisory lock; force-clears locks older than `STALE_LOCK_SECONDS`
+    (10s) so a crashed owner can't deadlock the other two processes;
+    gives up and proceeds without the lock past
+    `MAX_ACQUIRE_WAIT_SECONDS` (8s) rather than ever blocking a trading
+    loop indefinitely over a coordination mechanism. Wired into all 4
+    of `dhan_source.py`'s `requests.post()` call sites. Covered by
+    `tests/test_dhan_rate_limiter.py` (spacing enforcement, stale-lock
+    clearing, fail-open behavior under contention).
+  - `config_directional_spread.py`'s `POLL_INTERVAL_SECONDS` widened
+    30 -> 90: this strategy's entry signal is a bias score that doesn't
+    move within seconds like the momentum scanner's setups do, so
+    there's no accuracy cost, and it cuts this process's share of
+    shared Dhan request volume to a third of what it was.
+
+  What this does NOT fix: NSE fallback tier blocking (#2 below) --
+  unrelated, external, and not being pursued (see that item).
 
 **2. NSE 404 (fallback tier blocked).** Tested the exact endpoint
 directly: the cookie warm-up GET to the NSE homepage itself now returns

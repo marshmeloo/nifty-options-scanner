@@ -71,12 +71,15 @@ STOP_LOSS_PCT_OF_MAX_LOSS = 50.0         # close once mark-to-market loss reache
 BREACH_WARNING_BUFFER_POINTS = 40
 
 # --- Timing ---
-# Polls at the SAME cadence as the momentum scanner (main_live.py), not
-# the condor's coarser 5-minute poll -- this strategy can open on any
-# day the bias reads strongly enough, not just once a week, so it needs
-# to notice that as promptly as the momentum scanner notices its own
-# setups.
-POLL_INTERVAL_SECONDS = 30
+# Widened from 30s (2026-07-31): the bias score this strategy enters on
+# doesn't move within seconds like the momentum scanner's setups do, so
+# there's no accuracy cost to polling less often -- but every poll shares
+# Dhan's per-account rate limit with main_live.py and main_condor.py (see
+# dhan_rate_limiter.py), and this process was one of three contributing to
+# 429 storms that reached main_live.py during a live trade on 2026-07-31.
+# 90s keeps it responsive to a same-day bias flip while cutting its share
+# of shared request volume to a third of what it was.
+POLL_INTERVAL_SECONDS = 90
 
 # --- Approval (see main_directional_spread.py) ---
 # Same meaning as config_condor.AUTO_APPROVE_NEW_POSITIONS: a candidate
