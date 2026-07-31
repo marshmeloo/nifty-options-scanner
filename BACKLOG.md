@@ -43,27 +43,26 @@ subscription, ₹499+tax/month) and a genuinely different process
 architecture — not a REST-polling module like everything else here.
 Scoped out for now; revisit once the above two items are settled.
 
-## Data-source failures during main_condor.py (observed live, 2026-07-30)
+## Dhan rate limiting across three concurrent processes (observed live, 2026-07-30)
 
-Real log from a live `main_condor.py` session with an open position:
+Real log from a live `main_condor.py` session:
 
 ```
 [10:57:14] (dhan) NIFTY spot 24350.7
-  Open condor: short CE 24500.0 / short PE 23850.0  MTM P&L: unavailable this cycle
   [data source] dhan failed, falling back: 429 Client Error: Too Many Requests for url: https://api.dhan.co/v2/optionchain
   [data source] nse failed, falling back: 404 Client Error: Not Found for url: https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY
   Error this cycle (will retry next cycle): 404 Client Error: Not Found for url: https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY
 ```
 
-Recurred repeatedly through the session, both tiers failing together on
-several cycles (`MTM P&L: unavailable this cycle`), meaning the open
-condor went unmarked and unmonitored for those cycles. Not a false
-action (condor_tracker.update_position simply skips a cycle it has no
-snapshot for -- confirmed safe, no bad write), but real monitoring
-blind-spots on a position with live capital risk, and worth fixing
-before relying on this unattended.
-
-Two independent causes, already diagnosed:
+UPDATE: the original version of this entry conflated two separate
+failures. The second one -- MTM reading "unavailable" even on cycles
+where the chain fetch clearly succeeded -- turned out to be a real bug
+in our own code (`STRIKE_RANGE_POINTS` silently dropping an
+already-tracked strike as spot drifted), **fixed** -- see the README's
+"Fixed: 2026-07-30" entry. What's left in this backlog item is only the
+genuine external-service problem: both tiers occasionally failing
+together with no snapshot at all for that cycle. Same root causes,
+still diagnosed, not yet built:
 
 **1. Dhan 429 (rate limit).** Dhan's option-chain limit is documented
 as 1 request/3s **per account/token**, not per process. Three processes

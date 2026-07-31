@@ -91,6 +91,25 @@ def get_cached_banknifty_context():
     return _banknifty_cache["context"]
 
 
+def _tracked_strikes(state: dict) -> set:
+    """
+    Strikes of every currently-open momentum trade -- must survive
+    STRIKE_RANGE_POINTS (chain-build-time filter, ±800pts of CURRENT
+    spot by default) regardless of how far they drift from spot.
+
+    Same bug as the one confirmed live in main_condor.py (see
+    dhan_source.get_nifty_snapshot's docstring): a strike filtered out
+    of the chain isn't a crash here, trade_tracker.update_open_trades()
+    already tolerates a missing quote by skipping that trade for the
+    cycle -- but "tolerates" means the stop/target check for that trade
+    silently doesn't run either, which is worse for an intraday trade
+    than for a slow-moving condor leg. Lower probability here (an 800pt
+    same-day spot move is a >3% day, rare) but the same root cause, and
+    free to close now that the fix exists.
+    """
+    return {t["strike"] for t in state.get("trades", [])}
+
+
 def market_is_open(now: datetime = None) -> bool:
     now = now or datetime.now()
     if now.weekday() >= 5:  # Saturday/Sunday
@@ -99,7 +118,7 @@ def market_is_open(now: datetime = None) -> bool:
 
 
 def run_once(expiry: str, state: dict):
-    snapshot = get_nifty_snapshot(expiry=expiry)
+    snapshot = get_nifty_snapshot(expiry=expiry, must_include_strikes=_tracked_strikes(state))
     ts = snapshot.timestamp.strftime("%H:%M:%S")
     log.info(f"\n[{ts}] ({snapshot.source}) NIFTY spot {snapshot.spot}, VWAP-proxy {snapshot.vwap}, PCR {snapshot.pcr}")
 
@@ -333,7 +352,8 @@ def force_close_all(state: dict, expiry: str, last_snapshot=None):
     """
     if not state["trades"]:
         return
-    snapshot = last_snapshot if last_snapshot is not None else get_nifty_snapshot(expiry=expiry)
+    snapshot = last_snapshot if last_snapshot is not None else get_nifty_snapshot(
+        expiry=expiry, must_include_strikes=_tracked_strikes(state))
     closed = tt.force_close_end_of_day(state, snapshot)
     for trade in closed:
         log.info(
@@ -358,7 +378,7 @@ def check_open_trades_fast(state: dict, expiry: str):
     if not state["trades"]:
         return
     try:
-        snapshot = get_nifty_snapshot(expiry=expiry)
+        snapshot = get_nifty_snapshot(expiry=expiry, must_include_strikes=_tracked_strikes(state))
     except Exception as e:
         log.info(f"  [fast check] snapshot fetch failed, will retry next fast check: {e}")
         return
@@ -431,7 +451,8 @@ def run_forever():
             f"guess -- see each journal entry's lesson for its exact price source)."
         )
         try:
-            recovery_snapshot = get_nifty_snapshot(expiry=get_nearest_expiry())
+            recovery_snapshot = get_nifty_snapshot(
+                expiry=get_nearest_expiry(), must_include_strikes=_tracked_strikes(state))
         except Exception as e:
             log.info(f"  Could not fetch a fresh snapshot for recovery ({e}) -- using each trade's last known price instead.")
             recovery_snapshot = None

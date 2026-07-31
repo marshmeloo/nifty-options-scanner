@@ -84,10 +84,26 @@ def choose_expiry_to_open(expiry_list: list, min_days_out: int, today=None) -> s
     return None
 
 
+def _tracked_strikes(position: dict) -> set:
+    """
+    Strikes an open condor position needs to keep seeing in every chain
+    fetch, regardless of how far they drift from spot. See
+    dhan_source.get_nifty_snapshot's docstring for the incident this
+    prevents: a hedge leg silently vanishing from the chain as spot
+    drifts, with MTM P&L going "unavailable" and no error logged.
+    """
+    if not position or position.get("status") != "OPEN":
+        return set()
+    plan = position["plan"]
+    return {plan["short_ce_strike"], plan["short_pe_strike"],
+            plan["hedge_ce_strike"], plan["hedge_pe_strike"]}
+
+
 def run_once(state: dict):
+    protect = _tracked_strikes(state.get("position"))
     expiry_list = get_expiry_list()
     nearest_expiry = expiry_list[0]
-    snapshot = get_nifty_snapshot(expiry=nearest_expiry)
+    snapshot = get_nifty_snapshot(expiry=nearest_expiry, must_include_strikes=protect)
     ts = snapshot.timestamp.strftime("%H:%M:%S")
     log.info(f"[{ts}] ({snapshot.source}) NIFTY spot {snapshot.spot}")
 

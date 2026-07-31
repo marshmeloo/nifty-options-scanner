@@ -94,12 +94,16 @@ def get_expiry_list() -> list:
     return raw["records"]["expiryDates"]
 
 
-def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
+def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None) -> MarketSnapshot:
     """
     Fetch a live Nifty option chain from NSE's public API and return it in
     the same MarketSnapshot shape as dhan_source.get_nifty_snapshot, so
     the rest of the pipeline can't tell the difference. No Greeks (delta/
     theta/vega stay None); everything OI/IV/PCR-based still works.
+
+    `must_include_strikes`: see dhan_source.get_nifty_snapshot's docstring
+    -- same fix, mirrored here so the fallback tier can't reintroduce the
+    same blind spot if a session fails over to NSE mid-position.
     """
     raw = _fetch_raw_chain()
     records = raw["records"]
@@ -108,9 +112,12 @@ def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
     all_expiries = records["expiryDates"]
     target_expiry = expiry or all_expiries[0]
 
+    protected = must_include_strikes or set()
     rows = [r for r in records["data"] if r.get("expiryDate") == target_expiry]
     if getattr(cfg, "STRIKE_RANGE_POINTS", None):
-        rows = [r for r in rows if abs(r["strikePrice"] - spot) <= cfg.STRIKE_RANGE_POINTS]
+        rows = [r for r in rows
+                if abs(r["strikePrice"] - spot) <= cfg.STRIKE_RANGE_POINTS
+                or r["strikePrice"] in protected]
 
     chain = []
     for row in rows:

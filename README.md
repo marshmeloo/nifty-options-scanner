@@ -1035,6 +1035,60 @@ Each tier has a cooldown after a failure so a genuinely-down source
 doesn't add latency/log-noise to every 30s poll — see
 `FALLBACK_RETRY_COOLDOWN_SECONDS` in `config.py`.
 
+## Fixed: 2026-07-30 -- condor MTM silently going "unavailable" mid-position
+
+Live log with an open condor:
+
+```
+[10:57:14] Open condor: ...  MTM P&L: unavailable this cycle
+[11:07:14] Open condor: ...  MTM P&L: Rs 114
+[11:17:15] Open condor: ...  MTM P&L: unavailable this cycle
+[11:22:16] Open condor: ...  MTM P&L: unavailable this cycle
+```
+
+No data-source error logged alongside the "unavailable" cycles -- the
+chain fetch was succeeding. Root cause: `STRIKE_RANGE_POINTS` (default
+800pts of CURRENT spot) is applied when the chain is built, in both
+`dhan_source.py` and `nse_source.py`, unconditionally on every fetch.
+The condor's hedge PE leg, opened 300pts (`HEDGE_DISTANCE_POINTS`)
+below its short strike, was close enough to that 800pt line that normal
+intraday drift pushed it in and out of the window from one cycle to the
+next. Checked against the real log, the leg's distance from spot at
+each timestamp lines up exactly with which cycles failed:
+
+| Time | Spot | Hedge leg distance | Included? |
+|---|---|---|---|
+| 10:57:14 | 24350.7 | 800.7 | no -- unavailable |
+| 11:07:14 | 24346.5 | 796.5 | yes -- Rs 114 |
+| 11:17:15 | 24356.9 | 806.9 | no -- unavailable |
+
+Same bug **class** as the 2026-07-22 incident above, a different
+filter. That fix moved the *premium* band out of chain-build time
+entirely, because a candidate-selection filter has no business touching
+the raw chain at all. `STRIKE_RANGE_POINTS` is different: narrowing the
+universe for scanning and IV-percentile purposes is a deliberate,
+reasonable choice (`config.py`: "deep OTM strikes are usually
+near-worthless and just add noise"), so it wasn't removed -- it just
+needed the same protection `PREMIUM_MIN`/`PREMIUM_MAX` already has:
+never drop a strike something is actively tracking.
+
+`get_nifty_snapshot()` (in `dhan_source.py`, `nse_source.py`, and
+`resilient_source.py`'s pass-through) now takes an optional
+`must_include_strikes` set that bypasses the distance filter regardless
+of how far a protected strike has drifted. `main_condor.py` passes its
+open position's 4 legs, `main_directional_spread.py` its 2, and
+`main_live.py` every open momentum trade's strike -- the last of these
+wasn't reported broken (no error there either, `trade_tracker.py`
+already tolerates a missing quote by skipping that trade for the
+cycle), but it's the identical root cause with a worse consequence: a
+skipped cycle means that trade's stop/target check silently didn't run
+either. Lower probability there (an 800pt same-day move is a >3% day,
+rare) but free to close while fixing the confirmed case.
+
+11 new tests, including a full `get_nifty_snapshot()` reproduction
+proving a protected strike is dropped without the fix and survives with
+it, using the real incident's exact strikes and spot. 195 total passing.
+
 ## Fixed: 2026-07-29 -- condor never opened, "not the day after expiry" every cycle
 
 `main_condor.py`'s `is_day_after_expiry()` could structurally never

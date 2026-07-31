@@ -65,22 +65,29 @@ def get_nearest_expiry() -> str:
     return get_expiry_list()[0]
 
 
-def get_nifty_snapshot(expiry: str = None):
+def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None):
     """
     Try Dhan, then NSE. There is no tier-3 chain source (TradingView has
     no OI data), so if both fail this re-raises the NSE failure so the
     caller's existing except-and-retry-next-cycle handling still works.
+
+    `must_include_strikes`: pass the strikes of any position you're
+    currently tracking (condor legs, a directional spread, open momentum
+    trades) so STRIKE_RANGE_POINTS can't silently drop them as spot
+    drifts -- see dhan_source.get_nifty_snapshot's docstring for the
+    incident this fixes. Threaded through both tiers so a mid-position
+    failover to NSE doesn't reopen the same blind spot.
     """
     if _tier_available("dhan"):
         try:
-            snap = dhan_source.get_nifty_snapshot(expiry=expiry)
+            snap = dhan_source.get_nifty_snapshot(expiry=expiry, must_include_strikes=must_include_strikes)
             return snap
         except Exception as e:
             _mark_failed("dhan", e)
 
     if _tier_available("nse"):
         try:
-            snap = nse_source.get_nifty_snapshot(expiry=expiry)
+            snap = nse_source.get_nifty_snapshot(expiry=expiry, must_include_strikes=must_include_strikes)
             return snap
         except Exception as e:
             _mark_failed("nse", e)

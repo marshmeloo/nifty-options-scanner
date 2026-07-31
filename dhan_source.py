@@ -367,10 +367,34 @@ def get_nifty_daily_candles(days_back: int = 180) -> list:
     return candles
 
 
-def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
+def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None) -> MarketSnapshot:
     """
     Fetch a live Nifty option chain snapshot from Dhan and return it in the
     same MarketSnapshot shape the rest of the pipeline already consumes.
+
+    `must_include_strikes`: strikes that must survive the
+    STRIKE_RANGE_POINTS filter below regardless of distance from spot.
+
+    BUG FIXED 2026-07-30: STRIKE_RANGE_POINTS (default 800pts of CURRENT
+    spot) was applied here unconditionally, silently dropping any strike
+    that drifted outside the window on every fetch -- including strikes
+    an open position is actively tracking. Confirmed live: an iron
+    condor's hedge PE, opened 300pts below its short strike, crossed the
+    800pt line as spot drifted through a session and its MTM P&L read
+    "unavailable" for four consecutive cycles with no error logged,
+    exactly tracking the leg's distance from spot crossing 800.
+
+    Same bug CLASS as the 2026-07-22 incident (README), but a DIFFERENT
+    filter: that fix moved the PREMIUM band out of chain-build time
+    entirely because a NEW candidate's premium filter has no business
+    touching the raw chain. STRIKE_RANGE_POINTS is different -- it's a
+    deliberate universe-narrowing choice for scanning/IV-percentile
+    purposes (config.py: "deep OTM strikes are usually near-worthless
+    and just add noise") that's fine to keep, it just also needs the
+    same protection PREMIUM_MIN/MAX already has: never remove a strike
+    something is already tracking. Callers with an open position
+    (main_condor.py, main_directional_spread.py, main_live.py) pass
+    their own tracked strikes through this parameter.
     """
     if expiry is None:
         expiry = get_nearest_expiry()
@@ -379,11 +403,12 @@ def get_nifty_snapshot(expiry: str = None) -> MarketSnapshot:
     spot = raw["last_price"]
     vwap_proxy = _update_vwap_proxy(spot)
 
+    protected = must_include_strikes or set()
     raw_chain = raw["oc"]
     if getattr(cfg, "STRIKE_RANGE_POINTS", None):
         raw_chain = {
             k: v for k, v in raw_chain.items()
-            if abs(float(k) - spot) <= cfg.STRIKE_RANGE_POINTS
+            if abs(float(k) - spot) <= cfg.STRIKE_RANGE_POINTS or float(k) in protected
         }
 
     iv_history = _load_iv_history()

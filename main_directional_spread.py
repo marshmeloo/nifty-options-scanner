@@ -65,9 +65,23 @@ def market_is_open(now: datetime = None) -> bool:
     return MARKET_OPEN <= now.time() <= MARKET_CLOSE
 
 
+def _tracked_strikes(position: dict) -> set:
+    """
+    Same fix as main_condor.py's own _tracked_strikes -- see
+    dhan_source.get_nifty_snapshot's docstring for the incident (a
+    hedge leg silently vanishing from the chain as spot drifts past
+    STRIKE_RANGE_POINTS, with no error logged).
+    """
+    if not position or position.get("status") != "OPEN":
+        return set()
+    plan = position["plan"]
+    return {plan["short_strike"], plan["hedge_strike"]}
+
+
 def run_once(state: dict):
+    protect = _tracked_strikes(state.get("position"))
     expiry = get_nearest_expiry()
-    snapshot = get_nifty_snapshot(expiry=expiry)
+    snapshot = get_nifty_snapshot(expiry=expiry, must_include_strikes=protect)
     ts = snapshot.timestamp.strftime("%H:%M:%S")
     log.info(f"[{ts}] ({snapshot.source}) NIFTY spot {snapshot.spot}")
 
