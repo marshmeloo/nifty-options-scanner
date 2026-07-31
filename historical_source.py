@@ -163,7 +163,7 @@ def fetch_series(offset: int, option_type: str, from_date: str, to_date: str,
     return block or {}
 
 
-def _rows(block: dict):
+def _rows(block: dict, interval_minutes: int = 5):
     """
     Walk one block's parallel arrays as per-timestamp dicts.
 
@@ -171,6 +171,24 @@ def _rows(block: dict):
     a truncated array would otherwise silently misalign every field after
     the gap, pairing one bar's price with another bar's OI -- corruption
     that looks like data rather than like an error.
+
+    Each bar's timestamp is the bar's START, but the value we read from it
+    is its CLOSE -- the price at the bar's END. So `interval_minutes` is
+    added to place the observation at the instant it actually describes.
+
+    This is not a guess. Validated against the 2026-07-30 live recording
+    (validate_historical.py) by sweeping candidate shifts; agreement has a
+    sharp minimum at exactly one interval:
+
+        shift    spot median    LTP median
+        +0s        7.90pts        2.53%
+        +150s      5.20pts        1.86%
+        +300s      1.20pts        0.41%   <- one full 5-minute bar
+        +600s      8.05pts        2.62%
+
+    Without this, every backtest would run against prices lagging the
+    market by one bar -- producing confident, entirely fictional results,
+    since nothing about it errors.
     """
     stamps = block.get("timestamp") or []
     if not stamps:
@@ -179,7 +197,8 @@ def _rows(block: dict):
     n = min([len(stamps)] + [len(block[k]) for k in keys])
     for i in range(n):
         row = {k: block[k][i] for k in keys}
-        row["timestamp"] = datetime.fromtimestamp(stamps[i])
+        row["timestamp"] = (datetime.fromtimestamp(stamps[i])
+                            + timedelta(minutes=interval_minutes))
         yield row
 
 
@@ -208,7 +227,7 @@ def reconstruct_range(from_date: str, to_date: str, interval: str = "5",
             if not block:
                 missing.append(f"{_offset_label(offset)} {option_type}")
                 continue
-            for row in _rows(block):
+            for row in _rows(block, interval_minutes=int(interval)):
                 ts = row["timestamp"]
                 if row.get("spot") is not None:
                     spot_by_time[ts] = float(row["spot"])

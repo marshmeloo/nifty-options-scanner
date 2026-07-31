@@ -48,6 +48,34 @@ def test_rows_zips_to_shortest_array_instead_of_misaligning():
     assert rows[1]["close"] == 101.0 and rows[1]["oi"] == 600
 
 
+def test_bar_timestamp_is_advanced_to_the_bars_close():
+    """
+    The API stamps each bar with its START, but we read its CLOSE. Without
+    advancing by one interval every backtest runs one bar behind the
+    market -- silently, since nothing errors. Validated against the live
+    2026-07-30 recording; see _rows' docstring for the shift sweep.
+    """
+    base = 1782877500
+    block = {"timestamp": [base], "close": [100.0]}
+
+    five = list(hs._rows(block, interval_minutes=5))[0]["timestamp"]
+    one = list(hs._rows(block, interval_minutes=1))[0]["timestamp"]
+
+    assert (five - datetime.fromtimestamp(base)).total_seconds() == 300
+    assert (one - datetime.fromtimestamp(base)).total_seconds() == 60
+
+
+def test_reconstruct_range_applies_the_interval_shift(monkeypatch):
+    """The shift must survive the pivot, not just exist inside _rows."""
+    base = 1782877500
+    monkeypatch.setattr(hs, "fetch_series", lambda o, t, *a, **kw: {
+        "timestamp": [base], "close": [100.0], "strike": [24000.0],
+        "spot": [24010.0], "oi": [1000], "volume": [10], "iv": [12.5],
+    })
+    snap = hs.reconstruct_range("2026-07-01", "2026-07-02", interval="15", max_offset=0)[0]
+    assert (snap.timestamp - datetime.fromtimestamp(base)).total_seconds() == 900
+
+
 def test_rows_empty_when_no_timestamps():
     assert list(hs._rows({})) == []
     assert list(hs._rows({"close": [1.0]})) == []
