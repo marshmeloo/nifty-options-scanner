@@ -333,8 +333,10 @@ def backfill(from_date: str, to_date: str, interval: str = "5") -> dict:
     import gzip
     import json
     import snapshot_recorder
+    import historical_consistency as hc
 
     written = {}
+    all_day_snaps = {}
     for chunk_from, chunk_to in _chunks(from_date, to_date):
         log.info(f"  [historical] fetching {chunk_from} .. {chunk_to}")
         snapshots = reconstruct_range(chunk_from, chunk_to, interval=interval)
@@ -342,6 +344,7 @@ def backfill(from_date: str, to_date: str, interval: str = "5") -> dict:
         by_day = {}
         for snap in snapshots:
             by_day.setdefault(snap.timestamp.date(), []).append(snap)
+        all_day_snaps.update({d.isoformat(): s for d, s in by_day.items()})
 
         snapshot_recorder.SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
         for day, day_snaps in by_day.items():
@@ -368,6 +371,18 @@ def backfill(from_date: str, to_date: str, interval: str = "5") -> dict:
                     }, default=str) + "\n")
             written[day.isoformat()] = len(day_snaps)
             log.info(f"  [historical] wrote {day}: {len(day_snaps)} cycles")
+
+    if written:
+        sweep = hc.check_range(
+            {d: s for d, s in all_day_snaps.items() if d in written},
+            interval_minutes=int(interval),
+        )
+        log.info("  " + hc.describe(sweep).replace("\n", "\n  "))
+        if not sweep["passed"]:
+            log.info(
+                f"  [historical] {len(sweep['failed_days'])} day(s) failed consistency "
+                f"checks -- look before trusting any backtest that includes them"
+            )
 
     return written
 
