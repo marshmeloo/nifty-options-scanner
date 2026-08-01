@@ -102,6 +102,12 @@ class Policy:
     # itself. Making it a switch means the correctness is stated rather
     # than inherited from a coincidence.
     use_learned_adjustment: bool = True
+    # Optional callable(setup) -> float replacing the scanner's own score,
+    # so alternative weightings can be evaluated over recorded history
+    # WITHOUT editing scanner.py or config.py. Keeping variants out of the
+    # live modules matters: a weighting under test must not be one edit
+    # away from silently becoming the weighting that trades.
+    rescore: object = None
 
     def resolved_min_score(self) -> float:
         return self.min_score if self.min_score is not None else config.MIN_CONVICTION_SCORE_TO_TRACK
@@ -328,6 +334,13 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
             setups = scan(snapshot, price_levels=levels, context=context)
             if not setups:
                 continue
+            # scan() returns candidates ranked by ITS score, and the loop
+            # below takes the first that clears every gate. Under a rescore
+            # that ranking is stale, so the variant would still be picking
+            # by the baseline's preference and only re-scoring the winner --
+            # measuring almost nothing. Re-rank on the score actually in use.
+            if policy.rescore:
+                setups = sorted(setups, key=policy.rescore, reverse=True)
             bias_label, bias_score, _r = compute_market_bias(snapshot, context)
 
             for setup in setups:
@@ -335,10 +348,11 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
                 if not policy.allow_repeat_strike and key in traded_keys:
                     continue
 
+                base_score = policy.rescore(setup) if policy.rescore else setup.score
                 if policy.use_learned_adjustment:
-                    adjusted, _notes = tt.apply_learned_adjustment(setup.score, setup.reasons)
+                    adjusted, _notes = tt.apply_learned_adjustment(base_score, setup.reasons)
                 else:
-                    adjusted = setup.score
+                    adjusted = base_score
                 if policy.use_bias_gate:
                     from scanner import apply_bias_gate
                     blocked, penalty, _note = apply_bias_gate(setup, bias_label, bias_score)
