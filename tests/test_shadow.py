@@ -267,3 +267,96 @@ def test_warn_if_incomplete_flags_a_partial_day():
     warning = warn_if_incomplete("2026-07-29", cycles)
     assert warning is not None
     assert "INCOMPLETE" in warning
+
+
+# --- risk-gate state (daily-loss breaker + exposure cap) ---------------
+#
+# shadow.py passed hardcoded 0.0/0.0 to risk_checker.check() until
+# 2026-08-01, so MAX_DAILY_LOSS_PCT and MAX_TOTAL_EXPOSURE_PCT were dead
+# in every backtest -- exactly the defect trade_tracker.compute_risk_state
+# was written to fix on the LIVE side. It went unnoticed because baseline
+# scoring never traded often enough to breach either limit; a variant
+# trading 5x a day breached the daily-loss cap on 2% of days carrying 41%
+# of its P&L.
+
+from shadow import risk_state_at
+
+
+def _pos(key, entry, stop, lots, opened, closed, net_inr):
+    t0 = datetime.datetime(2026, 7, 29, 9, 15)
+    return {
+        "key": key, "entry": entry, "stop": stop, "lots": lots,
+        "opened_ts": t0 + datetime.timedelta(minutes=opened),
+        "closed_ts": None if closed is None else t0 + datetime.timedelta(minutes=closed),
+        "net_inr": net_inr,
+    }
+
+
+def _at(minute):
+    return datetime.datetime(2026, 7, 29, 9, 15) + datetime.timedelta(minutes=minute)
+
+
+def test_realized_loss_is_invisible_until_the_trade_actually_closes():
+    """
+    Every simulated trade is resolved instantly by walking forward, so its
+    loss sits in memory long before it happens in simulated time. Counting
+    it early would trip the breaker at 10:00 on a 14:00 loss -- the same
+    look-ahead already fixed once in stop_after_loss.
+    """
+    positions = [_pos(("24000.0", "PE"), 100.0, 90.0, 1, opened=0, closed=300, net_inr=-25_000)]
+
+    _exp, loss_before = risk_state_at({}, positions, _at(60))
+    _exp, loss_after = risk_state_at({}, positions, _at(301))
+
+    assert loss_before == 0.0, "a loss that has not happened yet must not gate anything"
+    assert loss_after > 0.0
+
+
+def test_daily_loss_pct_is_expressed_against_total_capital():
+    positions = [_pos(("24000.0", "PE"), 100.0, 90.0, 1, opened=0, closed=10, net_inr=-15_000)]
+    _exp, loss = risk_state_at({}, positions, _at(20))
+    assert loss == round(15_000 / config.TOTAL_CAPITAL * 100, 4)
+
+
+def test_a_profitable_day_reports_zero_loss_not_a_negative():
+    """The breaker only cares about losses; a green day must read 0.0."""
+    positions = [_pos(("24000.0", "PE"), 100.0, 90.0, 1, opened=0, closed=10, net_inr=+40_000)]
+    _exp, loss = risk_state_at({}, positions, _at(20))
+    assert loss == 0.0
+
+
+def test_open_positions_count_toward_exposure_only_while_open():
+    positions = [_pos(("24000.0", "PE"), 100.0, 90.0, 2, opened=10, closed=60, net_inr=0.0)]
+    lot = getattr(config, "NIFTY_LOT_SIZE", 65)
+    expected = (100.0 - 90.0) * lot * 2 / config.TOTAL_CAPITAL * 100
+
+    before, _l = risk_state_at({}, positions, _at(5))
+    during, _l = risk_state_at({}, positions, _at(30))
+    after, _l = risk_state_at({}, positions, _at(90))
+
+    assert before == 0.0
+    assert round(during, 4) == round(expected, 4)
+    assert after == 0.0, "a closed position must stop consuming exposure"
+
+
+def test_unrealized_loss_on_an_open_position_counts_toward_the_breaker():
+    """Live's compute_risk_state includes unrealized loss; so must this."""
+    key = ("24000.0", "PE")
+    index = {key: _series([(0, 100.0, 101.0, 100.0), (30, 60.0, 61.0, 60.0)])}
+    positions = [_pos(key, 100.0, 90.0, 1, opened=0, closed=None, net_inr=None)]
+
+    _exp, loss = risk_state_at(index, positions, _at(30))
+    lot = getattr(config, "NIFTY_LOT_SIZE", 65)
+    assert loss == round((100.0 - 60.0) * lot / config.TOTAL_CAPITAL * 100, 4)
+
+
+def test_unrealized_uses_the_last_price_at_or_before_now_never_a_future_one():
+    key = ("24000.0", "PE")
+    index = {key: _series([(0, 100.0, 101.0, 100.0),
+                           (30, 60.0, 61.0, 60.0),
+                           (90, 10.0, 11.0, 10.0)])}
+    positions = [_pos(key, 100.0, 90.0, 1, opened=0, closed=None, net_inr=None)]
+
+    _exp, at_30 = risk_state_at(index, positions, _at(30))
+    _exp, at_90 = risk_state_at(index, positions, _at(90))
+    assert at_30 < at_90, "the 90-minute price must not leak into the 30-minute reading"

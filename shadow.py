@@ -167,6 +167,56 @@ def _closeable_price(bid, ltp) -> float:
     return ltp
 
 
+def _price_at(index, key, ts):
+    """Last recorded closeable price for `key` at or before `ts`."""
+    px = None
+    for t, bid, _ask, ltp in index.get(key, []):
+        if t > ts:
+            break
+        got = _closeable_price(bid, ltp)
+        if got is not None:
+            px = got
+    return px
+
+
+def risk_state_at(index, positions: list, ts) -> tuple:
+    """
+    (open_exposure_pct, daily_loss_pct) as of `ts`, mirroring
+    trade_tracker.compute_risk_state so the backtest gates on the same
+    numbers live does.
+
+    CAUSALITY IS THE WHOLE POINT. Every simulated trade is resolved
+    immediately by walking forward through recorded prices, so its outcome
+    is sitting in memory long "before" it happens in simulated time. A
+    loss is therefore only counted once `closed_at <= ts`, and a position
+    only counts toward exposure while `opened_at <= ts < closed_at`.
+    Without that gating the breaker would trip at 10:00 on a loss that
+    does not occur until 14:00 -- the same look-ahead defect already fixed
+    once in this module's stop_after_loss rule.
+    """
+    capital = config.TOTAL_CAPITAL
+    lot_size = getattr(config, "NIFTY_LOT_SIZE", 65)
+
+    realized = 0.0
+    unrealized = 0.0
+    exposure_inr = 0.0
+
+    for p in positions:
+        if p["closed_ts"] is not None and p["closed_ts"] <= ts:
+            realized += p["net_inr"] or 0.0
+        elif p["opened_ts"] <= ts:
+            exposure_inr += (p["entry"] - p["stop"]) * lot_size * p["lots"]
+            px = _price_at(index, p["key"], ts)
+            if px is not None:
+                unrealized += (px - p["entry"]) * lot_size * p["lots"]
+
+    net = realized + unrealized
+    return (
+        round(exposure_inr / capital * 100, 4),
+        round(max(0.0, -net) / capital * 100, 4),
+    )
+
+
 def walk_trade_forward(index, key, entry_ts, trade: ShadowTrade, lots: int = 1) -> ShadowTrade:
     """
     Advance a simulated trade through every later recorded cycle until it
@@ -297,6 +347,11 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
     min_score, target_rr = policy.resolved_min_score(), policy.resolved_target_rr()
 
     trades = []
+    # Parallel record of what each trade meant for RISK, in the shape
+    # risk_state_at needs. Kept alongside `trades` rather than on
+    # ShadowTrade because it is bookkeeping for the gates, not part of the
+    # result a caller consumes.
+    positions = []
     open_until = None       # timestamp the current position closes at
     traded_keys = set()
     # Timestamp a real stop-out becomes KNOWN, not the timestamp of the
@@ -368,7 +423,8 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
                     continue
                 if plan.lots <= 0:
                     continue
-                verdict = check(plan, 0.0, 0.0, "normal")
+                exposure_pct, daily_loss_pct = risk_state_at(index, positions, ts)
+                verdict = check(plan, exposure_pct, daily_loss_pct, "normal")
                 if verdict.decision != "APPROVED":
                     continue
 
@@ -388,6 +444,15 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
                 )
                 trade = walk_trade_forward(index, key, ts, trade, plan.lots)
                 trades.append(trade)
+                positions.append({
+                    "key": key,
+                    "entry": plan.entry,
+                    "stop": plan.stop,
+                    "lots": plan.lots,
+                    "opened_ts": ts,
+                    "closed_ts": datetime.fromisoformat(trade.closed_at) if trade.closed_at else None,
+                    "net_inr": trade.net_inr,
+                })
                 traded_keys.add(key)
                 if trade.closed_at:
                     open_until = datetime.fromisoformat(trade.closed_at)
