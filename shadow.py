@@ -89,6 +89,19 @@ class Policy:
     one_at_a_time: bool = False        # no new entry while a position is open
     allow_repeat_strike: bool = False  # re-enter the same strike+type later the same day
     use_bias_gate: bool = True
+    # Learned tag adjustment reads the LIVE trade journal, which is a
+    # record of a specific (recent) period. Applying it to reconstructed
+    # history from an earlier period is look-ahead bias: 2026 tag win
+    # rates informing a 2024 decision. Set False for historical runs.
+    #
+    # This is currently inert either way -- the journal holds 9 decided
+    # trades against a MIN_TRADES_FOR_ANY_ADJUSTMENT floor of 30, so
+    # apply_learned_adjustment returns the raw score untouched. That is an
+    # accident of timing, not a safeguard: the moment the journal passes
+    # 30, every historical backtest would silently begin contaminating
+    # itself. Making it a switch means the correctness is stated rather
+    # than inherited from a coincidence.
+    use_learned_adjustment: bool = True
 
     def resolved_min_score(self) -> float:
         return self.min_score if self.min_score is not None else config.MIN_CONVICTION_SCORE_TO_TRACK
@@ -322,7 +335,10 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
                 if not policy.allow_repeat_strike and key in traded_keys:
                     continue
 
-                adjusted, _notes = tt.apply_learned_adjustment(setup.score, setup.reasons)
+                if policy.use_learned_adjustment:
+                    adjusted, _notes = tt.apply_learned_adjustment(setup.score, setup.reasons)
+                else:
+                    adjusted = setup.score
                 if policy.use_bias_gate:
                     from scanner import apply_bias_gate
                     blocked, penalty, _note = apply_bias_gate(setup, bias_label, bias_score)
