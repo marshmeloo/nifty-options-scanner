@@ -146,6 +146,37 @@ def test_run_policy_touches_no_state_file_or_journal(monkeypatch, tmp_path):
     assert not sentinel_journal.exists()
 
 
+def test_at_most_one_new_position_per_day_by_default(monkeypatch):
+    """
+    Found by comparing a real backtest run against config: one_at_a_time
+    alone only blocks entry while a position is still OPEN, so a position
+    that closes early (stop_loss within minutes) left the door open for a
+    second brand-new entry later the SAME day -- something live's
+    opened_today count would refuse. 21 of 158 positions across 12 days
+    violated this before the default was added, worth Rs 14,303 (15%
+    of that run's total).
+    """
+    cycles = _cycles(n=40)  # entries could otherwise open, close fast, reopen same day
+    _mock_single_day(monkeypatch, cycles)
+    monkeypatch.setattr(sds, "compute_market_bias", lambda snap, ctx: ("bullish", 3.0, []))
+    # Force every position to resolve almost immediately, so a second
+    # same-day entry would be possible if the cap weren't enforced.
+    monkeypatch.setattr(sds, "check_managed_exit", lambda mtm, plan: "profit_target")
+
+    spreads = sds.run_policy("2026-06-01")
+    assert len(spreads) == dcfg.MAX_NEW_POSITIONS_PER_DAY
+
+
+def test_max_positions_per_day_override_is_respected(monkeypatch):
+    cycles = _cycles(n=40)
+    _mock_single_day(monkeypatch, cycles)
+    monkeypatch.setattr(sds, "compute_market_bias", lambda snap, ctx: ("bullish", 3.0, []))
+    monkeypatch.setattr(sds, "check_managed_exit", lambda mtm, plan: "profit_target")
+
+    spreads = sds.run_policy("2026-06-01", sds.SpreadPolicy(max_positions_per_day=3))
+    assert len(spreads) == 3
+
+
 def test_time_window_is_respected(monkeypatch):
     _mock_single_day(monkeypatch, _cycles(n=40))
     monkeypatch.setattr(sds, "compute_market_bias",

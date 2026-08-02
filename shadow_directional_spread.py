@@ -103,12 +103,28 @@ class SpreadPolicy:
     # "position" slot), so the default must too or this measures a system
     # that doesn't exist.
     one_at_a_time: bool = True
+    # None -> dcfg.MAX_NEW_POSITIONS_PER_DAY. Left at None rather than
+    # hardcoded 1 so a caller can still ask for something else, but the
+    # RESOLVED default mirrors live's real gate. one_at_a_time alone is
+    # not enough: it only blocks a new entry while a position is still
+    # OPEN, so a position that closes early (a stop_loss hit within
+    # minutes) leaves the door open for a second brand-new entry later
+    # the same day -- something directional_spread_risk_checker.check()'s
+    # opened_today count would refuse live. Found by comparing the
+    # backtest's own trade list against this config value: 21 of 158
+    # positions across 12 days violated it, contributing Rs 14,303 (15%
+    # of the run's total) before this default was added.
     max_positions_per_day: int = None
 
     def resolved_bias_threshold(self) -> float:
         if self.bias_threshold is not None:
             return self.bias_threshold
         return dcfg.BIAS_STRONG_THRESHOLD
+
+    def resolved_max_positions_per_day(self) -> int:
+        if self.max_positions_per_day is not None:
+            return self.max_positions_per_day
+        return dcfg.MAX_NEW_POSITIONS_PER_DAY
 
 
 @dataclass
@@ -308,7 +324,7 @@ def run_policy(day: str, policy: SpreadPolicy = None, verbose: bool = False,
         ts = snapshot.timestamp
         if not (start <= ts.time() <= end):
             continue
-        if policy.max_positions_per_day and len(spreads) >= policy.max_positions_per_day:
+        if len(spreads) >= policy.resolved_max_positions_per_day():
             break
         if policy.one_at_a_time and open_until and ts <= open_until:
             continue
