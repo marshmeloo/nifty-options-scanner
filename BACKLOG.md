@@ -3,6 +3,37 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Forward-validate directional spread's re-tuned strike selection (added 2026-08-02)
+
+`config_directional_spread.py`'s SHORT_PREMIUM_MIN/MAX and
+HEDGE_DISTANCE_POINTS changed to 40-70/100 (from 30-60/150) based on
+`sweep_spread_config.py`'s 493-day, 2-year grid -- see README.md's
+2026-08-02 entry for the full evidence (12 cells, all profitable, new
+config has the best return/drawdown ratio in the grid).
+
+Same caveat as the SCORING_MODE entry below: this is an IN-SAMPLE
+result. The grid was built from data the sweep also selected from, LTP
+fills only (no bid/ask in historical data, and a spread crosses 4
+leg-transactions per round trip), and no untouched data remains to check
+it against. Watch actual live fills, credit collected, and whether the
+2:1 win/loss ratio holds forward before trusting the backtested total.
+Revert to the old values (in that file's own comment) if it doesn't.
+
+## Revisit iron condor strike selection once wider historical data exists (added 2026-08-02)
+
+`sweep_condor_config.py` tested a 4x3 grid of premium bands and hedge
+distances against the same 493-day history and found no config that
+cleared even |z|=1 -- best cell (premium 70-90, hedge 200) was +Rs 16,107
+at z=0.27. Left at the original config; nothing adopted. See README.md's
+2026-08-02 "Not adopted" entry.
+
+Two independent paths forward, neither attempted yet:
+  - A finer sweep around the 50-90 premium region with narrower hedges
+    than tested here (this grid only went down to 150).
+  - Historical data wider than the ATM+/-10 (~500pt) reconstruction cap,
+    which would remove the 42-84% coverage-gap distortion present in
+    every cell of this grid and might change the picture entirely.
+
 ## Forward-validate SCORING_MODE = "momentum_only" before trusting its size (added 2026-08-02)
 
 Adopted live 2026-08-02 as the default scoring mode -- see config.py's

@@ -346,3 +346,18 @@ def test_expiry_settlement_falls_back_to_intrinsic_value(state_paths, monkeypatc
     # Spot 24200 is above both PE strikes -> both intrinsic values are 0 -> full credit kept.
     assert closed["pnl_inr"] == pytest.approx(30.0 * 65)
     assert set(closed["legs_settled_at_intrinsic"]) == {"short", "hedge"}
+
+
+def test_live_config_matches_the_2026_08_02_sweep_winner():
+    """
+    Pins the config actually adopted from sweep_spread_config.py's 493-day
+    grid, so an unrelated future edit can't silently drift back toward
+    the old (worse, worst-in-grid) values without anyone noticing. See
+    config_directional_spread.py's own comment for the full evidence:
+    old (30-60/150) was the WORST cell in a 12-cell grid where every
+    cell was profitable; new (40-70/100) has the best return-per-unit-
+    of-drawdown (15.30 vs the old config's 6.22).
+    """
+    assert dcfg.SHORT_PREMIUM_MIN == 40.0
+    assert dcfg.SHORT_PREMIUM_MAX == 70.0
+    assert dcfg.HEDGE_DISTANCE_POINTS == 100

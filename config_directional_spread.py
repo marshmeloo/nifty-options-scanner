@@ -35,15 +35,40 @@ BIAS_STRONG_THRESHOLD = 2.0
 
 # --- Strike selection (same premium-band + highest-OI approach as the
 # condor, applied to whichever single side the bias selects) ---
-SHORT_PREMIUM_MIN = 30.0
-SHORT_PREMIUM_MAX = 60.0
+#
+# CHANGED 2026-08-02: was SHORT_PREMIUM_MIN/MAX = 30.0/60.0,
+# HEDGE_DISTANCE_POINTS = 150.0. sweep_spread_config.py re-ran the full
+# 493-day, 2-year history once per (premium band, hedge distance)
+# combination -- the risk gates enforced (MIN_NET_CREDIT,
+# MAX_CAPITAL_AT_RISK, MAX_CONCURRENT_POSITIONS, MAX_NEW_POSITIONS_PER_DAY,
+# cross-day one_at_a_time) -- and found the old config was the WORST cell
+# in the entire 4x3 grid: every other premium band beat it at every hedge
+# distance tested, and all 12 cells were profitable with z from 2.94 to
+# 5.57 (Bonferroni bar for 12 comparisons is ~2.9 -- every cell clears
+# it, this is not a single lucky cell).
+#
+#   old (30-60 / 150):  n=108  total Rs 64,236   z=3.49  maxDD -Rs 10,332
+#   new (40-70 / 100):  n=125  total Rs 78,006   z=5.48  maxDD  -Rs 5,099
+#
+# 40-70/100 was chosen over the grid's highest RAW total (65-100/200:
+# Rs 133,390) for return-per-unit-of-drawdown instead: 15.30 vs 8.98,
+# more than double, at roughly a third of the drawdown. The full grid
+# (12 cells, both totals and drawdown-adjusted returns) is in
+# logs/sweep_spread_config.json and README.md's 2026-08-02 entry --
+# revert to the old values above if live results diverge from this
+# backtest, same reasoning as SCORING_MODE in config.py.
+SHORT_PREMIUM_MIN = 40.0
+SHORT_PREMIUM_MAX = 70.0
 
 # How far OTM (in strike points) the protective hedge leg sits beyond
 # the short strike. This IS the max-loss dial -- see config_condor.py's
 # note on the same tradeoff. Narrower than the condor's 300 points on
 # purpose: this position is actively managed overnight, not left to run
 # a full week, so it doesn't need as wide a berth.
-HEDGE_DISTANCE_POINTS = 150
+#
+# CHANGED 2026-08-02 alongside the premium band above -- see that
+# comment for the sweep evidence. Was 150.
+HEDGE_DISTANCE_POINTS = 100
 
 # --- Position sizing / capital ---
 LOTS_PER_LEG = 1

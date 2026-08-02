@@ -1035,6 +1035,66 @@ Each tier has a cooldown after a failure so a genuinely-down source
 doesn't add latency/log-noise to every 30s poll — see
 `FALLBACK_RETRY_COOLDOWN_SECONDS` in `config.py`.
 
+## Changed: 2026-08-02 -- directional spread's strike selection re-tuned (40-70/100)
+
+`sweep_spread_config.py` re-ran the full 493-day, 2-year history once per
+(premium band, hedge distance) combination -- with the risk gates that
+were dead until earlier this same day now actually enforced
+(MIN_NET_CREDIT, MAX_CAPITAL_AT_RISK, MAX_CONCURRENT_POSITIONS,
+MAX_NEW_POSITIONS_PER_DAY, and the cross-day one_at_a_time state, all
+fixed in this session -- see the entries above). Reused the same
+full-re-run-per-cell reasoning as the momentum threshold sweep:
+`run_all()` opens at most one position per day and takes the FIRST
+candidate that clears every gate, so a wider premium band changes WHICH
+candidate is found, not just whether it survives -- post-hoc filtering a
+single run would give the wrong answer.
+
+The old config (SHORT_PREMIUM_MIN/MAX = 30-60, HEDGE_DISTANCE_POINTS =
+150) turned out to be the WORST cell in the entire 4x3 grid -- every
+other premium band beat it at every hedge distance tested:
+
+| premium | hedge | n | win% | total (2yr) | z | max DD | return/DD |
+|---|---|---|---|---|---|---|---|
+| 30-60 (old) | 150 (old) | 108 | 86.1% | Rs 64,236 | 3.49 | -Rs 10,332 | 6.22 |
+| 65-100 | 200 | 124 | 81.5% | **Rs 133,390** (highest) | 4.54 | -Rs 14,859 | 8.98 |
+| **40-70 (new)** | **100 (new)** | 125 | 85.6% | Rs 78,006 | 5.48 | **-Rs 5,099** (lowest) | **15.30** (best) |
+
+All 12 cells were profitable, with z from 2.94 to 5.57 -- the Bonferroni
+bar for 12 comparisons is ~2.9, so every cell clears it. This is a broad,
+replicated finding across the grid, not a single lucky cell (contrast
+with the iron condor sweep below, where nothing cleared even |z|=1).
+
+40-70/100 was adopted over the grid's highest raw total (65-100/200)
+for return-per-unit-of-drawdown instead: more than double the old
+config's ratio, at roughly a third of the drawdown of the highest-total
+cell. Full grid in `logs/sweep_spread_config.json`.
+
+Reverting is a two-value edit in `config_directional_spread.py` (the old
+values are in that file's own comment) if live results diverge from this
+backtest -- same reasoning as `SCORING_MODE` below. Still an IN-SAMPLE
+result: LTP fills only, no untouched data left to validate against.
+
+## Not adopted: 2026-08-02 -- iron condor structural sweep found no credible config
+
+The condor's baseline (SHORT_PREMIUM_MIN/MAX = 23-30, HEDGE_DISTANCE_POINTS
+= 300) lost Rs 18,941 over 2 years with 64% of every skipped cycle a DATA
+coverage gap (a leg existed but fell outside the ~500pt reconstructed
+window), not a real rejection -- both swept parameters directly control
+how far from spot the legs sit. `sweep_condor_config.py` tested a 4x3
+grid (premium bands 23-90, hedge distances 150-300) with the same risk
+gates now enforced.
+
+Best cell: premium 70-90, hedge 200 -> +Rs 16,107, **z = 0.27**. Nothing
+in the grid reached |z| = 1, let alone significance, and coverage-gap
+stayed high throughout (42-84%). There IS a real directional trend --
+every premium band above the baseline 23-30 beat it, consistently, at
+every hedge distance -- so the current config is demonstrably not the
+best available. But nothing found is strong enough to trade. Left at the
+baseline config; not versioned, not adopted. A finer sweep around
+50-90 premium with narrower hedges, or wider historical data to close
+the coverage gap, would be needed before this strategy is worth
+revisiting. Full grid in `logs/sweep_condor_config.json`.
+
 ## Changed: 2026-08-02 -- momentum scorer switched to `SCORING_MODE = "momentum_only"`
 
 A 493-day, 2-year forward-return study (`component_study.py`, 527,528
