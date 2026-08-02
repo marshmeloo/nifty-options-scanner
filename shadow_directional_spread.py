@@ -31,6 +31,23 @@ memory, so no journal or state file is ever touched. That is deliberate:
 replay.py once wrote 35 synthetic trades into the real trade journal (see
 its docstring), and this module must not be able to repeat that.
 
+WHY THE WALK IS BOUNDED TO ONE EXPIRY WEEK, NOT JUST "MULTI-DAY"
+------------------------------------------------------------------
+historical_source.py's data is a ROLLING series: `expiryFlag=WEEK,
+expiryCode=1` means "whichever expiry is nearest AT EACH POINT IN TIME",
+not a fixed named contract. A (strike, option_type) key that looks
+identical across two dates can refer to two DIFFERENT actual contracts if
+a weekly rollover happened between them -- the same failure mode as
+naively trusting a ticker symbol across a futures roll. Walking a
+position past its own real expiry using this data would silently start
+pricing it against next week's contract.
+
+The fix is to bound every walk at the position's own nominal expiry date
+(see _nominal_expiry_date) and settle there, mirroring exactly what
+directional_spread_tracker.close_position does live when expiry is
+reached -- never read a cycle from beyond that date for this position,
+regardless of how much more history is on disk.
+
 WHAT IS NOT SIMULATED FAITHFULLY
 --------------------------------
   - Fills. Historical data carries no bid/ask, so legs are priced at LTP.
@@ -40,13 +57,18 @@ WHAT IS NOT SIMULATED FAITHFULLY
     crosses two spreads at entry and two more at exit.
   - Path within a bar. Exits are evaluated at recorded cycles only, so a
     stop breached and recovered inside one 5-minute bar is invisible.
-  - Assignment and expiry settlement mechanics beyond intrinsic value.
+  - Exchange holidays are handled by their natural absence from the
+    recorded trading-day calendar (see _window_days), not looked up
+    explicitly -- if a nominal expiry weekday is a holiday, the window
+    simply ends at the last day actually on disk before it, which
+    approximates but does not guarantee matching NSE's real
+    shift-to-previous-working-day rule in every edge case.
 """
 
 import argparse
 import statistics
-from dataclasses import dataclass, field
-from datetime import datetime, time as dtime
+from dataclasses import asdict, dataclass, field
+from datetime import date, datetime, time as dtime, timedelta
 from typing import Optional
 
 import config_directional_spread as dcfg
@@ -60,6 +82,14 @@ from directional_spread_tracker import (
     check_managed_exit,
 )
 from scanner import compute_market_bias
+
+# NIFTY's weekly options expiry moved from Thursday to Tuesday effective
+# 2025-09-01 (SEBI circular, October 2024) -- both regimes fall inside
+# our 2024-08 to 2026-07 recorded history, so which weekday a position
+# settles on depends on WHEN it was opened, not a single constant.
+_EXPIRY_WEEKDAY_CHANGE_DATE = date(2025, 9, 1)
+_EXPIRY_WEEKDAY_BEFORE = 3   # Thursday
+_EXPIRY_WEEKDAY_ON_OR_AFTER = 1   # Tuesday
 
 
 @dataclass
@@ -130,22 +160,80 @@ class _ContextCache:
         return self._value
 
 
-def _walk_spread_forward(cycles, start_index: int, plan_dict: dict,
+def _nifty_expiry_weekday(on_date: date) -> int:
+    """Monday=0..Sunday=6, for the regime in effect on `on_date`."""
+    return _EXPIRY_WEEKDAY_ON_OR_AFTER if on_date >= _EXPIRY_WEEKDAY_CHANGE_DATE else _EXPIRY_WEEKDAY_BEFORE
+
+
+def _nominal_expiry_date(entry_date: date) -> date:
+    """Next occurrence of the applicable expiry weekday, on or after `entry_date`."""
+    target = _nifty_expiry_weekday(entry_date)
+    return entry_date + timedelta(days=(target - entry_date.weekday()) % 7)
+
+
+def _window_days(all_days: list, entry_day: str, expiry_date: date) -> list:
+    """
+    Trading days from `entry_day` (inclusive) through the last recorded
+    trading day on or before `expiry_date`. Drawn from the actual
+    recorded calendar rather than generated, so exchange holidays are
+    handled by their natural absence (see this module's docstring on the
+    holiday-handling caveat).
+    """
+    expiry_iso = expiry_date.isoformat()
+    return [d for d in all_days if entry_day <= d <= expiry_iso]
+
+
+def _intrinsic(direction: str, strike: float, spot: float) -> float:
+    if direction == "CE":
+        return max(spot - strike, 0.0)
+    return max(strike - spot, 0.0)
+
+
+def _settle_at_expiry(snapshot, plan_dict: dict, spread: ShadowSpread,
+                      peak: float, trough: float, held: int) -> ShadowSpread:
+    """
+    Settle at the position's own nominal expiry, mirroring
+    directional_spread_tracker.close_position's expiry-settlement path
+    exactly: fall back to intrinsic value for any leg with no quote --
+    far-OTM legs often stop trading before market close on expiry day,
+    but intrinsic value is still true at settlement.
+    """
+    prices = _current_leg_prices(snapshot.chain, plan_dict)
+    direction = plan_dict["direction"]
+    for key, strike_key in (("short", "short_strike"), ("hedge", "hedge_strike")):
+        if prices[key] is None:
+            prices[key] = _intrinsic(direction, plan_dict[strike_key], snapshot.spot)
+
+    mtm = _mark_to_market_pnl_inr(plan_dict, prices)
+    spread.closed_at = snapshot.timestamp.isoformat()
+    spread.exit_reason = "expiry_settlement"
+    spread.pnl_inr = round(mtm, 2) if mtm is not None else None
+    spread.peak_pnl_inr = round(peak, 2)
+    spread.trough_pnl_inr = round(trough, 2)
+    spread.cycles_held = held
+    return spread
+
+
+def _walk_spread_forward(remaining_cycles: list, plan_dict: dict,
                          spread: ShadowSpread) -> ShadowSpread:
     """
-    Advance an open spread through later cycles until a managed exit
-    fires or the day ends.
+    Advance an open spread through subsequent cycles -- already bounded
+    to the position's own expiry week by the caller, see _window_days --
+    until a managed exit fires or the window is exhausted, in which case
+    it settles at expiry.
 
-    A cycle where either leg has no quote is SKIPPED rather than treated
-    as zero P&L. That distinction is the exact bug that made condor MTM
-    read "unavailable" on 2026-07-30 -- a missing quote is missing
-    information, not a valid mark, and scoring it as flat would invent
-    exits that never happened.
+    A cycle where either leg has no quote is SKIPPED for the managed-exit
+    check rather than treated as zero P&L. That distinction is the exact
+    bug that made condor MTM read "unavailable" on 2026-07-30 -- a
+    missing quote is missing information, not a valid mark, and scoring
+    it as flat would invent exits that never happened.
     """
     peak = trough = 0.0
     held = 0
+    last_snapshot = None
 
-    for snapshot, _candles, _meta in cycles[start_index + 1:]:
+    for snapshot, _candles, _meta in remaining_cycles:
+        last_snapshot = snapshot
         prices = _current_leg_prices(snapshot.chain, plan_dict)
         mtm = _mark_to_market_pnl_inr(plan_dict, prices)
         if mtm is None:
@@ -164,32 +252,48 @@ def _walk_spread_forward(cycles, start_index: int, plan_dict: dict,
             spread.cycles_held = held
             return spread
 
-    # Never resolved -- mark at the last cycle that had a usable quote,
-    # as an end-of-day close would.
-    for snapshot, _candles, _meta in reversed(cycles[start_index + 1:]):
-        prices = _current_leg_prices(snapshot.chain, plan_dict)
-        mtm = _mark_to_market_pnl_inr(plan_dict, prices)
-        if mtm is None:
-            continue
-        spread.closed_at = snapshot.timestamp.isoformat()
-        spread.exit_reason = "EOD_CLOSE"
-        spread.pnl_inr = round(mtm, 2)
-        spread.peak_pnl_inr = round(peak, 2)
-        spread.trough_pnl_inr = round(trough, 2)
-        spread.cycles_held = held
+    if last_snapshot is None:
+        # No recorded data at all inside this position's own expiry
+        # week -- e.g. it opened in the final days of the recorded
+        # history. Left unresolved (pnl_inr stays None) rather than
+        # fabricating a close; every stats function already excludes
+        # pnl_inr is None from its sample.
         return spread
 
-    return spread
+    return _settle_at_expiry(last_snapshot, plan_dict, spread, peak, trough, held)
 
 
-def run_policy(day: str, policy: SpreadPolicy = None, verbose: bool = False) -> list:
+def _load_cached(day_cache: dict, day: str) -> list:
+    if day not in day_cache:
+        day_cache[day] = list(snapshot_recorder.load_day(day))
+    return day_cache[day]
+
+
+def run_policy(day: str, policy: SpreadPolicy = None, verbose: bool = False,
+               day_cache: dict = None, all_days: list = None) -> list:
     """
-    Replay one day under `policy`, returning the spreads it would have
-    opened. Touches no state file and no journal -- everything is in
-    memory.
+    Scan `day` for new entries under `policy`. Each opened spread is then
+    walked forward through however many SUBSEQUENT recorded trading days
+    fall inside ITS OWN contract's expiry week (see _window_days), not
+    just the rest of `day` -- this strategy is explicitly held overnight
+    to expiry (config_directional_spread.py). Resolving it within one day
+    force-closed every position at 15:30 on day one, banking the theta
+    gain from holding a credit spread a few hours while never seeing the
+    gap and breach risk that actually threatens these positions -- the
+    same "partial day" artifact shadow.py's day_is_complete() warns
+    about, spread across the whole position instead of one day. It
+    produced a 73% "win rate" that measured only the calm middle of the
+    P&L path.
+
+    `day_cache`/`all_days` let a caller iterating many days (see main())
+    share one cache instead of re-reading the same nearby days from disk
+    for every position opened close together in time.
     """
     policy = policy or SpreadPolicy()
-    cycles = list(snapshot_recorder.load_day(day))
+    day_cache = day_cache if day_cache is not None else {}
+    all_days = all_days if all_days is not None else snapshot_recorder.available_days()
+
+    cycles = _load_cached(day_cache, day)
     if not cycles:
         return []
 
@@ -230,9 +334,7 @@ def run_policy(day: str, policy: SpreadPolicy = None, verbose: bool = False) -> 
         if plan is None:
             continue
 
-        from dataclasses import asdict
         plan_dict = asdict(plan)
-
         spread = ShadowSpread(
             direction=plan.direction,
             short_strike=plan.short_strike,
@@ -244,15 +346,24 @@ def run_policy(day: str, policy: SpreadPolicy = None, verbose: bool = False) -> 
             bias_label=bias_label,
             bias_score=round(bias_score, 2),
         )
-        spread = _walk_spread_forward(cycles, i, plan_dict, spread)
+
+        nominal_expiry = _nominal_expiry_date(ts.date())
+        window = _window_days(all_days, day, nominal_expiry)
+        remaining = cycles[i + 1:]
+        for later_day in window[1:]:
+            remaining = remaining + _load_cached(day_cache, later_day)
+
+        spread = _walk_spread_forward(remaining, plan_dict, spread)
         spreads.append(spread)
 
         if spread.closed_at:
             open_until = datetime.fromisoformat(spread.closed_at)
         if verbose:
+            status = (f"{spread.exit_reason} Rs {spread.pnl_inr:+,.0f}"
+                      if spread.pnl_inr is not None else "unresolved (data ended)")
             print(f"  {ts.time()} {plan.direction} {plan.short_strike:.0f}/"
                   f"{plan.hedge_strike:.0f} credit Rs {plan.net_credit:.2f} "
-                  f"-> {spread.exit_reason} Rs {spread.pnl_inr:+,.0f}")
+                  f"-> nominal expiry {nominal_expiry} -> {status}")
 
     return spreads
 
@@ -279,6 +390,11 @@ def exit_reason_breakdown(spreads: list) -> dict:
     return counts
 
 
+def unresolved_count(spreads: list) -> int:
+    """Positions still open when the recorded history ran out -- excluded from every stat."""
+    return sum(1 for s in spreads if s.pnl_inr is None)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -297,9 +413,10 @@ def main():
     policy = SpreadPolicy(name="cli", bias_threshold=args.bias_threshold,
                           start_time=args.start, end_time=args.end)
 
+    day_cache = {}
     all_spreads = []
     for day in days:
-        s = run_policy(day, policy, verbose=args.verbose)
+        s = run_policy(day, policy, verbose=args.verbose, day_cache=day_cache, all_days=days)
         all_spreads.extend(s)
         if s:
             print(summarise(s, day))
@@ -308,6 +425,9 @@ def main():
         print()
         print(summarise(all_spreads, "ALL DAYS"))
         print(f"\nexit reasons: {exit_reason_breakdown(all_spreads)}")
+        unresolved = unresolved_count(all_spreads)
+        if unresolved:
+            print(f"unresolved (recorded history ended before their expiry): {unresolved}")
         print("\nNOTE: legs priced at LTP -- historical data carries no bid/ask. "
               "A real spread collects less credit than this shows.")
 
