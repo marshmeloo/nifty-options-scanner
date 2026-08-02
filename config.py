@@ -13,6 +13,42 @@ MAX_LOTS_PER_TRADE = 1           # hard cap on lot size per trade, independent o
 
 NIFTY_LOT_SIZE = 65             # update if NSE revises lot size
 
+# --- Scoring mode (versioned -- see scanner.py's SCORING_MODE handling) ---
+#
+# "legacy": the original multi-component scorer below (FVG/S-R/OB, IV
+#   percentile, PCR, RSI, momentum, volume -- all weighted and summed).
+#
+# "momentum_only": adopted 2026-08-02 after a 493-day, 2-year forward-
+#   return study (component_study.py) found momentum ROC alignment was by
+#   far the strongest predictive component (z > 30, robust across every
+#   moneyness band) while carrying the SMALLEST weight in the legacy
+#   scorer (+/-0.25). Backtesting five re-weighted variants
+#   (compare_variants.py) against the same 493 days, gross expectancy per
+#   trade ranked: legacy +0.006R -> combined (momentum up-weighted, IV and
+#   support-level scoring removed) +0.241R -> momentum_only (score driven
+#   by momentum alignment alone) +0.158R/trade but +Rs 470,031 total
+#   (5.15 trades/day) vs combined's Rs 118,689 (1.51/day), with the
+#   MAX_DAILY_LOSS_PCT / MAX_TOTAL_EXPOSURE_PCT gates enforced in the
+#   backtest (see shadow.risk_state_at). See BACKLOG.md and README.md's
+#   2026-08-02 entry for the full writeup, including what this can and
+#   cannot prove: it is an IN-SAMPLE result on data with no bid/ask (LTP
+#   fills only), so it is an optimistic ceiling, not a live guarantee.
+#
+# Switching back to "legacy" is a one-line change -- nothing else in the
+# codebase needs to be touched. logic_version.py fingerprints this value,
+# so results under the two modes are never silently pooled.
+SCORING_MODE = "momentum_only"
+
+# Scores applied to a candidate under SCORING_MODE == "momentum_only".
+# Only the aligned score can clear MIN_CONVICTION_SCORE_TO_TRACK (5.0) by
+# default, so live behaviour is: take momentum-aligned candidates, skip
+# everything else. Named constants rather than inline numbers so the
+# backtest tooling (scorer_variants.py) and live scanner cannot drift
+# apart on what "momentum_only" means.
+MOMENTUM_ONLY_ALIGNED_SCORE = 6.0
+MOMENTUM_ONLY_AGAINST_SCORE = 0.0
+MOMENTUM_ONLY_NEUTRAL_SCORE = 3.0   # no ROC signal this cycle -- stays below the bar
+
 # --- Scanner thresholds ---
 IV_PERCENTILE_HIGH = 75         # flag as "IV rich" above this percentile
 IV_PERCENTILE_LOW = 25          # flag as "IV cheap" below this percentile

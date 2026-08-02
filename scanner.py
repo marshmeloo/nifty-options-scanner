@@ -292,6 +292,20 @@ def scan(snapshot, price_levels=None, context=None) -> list:
                 score += 0.5
 
         if reasons:
+            final_score = score
+            if config.SCORING_MODE == "momentum_only":
+                # See config.SCORING_MODE's docstring for the evidence.
+                # `reasons` is left untouched -- apply_learned_adjustment
+                # and the decision log still need the real component
+                # breakdown, this only changes what RANKS and CLEARS the
+                # conviction bar.
+                if any(r.startswith("Momentum aligned") for r in reasons):
+                    final_score = config.MOMENTUM_ONLY_ALIGNED_SCORE
+                elif any(r.startswith("Momentum against") for r in reasons):
+                    final_score = config.MOMENTUM_ONLY_AGAINST_SCORE
+                else:
+                    final_score = config.MOMENTUM_ONLY_NEUTRAL_SCORE
+
             setups.append(
                 Setup(
                     symbol=q.symbol,
@@ -299,7 +313,7 @@ def scan(snapshot, price_levels=None, context=None) -> list:
                     option_type=q.option_type,
                     expiry=q.expiry,
                     reasons=reasons,
-                    score=round(score, 2),
+                    score=round(final_score, 2),
                 )
             )
 

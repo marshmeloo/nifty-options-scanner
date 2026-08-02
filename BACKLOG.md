@@ -3,6 +3,30 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Forward-validate SCORING_MODE = "momentum_only" before trusting its size (added 2026-08-02)
+
+Adopted live 2026-08-02 as the default scoring mode -- see config.py's
+`SCORING_MODE` docstring and README's 2026-08-02 entry for the full
+evidence trail (493-day, 2-year forward-return study; momentum ROC
+alignment the only component that survived Bonferroni correction across
+41 tested; re-weighted variants backtested with the daily-loss and
+exposure gates actually enforced).
+
+This is an IN-SAMPLE result. The variant was designed by studying the
+same 493 days it was then tested on, the underlying data has no bid/ask
+(LTP fills, so every figure is an optimistic ceiling), and it trades
+~5x/day versus the legacy scorer's ~1x/day, which compounds the LTP-fill
+optimism roughly proportionally. No untouched data remains to check it
+against. Forward (live) results are the only real test left -- until a
+meaningful number of live sessions confirm it, treat the backtested
+total (+Rs 470,031 / 493 days at Rs 5L capital) as a ceiling, not an
+expectation, and watch the daily-loss breaker: the backtest breached it
+on 11 of 493 days.
+
+Switching back to `SCORING_MODE = "legacy"` is a one-line, fully-tested,
+reversible change (see tests/test_scoring_mode.py) if live results
+diverge materially from the backtest.
+
 ## Fast position-check: lightweight LTP endpoint (added 2026-07-27)
 
 `main_live.py`'s `check_open_trades_fast()` (runs every

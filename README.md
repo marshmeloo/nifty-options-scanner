@@ -1035,6 +1035,60 @@ Each tier has a cooldown after a failure so a genuinely-down source
 doesn't add latency/log-noise to every 30s poll — see
 `FALLBACK_RETRY_COOLDOWN_SECONDS` in `config.py`.
 
+## Changed: 2026-08-02 -- momentum scorer switched to `SCORING_MODE = "momentum_only"`
+
+A 493-day, 2-year forward-return study (`component_study.py`, 527,528
+candidates evaluated counterfactually against every candidate the
+scanner ever flagged, not just the trades taken -- see that module's
+docstring for why taken-trade analysis is selection-biased and produced
+a spurious negative score/return correlation when tried) found:
+
+  - Momentum ROC alignment was the only component to survive Bonferroni
+    correction across all 41 tested (z > 30, robust across every
+    moneyness band: +4.2% to +8.9% lift, aligned vs against).
+  - It carried the SMALLEST weight in the legacy scorer, +/-0.25.
+  - IV percentile (+/-1.0, four times momentum's weight) looked wrong
+    pooled but reversed sign once stratified by distance from spot --
+    right for far-OTM strikes, backwards for the near-to-mid-money
+    strikes this scanner actually trades, because cross-sectional IV
+    percentile largely encodes the volatility smile.
+  - Support-level "supports this contract" credit was negative in every
+    moneyness band tested; resistance, scored identically, was correct.
+
+`compare_variants.py` backtested five re-weighted scorers against the
+same 493 days with `shadow.py`'s daily-loss and total-exposure gates
+actually enforced (see the entry below this one -- they were dead in
+every backtest before today). Gross expectancy per trade, at matched
+trade-count ranges:
+
+| variant | gross R/trade | z | total (2yr, Rs 5L capital) | max drawdown |
+|---|---|---|---|---|
+| legacy (as it ran before today) | +0.006R | +0.09 | -Rs 51,599 | -Rs 108,780 |
+| combined (momentum up, IV+support removed) | +0.241R | +4.06 | +Rs 118,689 | -Rs 94,250 |
+| **momentum_only (adopted)** | +0.158R | **+5.28** | **+Rs 470,031** | -Rs 203,854 |
+
+`momentum_only` won on total return, return/drawdown ratio (2.31 vs
+1.26), and statistical confidence, so it is now the live default:
+`scanner.scan()` overrides a candidate's final score to
+`config.MOMENTUM_ONLY_ALIGNED_SCORE` / `_AGAINST_SCORE` / `_NEUTRAL_SCORE`
+based purely on momentum alignment when `config.SCORING_MODE ==
+"momentum_only"`. The full weighted score (IV, OI buildup, S/R levels,
+RSI, PCR, volume, structure) is still computed and still recorded in
+`reasons` -- `apply_learned_adjustment` and the decision log are
+unaffected -- only the number that RANKS and CLEARS
+`MIN_CONVICTION_SCORE_TO_TRACK` changed. `logic_version.py` fingerprints
+`SCORING_MODE` and the three override constants, so results under the
+two modes are never silently pooled, and switching back to `"legacy"` is
+a one-line change (`tests/test_scoring_mode.py` covers both directions).
+
+Verified the live code path and the backtest's `rescore` shim produce
+IDENTICAL trades on a sample day (same strikes, same timestamps, same
+entries) before adopting this -- the backtest evidence only applies to
+what's actually running if the two cannot drift apart.
+
+**This is an in-sample result and has not been forward-validated.** See
+BACKLOG.md's entry on this for what that means and what to watch for.
+
 ## Fixed: 2026-07-31 -- Dhan 429s reaching main_live.py mid-trade, not just main_condor.py
 
 The 2026-07-30 backlog entry on Dhan rate limiting (three processes

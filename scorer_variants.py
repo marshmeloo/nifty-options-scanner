@@ -116,15 +116,19 @@ def combined(setup) -> float:
 
 def momentum_only(setup) -> float:
     """
-    Momentum alignment alone, ignoring every other component. Not a
-    proposal -- a reference point. If this matches or beats the full
-    scorer, the other dozen components are not earning their place.
+    Momentum alignment alone, ignoring every other component.
+
+    ADOPTED LIVE 2026-08-02 as config.SCORING_MODE == "momentum_only" --
+    this is no longer just a reference point being tested against the
+    others. Reuses the SAME config constants scanner.py's live override
+    reads, so backtest and live cannot drift into scoring this
+    differently from each other.
     """
     if _has(setup, "Momentum aligned"):
-        return 6.0
+        return config.MOMENTUM_ONLY_ALIGNED_SCORE
     if _has(setup, "Momentum against"):
-        return 0.0
-    return 3.0
+        return config.MOMENTUM_ONLY_AGAINST_SCORE
+    return config.MOMENTUM_ONLY_NEUTRAL_SCORE
 
 
 ALL = {
