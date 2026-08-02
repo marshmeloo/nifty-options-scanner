@@ -285,40 +285,28 @@ def _load_cached(day_cache: dict, day: str) -> list:
     return day_cache[day]
 
 
-def run_policy(day: str, policy: SpreadPolicy = None, verbose: bool = False,
-               day_cache: dict = None, all_days: list = None) -> list:
+def _scan_day(day: str, policy: SpreadPolicy, cycles: list, day_cache: dict,
+              all_days: list, open_until, verbose: bool = False) -> tuple:
     """
-    Scan `day` for new entries under `policy`. Each opened spread is then
-    walked forward through however many SUBSEQUENT recorded trading days
-    fall inside ITS OWN contract's expiry week (see _window_days), not
-    just the rest of `day` -- this strategy is explicitly held overnight
-    to expiry (config_directional_spread.py). Resolving it within one day
-    force-closed every position at 15:30 on day one, banking the theta
-    gain from holding a credit spread a few hours while never seeing the
-    gap and breach risk that actually threatens these positions -- the
-    same "partial day" artifact shadow.py's day_is_complete() warns
-    about, spread across the whole position instead of one day. It
-    produced a 73% "win rate" that measured only the calm middle of the
-    P&L path.
+    Scan one day for new entries, threading `open_until` (the
+    one_at_a_time cursor) IN and back OUT rather than owning it locally.
 
-    `day_cache`/`all_days` let a caller iterating many days (see main())
-    share one cache instead of re-reading the same nearby days from disk
-    for every position opened close together in time.
+    THE BUG THIS EXISTS TO PREVENT: a position opened on day N can close
+    on day N+2 (this strategy is held overnight to expiry). If
+    `open_until` were a fresh local variable reset to None on every call
+    -- as it was in the first version of this multi-day walk -- a caller
+    driving day N+1 in a SEPARATE call would have no memory that a
+    position from day N is still open, and one_at_a_time would silently
+    stop being enforced across the day boundary it now needs to span.
+    Caught by auditing a real run: 29 of 137 positions overlapped illegally.
+
+    Returns (spreads_opened_today, updated_open_until).
     """
-    policy = policy or SpreadPolicy()
-    day_cache = day_cache if day_cache is not None else {}
-    all_days = all_days if all_days is not None else snapshot_recorder.available_days()
-
-    cycles = _load_cached(day_cache, day)
-    if not cycles:
-        return []
-
     start, end = _parse_hhmm(policy.start_time), _parse_hhmm(policy.end_time)
     threshold = policy.resolved_bias_threshold()
 
     cache = _ContextCache()
     spreads = []
-    open_until = None
 
     for i, (snapshot, candles, _meta) in enumerate(cycles):
         ts = snapshot.timestamp
@@ -381,7 +369,57 @@ def run_policy(day: str, policy: SpreadPolicy = None, verbose: bool = False,
                   f"{plan.hedge_strike:.0f} credit Rs {plan.net_credit:.2f} "
                   f"-> nominal expiry {nominal_expiry} -> {status}")
 
+    return spreads, open_until
+
+
+def run_policy(day: str, policy: SpreadPolicy = None, verbose: bool = False,
+               day_cache: dict = None, all_days: list = None) -> list:
+    """
+    Scan `day` in isolation, returning the spreads opened that day.
+
+    Convenience wrapper for single-day exploration and tests. Does NOT
+    enforce one_at_a_time across a day boundary -- there is nothing here
+    for it to remember a still-open position from a PRIOR call with. For
+    a real multi-day backtest, use run_all(), which threads that state
+    through the whole run; see _scan_day's docstring for the bug this
+    distinction exists to prevent (29 of 137 positions overlapped
+    illegally before it was caught).
+    """
+    policy = policy or SpreadPolicy()
+    day_cache = day_cache if day_cache is not None else {}
+    all_days = all_days if all_days is not None else snapshot_recorder.available_days()
+
+    cycles = _load_cached(day_cache, day)
+    if not cycles:
+        return []
+
+    spreads, _open_until = _scan_day(day, policy, cycles, day_cache, all_days,
+                                     open_until=None, verbose=verbose)
     return spreads
+
+
+def run_all(days: list = None, policy: SpreadPolicy = None, verbose: bool = False) -> list:
+    """
+    Drive the backtest across every day in sequence, carrying
+    `open_until` and the day-cycle cache forward across the whole run --
+    this is the function real backtests must use. See _scan_day's
+    docstring for why a per-day call in isolation cannot enforce
+    one_at_a_time once positions span multiple days.
+    """
+    days = days or snapshot_recorder.available_days()
+    day_cache = {}
+    open_until = None
+    all_spreads = []
+
+    for day in days:
+        cycles = _load_cached(day_cache, day)
+        if not cycles:
+            continue
+        spreads, open_until = _scan_day(day, policy or SpreadPolicy(), cycles, day_cache,
+                                        days, open_until, verbose=verbose)
+        all_spreads.extend(spreads)
+
+    return all_spreads
 
 
 def summarise(spreads: list, label: str = "") -> str:
@@ -429,15 +467,20 @@ def main():
     policy = SpreadPolicy(name="cli", bias_threshold=args.bias_threshold,
                           start_time=args.start, end_time=args.end)
 
-    day_cache = {}
-    all_spreads = []
-    for day in days:
-        s = run_policy(day, policy, verbose=args.verbose, day_cache=day_cache, all_days=days)
-        all_spreads.extend(s)
-        if s:
-            print(summarise(s, day))
+    # run_all(), not a per-day run_policy() loop: one_at_a_time must be
+    # enforced across day boundaries now that positions span multiple
+    # days -- see _scan_day's docstring.
+    all_spreads = run_all(days, policy, verbose=args.verbose)
 
+    if len(days) == 1:
+        print(summarise(all_spreads, days[0]))
     if len(days) > 1:
+        by_day = {}
+        for s in all_spreads:
+            by_day.setdefault(s.opened_at[:10], []).append(s)
+        for day in days:
+            if day in by_day:
+                print(summarise(by_day[day], day))
         print()
         print(summarise(all_spreads, "ALL DAYS"))
         print(f"\nexit reasons: {exit_reason_breakdown(all_spreads)}")

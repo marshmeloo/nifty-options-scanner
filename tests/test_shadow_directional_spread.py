@@ -293,6 +293,59 @@ def test_unresolved_position_when_history_ends_inside_its_expiry_week(monkeypatc
     assert sds.unresolved_count(spreads) == 1
 
 
+def test_run_all_enforces_one_at_a_time_across_a_day_boundary(monkeypatch):
+    """
+    The actual bug: open_until used to be a fresh local variable inside
+    run_policy, reset to None every time the day loop called it again --
+    so a position opened day 1 and still open on day 2 had no way to
+    block a fresh entry on day 2. Caught by auditing a real run: 29 of
+    137 positions overlapped illegally. run_all() must not repeat it.
+    """
+    day1 = _cycles(n=3, start="2026-06-01T09:15:00")   # Monday, opens a position
+    day2 = _cycles(n=3, start="2026-06-02T09:15:00")   # Tuesday -- position still open here
+
+    monkeypatch.setattr(sds.snapshot_recorder, "load_day",
+                        lambda d: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
+    monkeypatch.setattr(sds.snapshot_recorder, "available_days",
+                        lambda: ["2026-06-01", "2026-06-02"])
+    monkeypatch.setattr(sds, "compute_market_bias", lambda snap, ctx: ("bullish", 3.0, []))
+    # Never let the day-1 position resolve on its own, so it is
+    # GUARANTEED to still be open when day 2's scan runs.
+    monkeypatch.setattr(sds, "check_managed_exit", lambda mtm, plan: None)
+
+    spreads = sds.run_all(["2026-06-01", "2026-06-02"], sds.SpreadPolicy())
+
+    opened_days = [s.opened_at[:10] for s in spreads]
+    assert opened_days.count("2026-06-01") == 1
+    assert opened_days.count("2026-06-02") == 0, (
+        "a position from 2026-06-01 was still open on 2026-06-02 -- "
+        "one_at_a_time must have blocked a new entry that day"
+    )
+
+
+def test_run_all_matches_a_manually_chained_scan_day_sequence(monkeypatch):
+    """Pins run_all as exactly 'thread open_until through _scan_day per day', nothing more."""
+    day1 = _cycles(n=3, start="2026-06-01T09:15:00")
+    day2 = _cycles(n=3, start="2026-06-02T09:15:00")
+    monkeypatch.setattr(sds.snapshot_recorder, "load_day",
+                        lambda d: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
+    monkeypatch.setattr(sds.snapshot_recorder, "available_days",
+                        lambda: ["2026-06-01", "2026-06-02"])
+    monkeypatch.setattr(sds, "compute_market_bias", lambda snap, ctx: ("bullish", 3.0, []))
+
+    via_run_all = sds.run_all(["2026-06-01", "2026-06-02"], sds.SpreadPolicy())
+
+    cache = {}
+    open_until = None
+    manual = []
+    for day, cycles in (("2026-06-01", day1), ("2026-06-02", day2)):
+        s, open_until = sds._scan_day(day, sds.SpreadPolicy(), cycles, cache,
+                                      ["2026-06-01", "2026-06-02"], open_until)
+        manual.extend(s)
+
+    assert [s.opened_at for s in via_run_all] == [s.opened_at for s in manual]
+
+
 def test_expiry_settlement_falls_back_to_intrinsic_for_a_missing_leg(monkeypatch):
     """Mirrors directional_spread_tracker.close_position's own fallback exactly."""
     day1 = _cycles(n=3, start="2026-06-01T09:15:00")
