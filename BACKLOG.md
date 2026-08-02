@@ -19,20 +19,35 @@ it against. Watch actual live fills, credit collected, and whether the
 2:1 win/loss ratio holds forward before trusting the backtested total.
 Revert to the old values (in that file's own comment) if it doesn't.
 
-## Revisit iron condor strike selection once wider historical data exists (added 2026-08-02)
+## Iron condor: no config adopted after 3 sweep rounds / 36 configs tested (closed 2026-08-02)
 
-`sweep_condor_config.py` tested a 4x3 grid of premium bands and hedge
-distances against the same 493-day history and found no config that
-cleared even |z|=1 -- best cell (premium 70-90, hedge 200) was +Rs 16,107
-at z=0.27. Left at the original config; nothing adopted. See README.md's
-2026-08-02 "Not adopted" entry.
+`sweep_condor_config.py` was run three times against the same 493-day
+history, progressively narrowing hedges and raising the premium band in
+the direction each round suggested:
 
-Two independent paths forward, neither attempted yet:
-  - A finer sweep around the 50-90 premium region with narrower hedges
-    than tested here (this grid only went down to 150).
-  - Historical data wider than the ATM+/-10 (~500pt) reconstruction cap,
-    which would remove the 42-84% coverage-gap distortion present in
-    every cell of this grid and might change the picture entirely.
+  1. Original grid (premium 23-90, hedge 150-300): best cell z=0.27.
+  2. Finer grid (premium 50-100, hedge 100-200): best cell z=0.95,
+     coverage gap down to 25% (from 64-84%) -- confirmed narrower hedges
+     genuinely fix the coverage problem, as hypothesized.
+  3. Pushed further (premium 80-150, hedge 50-100): best cell (115-150
+     premium, 75-100 hedge) z=1.72, Rs 44,096 total.
+
+Best-ever result (z=1.72) still doesn't clear a plain single-test 95%
+bar (1.96), let alone the ~3.2 Bonferroni bar 36 cumulative comparisons
+demand. More importantly: the cells that scored best did so by pushing
+the premium band to 115-150, which drops win rate to 37.5% (from 70% at
+the original config) -- that isn't a better-tuned condor anymore, it's a
+qualitatively different, near-the-money strangle. A parameter sweep
+optimizing one metric shouldn't be the thing that decides to change what
+the strategy fundamentally IS; that's a judgement call, not a tuning one.
+
+CLOSED, not left open-ended: narrowing the coverage gap was confirmed to
+work (25% vs the original 64-84%) but did not, by itself, surface a
+tradeable edge. Nothing here is adopted; the condor stays at its
+original baseline config. Only reopen this with a genuinely new input --
+historical data wider than the ATM+/-10 (~500pt) reconstruction cap that
+removes the coverage constraint entirely, not another parameter sweep
+against the same data.
 
 ## Forward-validate SCORING_MODE = "momentum_only" before trusting its size (added 2026-08-02)
 

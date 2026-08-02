@@ -1089,11 +1089,29 @@ in the grid reached |z| = 1, let alone significance, and coverage-gap
 stayed high throughout (42-84%). There IS a real directional trend --
 every premium band above the baseline 23-30 beat it, consistently, at
 every hedge distance -- so the current config is demonstrably not the
-best available. But nothing found is strong enough to trade. Left at the
-baseline config; not versioned, not adopted. A finer sweep around
-50-90 premium with narrower hedges, or wider historical data to close
-the coverage gap, would be needed before this strategy is worth
-revisiting. Full grid in `logs/sweep_condor_config.json`.
+best available.
+
+Pushed it further with two more rounds, narrowing hedges and raising
+premium in the direction each round pointed: a 50-100 premium/100-200
+hedge grid got to z=0.95 with coverage gap down to 25% (confirming
+narrower hedges genuinely fix the coverage problem), and an 80-150
+premium/50-100 hedge grid found the best cell overall -- premium
+115-150, hedge 75-100 -> Rs 44,096, **z = 1.72**. Still short of a plain
+95% single-test bar (1.96), let alone the ~3.2 Bonferroni bar 36
+cumulative comparisons across all three rounds demand.
+
+More importantly, that best-looking cell isn't a better-tuned condor --
+win rate at premium 115-150 dropped to 37.5% (from 70% at baseline),
+meaning the strikes are now close enough to spot that this is
+structurally a near-the-money strangle, not the wide-OTM defined-risk
+strategy config_condor.py is designed around. Optimizing one metric
+shouldn't be what decides to change what a strategy fundamentally is.
+
+CLOSED after 3 rounds / 36 total configs, not left open-ended: nothing
+adopted, condor stays at its original baseline config. See BACKLOG.md's
+2026-08-02 entry -- only reopen with historical data wider than the
+ATM+/-10 reconstruction cap, not another sweep against the same data.
+Full grids in `logs/sweep_condor_config*.json`.
 
 ## Changed: 2026-08-02 -- momentum scorer switched to `SCORING_MODE = "momentum_only"`
 
