@@ -21,15 +21,29 @@ from models import MarketSnapshot, OptionQuote
 
 
 def _chain(spot=24000.0):
-    """A chain with premiums spanning the short band and room for a hedge."""
+    """
+    A chain with premiums spanning the short band and room for a hedge.
+
+    Premium decays with distance on the OTM side only, and is bumped well
+    above any premium band on the ITM side: find_short_strike filters on
+    premium alone with no moneyness awareness of its own, so a chain
+    where CE and PE decay symmetrically by absolute distance lets it pick
+    an ITM strike on the wrong side of spot -- which then prices a
+    NEGATIVE net credit (hedge costs more than the short collects) and
+    gets correctly rejected by directional_spread_risk_checker's
+    MIN_NET_CREDIT gate. Not a hypothetical: this is exactly what the
+    unfixed version of this fixture produced for the bearish/CE case.
+    """
     quotes = []
     for i in range(-12, 13):
         strike = spot + i * 50
+        offset = strike - spot
         for opt in ("CE", "PE"):
-            # Rough moneyness-driven premium so exactly one strike per side
-            # lands in the SHORT_PREMIUM band.
-            distance = abs(strike - spot)
-            ltp = max(1.0, 200.0 - distance * 0.35)
+            if opt == "CE":
+                otm_distance, itm_bump = max(offset, 0.0), max(-offset, 0.0) * 5.0
+            else:
+                otm_distance, itm_bump = max(-offset, 0.0), max(offset, 0.0) * 5.0
+            ltp = max(1.0, 200.0 - otm_distance * 0.35 + itm_bump)
             quotes.append(OptionQuote(
                 symbol="NIFTY", expiry="rolling:week1", strike=strike, option_type=opt,
                 ltp=round(ltp, 2), oi=10000, oi_change_pct=0.0, volume=100,
@@ -168,10 +182,19 @@ def test_at_most_one_new_position_per_day_by_default(monkeypatch):
 
 
 def test_max_positions_per_day_override_is_respected(monkeypatch):
+    """
+    Overriding the POLICY alone isn't enough: directional_spread_risk_checker
+    reads dcfg.MAX_NEW_POSITIONS_PER_DAY directly at call time regardless
+    of what the backtest Policy claims, so a caller testing a wider daily
+    cap must patch the live config to match -- otherwise the real risk
+    gate correctly refuses a 2nd/3rd same-day entry the live system would
+    never have taken either.
+    """
     cycles = _cycles(n=40)
     _mock_single_day(monkeypatch, cycles)
     monkeypatch.setattr(sds, "compute_market_bias", lambda snap, ctx: ("bullish", 3.0, []))
     monkeypatch.setattr(sds, "check_managed_exit", lambda mtm, plan: "profit_target")
+    monkeypatch.setattr(dcfg, "MAX_NEW_POSITIONS_PER_DAY", 3)
 
     spreads = sds.run_policy("2026-06-01", sds.SpreadPolicy(max_positions_per_day=3))
     assert len(spreads) == 3
@@ -291,6 +314,20 @@ def test_unresolved_position_when_history_ends_inside_its_expiry_week(monkeypatc
     assert spreads
     assert spreads[0].pnl_inr is None
     assert sds.unresolved_count(spreads) == 1
+
+
+def test_risk_gate_rejects_a_spread_that_fails_min_net_credit(monkeypatch):
+    """
+    MIN_NET_CREDIT/MAX_CAPITAL_AT_RISK scale directly with whatever
+    premium band and hedge distance a caller is testing -- exactly what a
+    config sweep varies. A variant that would be rejected live must be
+    rejected here too, not silently traded.
+    """
+    _mock_single_day(monkeypatch, _cycles())
+    monkeypatch.setattr(sds, "compute_market_bias", lambda snap, ctx: ("bullish", 3.0, []))
+    monkeypatch.setattr(dcfg, "MIN_NET_CREDIT", 10_000.0)  # impossibly high
+
+    assert sds.run_policy("2026-06-01") == []
 
 
 def test_run_all_enforces_one_at_a_time_across_a_day_boundary(monkeypatch):

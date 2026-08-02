@@ -97,7 +97,7 @@ def test_min_days_to_expiry_gate_skips_entries_too_close_to_expiry(monkeypatch):
     condors, skips = sc.run_policy("2026-06-02")
     assert condors == []
     # Not counted as a rejected candidate -- the strategy never looked.
-    assert skips == {"no_candidate": 0, "coverage_gap": 0}
+    assert skips == {"no_candidate": 0, "coverage_gap": 0, "risk_rejected": 0}
 
 
 def test_coverage_gap_is_distinguished_from_no_candidate(monkeypatch):
@@ -251,5 +251,20 @@ def test_summarise_handles_no_positions():
 
 
 def test_coverage_summary_aggregates_across_days():
-    skips = [{"no_candidate": 2, "coverage_gap": 5}, {"no_candidate": 1, "coverage_gap": 0}]
-    assert sc.coverage_summary(skips) == {"no_candidate": 3, "coverage_gap": 5}
+    skips = [{"no_candidate": 2, "coverage_gap": 5, "risk_rejected": 1},
+            {"no_candidate": 1, "coverage_gap": 0, "risk_rejected": 0}]
+    assert sc.coverage_summary(skips) == {"no_candidate": 3, "coverage_gap": 5, "risk_rejected": 1}
+
+
+def test_risk_gate_rejects_a_condor_that_fails_min_net_credit(monkeypatch):
+    """
+    MIN_NET_CREDIT/MAX_CAPITAL_AT_RISK scale directly with whatever
+    premium band and hedge distance a caller is testing -- exactly what a
+    config sweep varies. A variant that would be rejected live must be
+    rejected here too, not silently traded.
+    """
+    _mock_single_day(monkeypatch, _cycles())
+    monkeypatch.setattr(ccfg, "MIN_NET_CREDIT", 10_000.0)  # impossibly high -- nothing can clear it
+    condors, skips = sc.run_policy("2026-06-01")
+    assert condors == []
+    assert skips["risk_rejected"] > 0

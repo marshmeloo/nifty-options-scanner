@@ -72,6 +72,7 @@ from datetime import date, datetime, time as dtime, timedelta
 from typing import Optional
 
 import config_directional_spread as dcfg
+import directional_spread_risk_checker
 import price_action
 import snapshot_recorder
 from directional_spread_plan_generator import build_directional_spread_plan
@@ -336,6 +337,19 @@ def _scan_day(day: str, policy: SpreadPolicy, cycles: list, day_cache: dict,
             bias_label=bias_label, bias_score=bias_score,
         )
         if plan is None:
+            continue
+
+        # opened_today = len(spreads): matches live's own opened_today
+        # counter for this day, since currently_open_positions is always
+        # 0 here (one_at_a_time already blocked reaching this point while
+        # a position was open). MIN_NET_CREDIT/MAX_CAPITAL_AT_RISK scale
+        # directly with whatever premium band and hedge distance is under
+        # test, exactly what a config sweep varies -- a variant that
+        # would be rejected live must be rejected here too.
+        verdict = directional_spread_risk_checker.check(
+            plan, currently_open_positions=0, opened_today=len(spreads)
+        )
+        if verdict.decision != "APPROVED":
             continue
 
         plan_dict = asdict(plan)

@@ -72,6 +72,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, time as dtime
 from typing import Optional
 
+import condor_risk_checker
 import config_condor as ccfg
 import price_action
 import snapshot_recorder
@@ -201,7 +202,7 @@ def _scan_day(day: str, policy: CondorPolicy, cycles: list, day_cache: dict,
 
     cache = _ContextCache()
     condors = []
-    skips = {"no_candidate": 0, "coverage_gap": 0}
+    skips = {"no_candidate": 0, "coverage_gap": 0, "risk_rejected": 0}
 
     for i, (snapshot, candles, _meta) in enumerate(cycles):
         ts = snapshot.timestamp
@@ -236,6 +237,19 @@ def _scan_day(day: str, policy: CondorPolicy, cycles: list, day_cache: dict,
         plan = build_condor_plan(legs, expiry=nominal_expiry.isoformat())
         if plan is None:
             skips["no_candidate"] += 1
+            continue
+
+        # currently_open_positions is always 0 here: one_at_a_time above
+        # already blocks reaching this point while a position is open, so
+        # this mirrors what live's own concurrency count would read.
+        # Matters now specifically because MIN_NET_CREDIT and
+        # MAX_CAPITAL_AT_RISK scale directly with whatever premium band
+        # and hedge distance a caller is testing -- exactly the
+        # parameters a config sweep varies -- so a variant that would be
+        # rejected live must be rejected here too, not silently traded.
+        verdict = condor_risk_checker.check(plan, currently_open_positions=0)
+        if verdict.decision != "APPROVED":
+            skips["risk_rejected"] += 1
             continue
 
         plan_dict = asdict(plan)
@@ -284,7 +298,7 @@ def run_policy(day: str, policy: CondorPolicy = None, verbose: bool = False,
 
     cycles = _load_cached(day_cache, day)
     if not cycles:
-        return [], {"no_candidate": 0, "coverage_gap": 0}
+        return [], {"no_candidate": 0, "coverage_gap": 0, "risk_rejected": 0}
 
     condors, skips, _open_until = _scan_day(day, policy, cycles, day_cache, all_days,
                                             open_until=None, verbose=verbose)
@@ -332,10 +346,10 @@ def summarise(condors: list, label: str = "") -> str:
 
 def coverage_summary(all_skips: list) -> dict:
     """Aggregate skip_counts dicts from many run_policy() calls."""
-    total = {"no_candidate": 0, "coverage_gap": 0}
+    total = {"no_candidate": 0, "coverage_gap": 0, "risk_rejected": 0}
     for s in all_skips:
-        total["no_candidate"] += s["no_candidate"]
-        total["coverage_gap"] += s["coverage_gap"]
+        for k in total:
+            total[k] += s.get(k, 0)
     return total
 
 
@@ -375,12 +389,14 @@ def main():
                 print(summarise(by_day[day], day))
         print()
         print(summarise(all_condors, "ALL DAYS"))
-        total_skips = cov["no_candidate"] + cov["coverage_gap"]
+        total_skips = cov["no_candidate"] + cov["coverage_gap"] + cov["risk_rejected"]
         if total_skips:
             gap_pct = 100 * cov["coverage_gap"] / total_skips
             print(f"\nskipped cycles: {cov['no_candidate']} no matching premium, "
                   f"{cov['coverage_gap']} coverage gap (hedge/short outside the "
-                  f"~500pt reconstructed window) -- {gap_pct:.0f}% of all skips were data gaps, not real rejections")
+                  f"~500pt reconstructed window), {cov['risk_rejected']} risk-gate rejected "
+                  f"(MIN_NET_CREDIT/MAX_CAPITAL_AT_RISK) -- {gap_pct:.0f}% of all skips were "
+                  f"data gaps, not real rejections")
         unresolved = unresolved_count(all_condors)
         if unresolved:
             print(f"unresolved (recorded history ended before their expiry): {unresolved}")
