@@ -1094,10 +1094,28 @@ spreads; establish whether book imbalance predicts anything, via the same
 forward-return method `component_study.py` used) that should be settled
 before wiring it into a live decision.
 
-Run it standalone:
+Run it standalone (spread recording is on by default):
 ```bash
 python3 orderflow_feed.py --strike-range 300
 ```
+
+Then, after a session:
+```bash
+python3 spread_study.py
+```
+
+`orderflow_recorder.py` samples every contract's quoted spread every 30s
+and writes `logs/orderflow/YYYYMMDD.jsonl.gz`, tagging each sample with
+its market phase (pre_open / opening / regular / closing / post_close).
+Phase is RECORDED rather than filtered at capture time on purpose: the
+post-close reading is exactly what made the LTP assumption questionable,
+and discarding it at capture would have thrown away the observation that
+prompted the work. `spread_study.py` does the filtering, and refuses to
+report a trading-cost figure at all until it has regular-session samples
+— a blended average across phases would describe a market nobody trades
+in. It reports per market phase, per premium level, and per strategy
+inside that strategy's own configured premium band, since a chain-wide
+average applies to none of them.
 
 ## Changed: 2026-08-02 -- directional spread's strike selection re-tuned (40-70/100)
 

@@ -14,6 +14,10 @@ trade_journal.jsonl
 # Recorded market history (~1.5 MB/day gzipped). This is valuable data --
 # back it up somewhere, just not in git.
 logs/snapshots/
+# Recorded live order-book spread samples (~1-2 MB/day gzipped).
+# Same reasoning as snapshots: valuable measurement data, but runtime
+# output rather than source -- back it up outside git.
+logs/orderflow/
 cmd-print-*.txt
 sample_data.csv
 state/*.json

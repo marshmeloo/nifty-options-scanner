@@ -62,6 +62,7 @@ import config
 import dhan_source
 import instrument_master
 import orderflow_packets as packets
+import orderflow_recorder
 from atomic_state import atomic_write_json
 
 log = logging.getLogger("orderflow")
@@ -108,16 +109,22 @@ def feed_url() -> str:
             f"&clientId={client_id}&authType=2")
 
 
-def select_contracts(expiry: str = None, strike_range_points: float = None) -> list:
+def select_contracts(expiry: str = None, strike_range_points: float = None) -> tuple:
     """
-    The contracts worth subscribing to: every strike within
-    `strike_range_points` of spot, on the given expiry.
+    The contracts worth subscribing to -- every strike within
+    `strike_range_points` of spot on the given expiry -- and the spot
+    they were selected against.
 
     Deliberately bounded rather than "the whole chain": Dhan allows 5000
     instruments per connection and the chain is only a few hundred, so
     the limit is not the constraint -- signal quality is. Strikes far
     from spot have thin, erratic books whose imbalance is noise, and
     including them would dilute any aggregate computed across the chain.
+
+    Returns (contracts, spot). Spot comes back because the spread
+    recorder needs it to stamp each sample's distance from spot, and
+    re-fetching it there would mean a second REST call for a number this
+    function already has.
     """
     expiry = expiry or dhan_source.get_nearest_expiry()
     snapshot = dhan_source.get_nifty_snapshot(expiry=expiry)
@@ -146,7 +153,7 @@ def select_contracts(expiry: str = None, strike_range_points: float = None) -> l
 
     if len(selected) > MAX_INSTRUMENTS_PER_CONNECTION:
         selected = selected[:MAX_INSTRUMENTS_PER_CONNECTION]
-    return selected
+    return selected, snapshot.spot
 
 
 def subscribe_messages(contracts: list) -> list:
@@ -177,7 +184,8 @@ class OrderFlowFeed:
     per process.
     """
 
-    def __init__(self, contracts: list, state_path: Path = None):
+    def __init__(self, contracts: list, state_path: Path = None,
+                 record_spreads: bool = True, reference_spot: float = None):
         self.contracts = contracts
         self.by_security_id = {c["security_id"]: c for c in contracts}
         self.state_path = state_path or STATE_PATH
@@ -186,6 +194,18 @@ class OrderFlowFeed:
         self.connected_at = None
         self.packets_seen = 0
         self.last_packet_at = None
+        self.record_spreads = record_spreads
+        # Spot at subscription time, used only to stamp each spread sample
+        # with its distance from spot. Deliberately NOT refreshed per
+        # sample: that would need a REST call per sample against the
+        # shared rate limiter, to label a number whose whole purpose is
+        # coarse stratification (ATM vs 200pts out vs 500pts out).
+        # Intraday drift of a few tens of points does not change which
+        # bucket a strike falls in; a rate-limit storm would break the
+        # feed. The staleness is real and bounded -- noted here rather
+        # than hidden.
+        self.reference_spot = reference_spot
+        self.samples_recorded = 0
         self._stop = threading.Event()
         self._ws = None
 
@@ -269,6 +289,15 @@ class OrderFlowFeed:
         """
         writer = threading.Thread(target=self._write_loop, daemon=True)
         writer.start()
+        if self.record_spreads:
+            # Separate thread from the state writer on purpose: the state
+            # file is a 2s "what is true now" snapshot for strategies to
+            # read, while spread recording is a 30s durable sample for
+            # later analysis. Sharing a loop would couple two cadences
+            # that exist for different reasons and force one to change if
+            # the other ever needs to.
+            sampler = threading.Thread(target=self._sample_loop, daemon=True)
+            sampler.start()
 
         delay = RECONNECT_MIN_SECONDS
         while not self._stop.is_set():
@@ -298,6 +327,21 @@ class OrderFlowFeed:
                 break
         self.write_state()   # final flush on shutdown
 
+    def _sample_loop(self):
+        """
+        Periodically append a spread sample for later analysis. Skips
+        while the book is still empty so a run started before the first
+        packet arrives doesn't record a file full of nothing.
+        """
+        while not self._stop.is_set():
+            if self._stop.wait(orderflow_recorder.SAMPLE_INTERVAL_SECONDS):
+                break
+            with self.lock:
+                has_book = bool(self.book)
+            if has_book:
+                self.samples_recorded += orderflow_recorder.record_samples(
+                    self.snapshot_state(), spot=self.reference_spot)
+
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
@@ -306,18 +350,21 @@ def main():
                    help="points either side of spot (default config.STRIKE_RANGE_POINTS)")
     p.add_argument("--duration", type=float, default=None,
                    help="seconds to run before exiting; omit to run until stopped")
+    p.add_argument("--no-record", action="store_true",
+                   help="skip session spread recording (on by default)")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
                         datefmt="%H:%M:%S")
 
-    contracts = select_contracts(args.expiry, args.strike_range)
+    contracts, spot = select_contracts(args.expiry, args.strike_range)
     if not contracts:
         print("No contracts selected -- check the expiry and instrument master.")
         return
-    log.info(f"  [orderflow] selected {len(contracts)} contracts")
+    log.info(f"  [orderflow] selected {len(contracts)} contracts around spot {spot}")
 
-    feed = OrderFlowFeed(contracts)
+    feed = OrderFlowFeed(contracts, record_spreads=not args.no_record,
+                         reference_spot=spot)
 
     def _shutdown(signum, frame):
         log.info("  [orderflow] shutting down")
@@ -333,7 +380,8 @@ def main():
         threading.Timer(args.duration, feed.stop).start()
 
     feed.run_forever()
-    log.info(f"  [orderflow] stopped after {feed.packets_seen:,} packets")
+    log.info(f"  [orderflow] stopped after {feed.packets_seen:,} packets, "
+             f"{feed.samples_recorded:,} spread samples recorded")
 
 
 if __name__ == "__main__":

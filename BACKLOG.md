@@ -117,14 +117,23 @@ deliberately separate so the feed can be observed on its own first.
 
 Two things worth resolving before wiring it in:
 
-  - **Measure real intraday spreads.** The only capture so far is
-    post-close (17:16), where spreads read 0.6–1.6%. Spreads are
-    routinely wider outside market hours, so that is NOT a usable
-    estimate — but it is above the 0.2–0.6% band assumed in the momentum
-    cost-sensitivity analysis, and if intraday spreads land near 1%, the
-    LTP-priced backtest results across this whole project are more
-    optimistic than currently documented. Run the feed through a full
-    session and measure before trusting any of those totals.
+  - **Measure real intraday spreads.** TOOLING BUILT 2026-08-02
+    (`orderflow_recorder.py` records every sample tagged with its market
+    phase; `spread_study.py` analyses them), but the measurement itself
+    still needs a live session — recording is on by default whenever
+    `orderflow_feed.py` runs, so it just needs the feed up during market
+    hours.
+
+    Why it matters: the only capture so far is post-close (17:16), median
+    **0.856%**, p90 1.591%. That is NOT a usable estimate — spreads widen
+    when nobody is quoting, and `spread_study.py` deliberately refuses to
+    report a trading-cost figure from non-regular-session samples. But it
+    sits above the 0.2–0.6% band assumed in the momentum cost-sensitivity
+    analysis, where 0.6% already cut net expectancy from +0.104R to
+    ~+0.062R per trade. If regular-session spreads land near 1%, **every
+    LTP-priced backtest total in this project is more optimistic than
+    currently documented** — momentum_only's Rs 470,031 included. Run the
+    feed through one full session and check before trusting those totals.
   - **Decide what the signal is actually for.** Dhan's feed carries the
     order BOOK (resting size), not a trade tape with aggressor flags, so
     cumulative-delta / footprint order flow cannot be built from it. Book
