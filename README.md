@@ -1035,6 +1035,70 @@ Each tier has a cooldown after a failure so a genuinely-down source
 doesn't add latency/log-noise to every 30s poll — see
 `FALLBACK_RETRY_COOLDOWN_SECONDS` in `config.py`.
 
+## Added: 2026-08-02 -- live order-flow feed (WebSocket), not yet wired into any strategy
+
+Four new modules, the first non-REST data path in this project:
+
+  - `instrument_master.py` — maps (strike, expiry, option type) to Dhan's
+    numeric security ID from their public CSV. A prerequisite for
+    anything addressing contracts by ID rather than by chain lookup,
+    which also unblocks BACKLOG's lightweight `/marketfeed/ltp`
+    fast-position-check item. Cached with an explicit age bound rather
+    than "once a day": new weekly expiries appear in the master before
+    they trade, and a stale cache silently missing a contract would look
+    exactly like "that strike has no order flow".
+  - `orderflow_packets.py` — binary decoder for the feed's packed
+    packets.
+  - `orderflow_feed.py` — the persistent WebSocket process. Separate
+    process, communicating through a state file, for the same reason the
+    three strategies are separate: a long-lived event-driven socket must
+    not be interrupted by any trading loop's timing, and nothing may
+    block on it being alive.
+  - `orderflow.py` — read side. Every accessor is age-gated and returns
+    None when unavailable, never a plausible default; a missing book is
+    missing information, not a balanced book.
+
+**Validated against live data, not just unit tests.** Connected during
+market hours' close, subscribed 24 contracts, and cross-checked every
+parsed field against the REST option chain: LTP and OI matched exactly on
+every contract.
+
+That cross-check caught a documentation error. Dhan's spec labels one
+Quote/Full field "Day Close", but it is the PREVIOUS session's close —
+it matched `previous_close_price` exactly on every contract, and its
+values routinely sit outside the same packet's own day high/low, which is
+impossible for a close of the session being reported. It is named
+`prev_close` here, with the discrepancy documented at the field.
+
+The unit tests caught a worse one during development. The first version
+of the decoder hand-wrote its struct format with `avg_price` typed
+`int32` and `volume` `float32` — transposed. Both are 4 bytes, so the
+packet still measured exactly the documented 50 and a size assertion
+passed clean while every value after LTP would have been garbage. The
+field layouts are now tables of (name, type) shared by parser and tests,
+so a wrong type fails at pack time instead of producing plausible
+numbers. Same silent-corruption class as this project's one-bar timestamp
+shift, flat `iv_percentile`, and absent OI buildup.
+
+**What this does and does not provide.** The feed carries the order BOOK
+— five levels of resting bid/ask size, plus exchange-wide total buy/sell
+quantity. It does NOT carry a trade tape with aggressor flags, so classic
+footprint / cumulative-delta order flow cannot be built from it. Book
+imbalance measures intent to trade at a price; resting orders can be
+pulled. The arguably larger win is real bid/ask: every backtest number in
+this project is currently priced at LTP and therefore optimistic.
+
+**Nothing consumes this yet** — no strategy reads the book and no scoring
+uses it. See BACKLOG.md for the two open questions (measure real intraday
+spreads; establish whether book imbalance predicts anything, via the same
+forward-return method `component_study.py` used) that should be settled
+before wiring it into a live decision.
+
+Run it standalone:
+```bash
+python3 orderflow_feed.py --strike-range 300
+```
+
 ## Changed: 2026-08-02 -- directional spread's strike selection re-tuned (40-70/100)
 
 `sweep_spread_config.py` re-ran the full 493-day, 2-year history once per

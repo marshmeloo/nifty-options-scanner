@@ -106,12 +106,33 @@ placed at trade entry) — a deliberate, not-yet-made decision to start
 placing real orders, since everything currently here is analytics/
 tracking only.
 
-## Order flow
+## Order flow — feed BUILT 2026-08-02, not yet wired into any strategy
 
-Needs Dhan's WebSocket Live Market Feed (separate paid Data API
-subscription, ₹499+tax/month) and a genuinely different process
-architecture — not a REST-polling module like everything else here.
-Scoped out for now; revisit once the above two items are settled.
+`orderflow_feed.py` (WebSocket process), `orderflow_packets.py` (binary
+decoder), `orderflow.py` (read side) and `instrument_master.py` are
+built, tested and validated against live data — see README's 2026-08-02
+entry. **Nothing consumes them yet**: no strategy reads the book, and no
+scoring or gating uses it. That wiring is the remaining work, and it is
+deliberately separate so the feed can be observed on its own first.
+
+Two things worth resolving before wiring it in:
+
+  - **Measure real intraday spreads.** The only capture so far is
+    post-close (17:16), where spreads read 0.6–1.6%. Spreads are
+    routinely wider outside market hours, so that is NOT a usable
+    estimate — but it is above the 0.2–0.6% band assumed in the momentum
+    cost-sensitivity analysis, and if intraday spreads land near 1%, the
+    LTP-priced backtest results across this whole project are more
+    optimistic than currently documented. Run the feed through a full
+    session and measure before trusting any of those totals.
+  - **Decide what the signal is actually for.** Dhan's feed carries the
+    order BOOK (resting size), not a trade tape with aggressor flags, so
+    cumulative-delta / footprint order flow cannot be built from it. Book
+    imbalance measures intent to trade at a price, and resting orders can
+    be pulled. Whether that predicts anything here is an open question
+    that deserves the same forward-return treatment
+    `component_study.py` applied to the momentum scorer — not an
+    assumption that "order flow is informative".
 
 ## Dhan rate limiting across three concurrent processes (observed live, 2026-07-30)
 
