@@ -249,6 +249,24 @@ def build_state() -> dict:
 class DashboardServer(socketserver.TCPServer):
     allow_reuse_address = True
 
+    def handle_error(self, request, client_address):
+        """
+        A browser tab closed or refreshed mid-response is normal traffic
+        for a page that polls every few seconds, not a server fault --
+        the client just isn't there to receive the bytes anymore. The
+        default socketserver behaviour prints a full traceback per
+        occurrence, which reads as something broke every time someone
+        reloads the page. Only THESE specific "the other end went away"
+        exceptions are swallowed (quietly noted, not silently dropped);
+        anything else still prints the full traceback, since that could
+        be a real bug in build_state() or the handler.
+        """
+        import sys
+        exc_type = sys.exc_info()[0]
+        if exc_type in (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            return
+        super().handle_error(request, client_address)
+
 
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
