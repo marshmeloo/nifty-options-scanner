@@ -134,9 +134,26 @@ def detect_order_blocks(candles) -> list:
     return levels
 
 
-def detect_support_resistance(candles) -> list:
-    """Cluster swing highs into resistance, swing lows into support."""
-    swing_highs, swing_lows = find_swing_points(candles)
+def detect_support_resistance(candles, lookback=None, cluster_tolerance_pct=None,
+                              min_touches=None) -> list:
+    """
+    Cluster swing highs into resistance, swing lows into support.
+
+    `lookback`/`cluster_tolerance_pct`/`min_touches` default to this
+    module's own config.* constants when omitted, so every EXISTING
+    caller (scanner.py's momentum path) is unaffected. They exist so
+    price_structure.py's pure price-action strategy -- which has its own
+    config_price_action.py, tuned independently -- can pass its own
+    values instead of silently inheriting the momentum scanner's. Without
+    this, detect_support_resistance() always read config.py's constants
+    regardless of what a caller's own config file said, which would have
+    made "separate config per strategy" a fiction for this function.
+    """
+    lookback = lookback or config.SWING_LOOKBACK
+    cluster_tolerance_pct = cluster_tolerance_pct if cluster_tolerance_pct is not None else config.SR_CLUSTER_TOLERANCE_PCT
+    min_touches = min_touches or config.SR_MIN_TOUCHES
+
+    swing_highs, swing_lows = find_swing_points(candles, lookback)
     levels = []
 
     for label, kind, points in (
@@ -148,7 +165,7 @@ def detect_support_resistance(candles) -> list:
         for p in prices:
             placed = False
             for cluster in clusters:
-                if _pct(p, cluster["mean"]) <= config.SR_CLUSTER_TOLERANCE_PCT:
+                if _pct(p, cluster["mean"]) <= cluster_tolerance_pct:
                     cluster["prices"].append(p)
                     cluster["mean"] = sum(cluster["prices"]) / len(cluster["prices"])
                     placed = True
@@ -158,7 +175,7 @@ def detect_support_resistance(candles) -> list:
 
         for cluster in clusters:
             touches = len(cluster["prices"])
-            if touches >= config.SR_MIN_TOUCHES:
+            if touches >= min_touches:
                 levels.append(
                     PriceLevel(
                         kind=kind,
