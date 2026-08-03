@@ -142,6 +142,12 @@ def build_state() -> dict:
     total_pnl_today_inr = round(total_open_pnl_inr + total_realized_pnl_inr, 2)
 
     condor_state = _read_json(STATE_DIR / "condor_position.json", default={})
+    # NEVER READ before 2026-08-03: the directional spread strategy had no
+    # dashboard visibility at all -- condor_position.json was read here,
+    # directional_spread_position.json was not, and the frontend had no
+    # panel for it either. A real position was opened, breached, and
+    # approved via approve_orders.py entirely invisibly on the dashboard.
+    spread_state = _read_json(STATE_DIR / "directional_spread_position.json", default={})
     opening_gap = _read_json(STATE_DIR / "opening_gap.json", default={})
     staged_orders = _read_json(STATE_DIR / "staged_orders.json", default=[])
     pending_staged = [r for r in (staged_orders or []) if r.get("status") == "PENDING"]
@@ -199,6 +205,7 @@ def build_state() -> dict:
             "total_pnl_today_inr": total_pnl_today_inr,
         },
         "condor_position": (condor_state or {}).get("position"),
+        "directional_spread_position": (spread_state or {}).get("position"),
         "opening_gap": opening_gap,
         "pending_approvals": pending_staged,
         "main_log_age_seconds": log_age_seconds,
