@@ -183,6 +183,12 @@ def update_position(state: dict, snapshot) -> dict:
     current_prices = _current_leg_prices(snapshot.chain, plan_dict)
     mtm_pnl = _mark_to_market_pnl_inr(plan_dict, current_prices)
     position["current_mtm_pnl_inr"] = mtm_pnl
+    # Persisted so the dashboard can show live leg prices and a freshness
+    # indicator, not just the aggregate MTM -- mirrors condor_tracker's
+    # equivalent addition, same reasoning: "is this live" was previously
+    # only answerable by reading the log, not the state file.
+    position["current_leg_prices"] = current_prices
+    position["mtm_updated_at"] = snapshot.timestamp.isoformat()
     _update_excursion(position, mtm_pnl, plan_dict, timestamp=snapshot.timestamp)
 
     exit_reason = check_managed_exit(mtm_pnl, plan_dict)

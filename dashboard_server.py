@@ -21,6 +21,8 @@ from pathlib import Path
 from datetime import datetime, date
 
 import config
+import config_condor as ccfg
+import config_directional_spread as dcfg
 import trade_tracker as tt
 import condor_tracker as ct
 import directional_spread_tracker as dst
@@ -191,6 +193,24 @@ def build_state() -> dict:
     if main_log_path.exists():
         log_age_seconds = round(datetime.now().timestamp() - main_log_path.stat().st_mtime, 1)
 
+    def _position_age_seconds(position: dict):
+        """
+        Seconds since this position's MTM was last marked, from its own
+        mtm_updated_at field -- not the state file's mtime, which would
+        also tick on unrelated writes. Answers "is this MTM actually
+        live" directly rather than leaving it implied.
+        """
+        if not position or not position.get("mtm_updated_at"):
+            return None
+        try:
+            updated = datetime.fromisoformat(position["mtm_updated_at"])
+            return round((datetime.now() - updated).total_seconds(), 1)
+        except (ValueError, TypeError):
+            return None
+
+    condor_position = (condor_state or {}).get("position")
+    spread_position = (spread_state or {}).get("position")
+
     return {
         "server_time": datetime.now().isoformat(timespec="seconds"),
         "latest_cycle": latest_cycle,
@@ -204,8 +224,12 @@ def build_state() -> dict:
             "realized_pnl_inr": total_realized_pnl_inr,
             "total_pnl_today_inr": total_pnl_today_inr,
         },
-        "condor_position": (condor_state or {}).get("position"),
-        "directional_spread_position": (spread_state or {}).get("position"),
+        "condor_position": condor_position,
+        "condor_position_age_seconds": _position_age_seconds(condor_position),
+        "condor_poll_interval_seconds": ccfg.POLL_INTERVAL_SECONDS,
+        "directional_spread_position": spread_position,
+        "directional_spread_position_age_seconds": _position_age_seconds(spread_position),
+        "directional_spread_poll_interval_seconds": getattr(dcfg, "POLL_INTERVAL_SECONDS", None),
         "opening_gap": opening_gap,
         "pending_approvals": pending_staged,
         "main_log_age_seconds": log_age_seconds,

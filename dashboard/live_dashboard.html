@@ -504,51 +504,95 @@ function renderClosedToday(trades) {
     </table>`;
 }
 
-function renderCondor(position) {
+function freshnessBadge(ageSeconds, pollIntervalSeconds) {
+  // "Live" means the last poll cycle updated this position; a poll cycle
+  // that's overdue by more than ~2x its own interval means the strategy
+  // process likely isn't running or has fallen behind -- worth saying
+  // plainly rather than leaving "is this actually live?" as an assumption.
+  if (ageSeconds === null || ageSeconds === undefined) {
+    return `<span class="badge rejected">no update recorded yet</span>`;
+  }
+  const stale = pollIntervalSeconds ? ageSeconds > pollIntervalSeconds * 2 : ageSeconds > 600;
+  const label = ageSeconds < 60 ? `${Math.round(ageSeconds)}s ago` : `${Math.round(ageSeconds / 60)}m ago`;
+  return stale
+    ? `<span class="badge rejected">STALE -- last updated ${label}</span>`
+    : `<span class="badge opened">LIVE -- updated ${label}</span>`;
+}
+
+function legRow(label, entryStrike, entryPremium, currentPremium, favorableWhenLower) {
+  // Shorts profit as their premium FALLS toward zero (you bought it back
+  // cheaper than you sold it); hedges profit as theirs RISES. Same
+  // number moving the same direction means opposite things depending on
+  // which leg it is, which is exactly what's easy to misread from a
+  // single "current price" figure with no framing.
+  let move = "";
+  if (currentPremium != null && entryPremium != null) {
+    const better = favorableWhenLower ? currentPremium < entryPremium : currentPremium > entryPremium;
+    move = `<span class="${better ? 'pos' : 'neg'}" style="font-size:11px; margin-left:6px;">${better ? '↓ favorable' : '↑ against you'}</span>`;
+  }
+  const cur = currentPremium != null ? currentPremium : "—";
+  return `<div class="row"><span class="k">${label} ${entryStrike}</span><span class="v">sold ${entryPremium} → now ${cur}${move}</span></div>`;
+}
+
+function renderCondor(position, ageSeconds, pollIntervalSeconds) {
   const panel = document.getElementById("condor-panel");
   const container = document.getElementById("condor-container");
   if (!position || position.status !== "OPEN") { panel.style.display = "none"; return; }
   panel.style.display = "block";
   const plan = position.plan || {};
+  const live = position.current_leg_prices || {};
   container.innerHTML = `
+    <div style="margin-bottom:10px;">${freshnessBadge(ageSeconds, pollIntervalSeconds)}
+      <span style="color:var(--muted); font-size:12px; margin-left:8px;">Mark-to-market recomputes every poll cycle (every ${pollIntervalSeconds ? Math.round(pollIntervalSeconds/60) + " min" : "few minutes"}) from the live option chain -- it is not a static snapshot from when the position opened.</span>
+    </div>
     <div class="grid">
-      <div class="card"><h3>Structure</h3>
-        <div class="row"><span class="k">Short CE</span><span class="v">${plan.short_ce_strike} @ ${plan.short_ce_premium}</span></div>
-        <div class="row"><span class="k">Short PE</span><span class="v">${plan.short_pe_strike} @ ${plan.short_pe_premium}</span></div>
-        <div class="row"><span class="k">Hedge CE</span><span class="v">${plan.hedge_ce_strike} @ ${plan.hedge_ce_premium}</span></div>
-        <div class="row"><span class="k">Hedge PE</span><span class="v">${plan.hedge_pe_strike} @ ${plan.hedge_pe_premium}</span></div>
+      <div class="card"><h3>Legs (live)</h3>
+        ${legRow("Short CE", plan.short_ce_strike, plan.short_ce_premium, live.short_ce, true)}
+        ${legRow("Short PE", plan.short_pe_strike, plan.short_pe_premium, live.short_pe, true)}
+        ${legRow("Hedge CE", plan.hedge_ce_strike, plan.hedge_ce_premium, live.hedge_ce, false)}
+        ${legRow("Hedge PE", plan.hedge_pe_strike, plan.hedge_pe_premium, live.hedge_pe, false)}
       </div>
       <div class="card"><h3>P&amp;L</h3>
         <div class="row"><span class="k">Net Credit</span><span class="v">${fmtInr(plan.net_credit_inr)}</span></div>
+        <div style="font-size:11px; color:var(--muted); margin:-4px 0 8px;">Cash collected upfront (sold premium − hedge cost). This is the MOST you can make -- it's kept in full only if NIFTY settles between the short strikes at expiry.</div>
         <div class="row"><span class="k">Max Loss</span><span class="v neg">${fmtInr(-Math.abs(plan.max_loss_inr))}</span></div>
+        <div style="font-size:11px; color:var(--muted); margin:-4px 0 8px;">The most this position can lose, capped by the hedge legs -- it cannot lose more than this no matter how far NIFTY moves.</div>
         <div class="row"><span class="k">Mark-to-Market</span><span class="v ${pnlClass(position.current_mtm_pnl_inr)}">${fmtInr(position.current_mtm_pnl_inr)}</span></div>
+        <div style="font-size:11px; color:var(--muted); margin:-4px 0 8px;">What you'd realise closing ALL FOUR legs right now, at current prices -- between the two limits above, moving every cycle.</div>
         <div class="row"><span class="k">Breakevens</span><span class="v">${plan.breakeven_lower} / ${plan.breakeven_upper}</span></div>
       </div>
     </div>`;
 }
 
-function renderDirectionalSpread(position) {
+function renderDirectionalSpread(position, ageSeconds, pollIntervalSeconds) {
   const panel = document.getElementById("spread-panel");
   const container = document.getElementById("spread-container");
   if (!position || position.status !== "OPEN") { panel.style.display = "none"; return; }
   panel.style.display = "block";
   const plan = position.plan || {};
+  const live = position.current_leg_prices || {};
   const maxProfit = plan.max_profit_inr;
   const peak = position.max_pnl_inr_seen;
   const hits = Object.keys(position.profit_milestones_hit || {}).map(Number);
   const peakPct = (maxProfit && peak != null) ? (peak / maxProfit * 100) : null;
   container.innerHTML = `
+    <div style="margin-bottom:10px;">${freshnessBadge(ageSeconds, pollIntervalSeconds)}
+      <span style="color:var(--muted); font-size:12px; margin-left:8px;">Mark-to-market recomputes every poll cycle (every ${pollIntervalSeconds ? Math.round(pollIntervalSeconds) + "s" : "few seconds"}) from the live option chain.</span>
+    </div>
     <div class="grid">
-      <div class="card"><h3>Structure</h3>
+      <div class="card"><h3>Legs (live)</h3>
         <div class="row"><span class="k">Direction</span><span class="v">${plan.direction === "PE" ? "Bull put (sold PE)" : "Bear call (sold CE)"}</span></div>
-        <div class="row"><span class="k">Short</span><span class="v">${plan.short_strike} @ ${plan.short_premium}</span></div>
-        <div class="row"><span class="k">Hedge</span><span class="v">${plan.hedge_strike} @ ${plan.hedge_premium}</span></div>
+        ${legRow("Short", plan.short_strike, plan.short_premium, live.short, true)}
+        ${legRow("Hedge", plan.hedge_strike, plan.hedge_premium, live.hedge, false)}
         <div class="row"><span class="k">Bias at entry</span><span class="v">${plan.bias_label} (score ${plan.bias_score})</span></div>
       </div>
       <div class="card"><h3>P&amp;L</h3>
         <div class="row"><span class="k">Net Credit</span><span class="v">${fmtInr(plan.net_credit_inr)}</span></div>
+        <div style="font-size:11px; color:var(--muted); margin:-4px 0 8px;">Cash collected upfront. The most you can make -- kept in full only if NIFTY stays past the short strike through expiry.</div>
         <div class="row"><span class="k">Max Loss</span><span class="v neg">${fmtInr(-Math.abs(plan.max_loss_inr))}</span></div>
+        <div style="font-size:11px; color:var(--muted); margin:-4px 0 8px;">The most this can lose, capped by the hedge leg.</div>
         <div class="row"><span class="k">Mark-to-Market</span><span class="v ${pnlClass(position.current_mtm_pnl_inr)}">${fmtInr(position.current_mtm_pnl_inr)}</span></div>
+        <div style="font-size:11px; color:var(--muted); margin:-4px 0 8px;">What you'd realise closing both legs right now, at current prices.</div>
         <div class="row"><span class="k">Breakeven</span><span class="v">${plan.breakeven}</span></div>
         <div class="row"><span class="k">Peak MTM</span><span class="v ${pnlClass(peak)}">${fmtInr(peak)}${peakPct != null ? ` (${peakPct.toFixed(0)}% of max profit)` : ""}</span></div>
         <div class="row"><span class="k">Milestones hit</span><span class="v">${hits.length ? hits.sort((a,b)=>a-b).join("%, ") + "%" : "none yet"}</span></div>
@@ -639,8 +683,8 @@ async function refresh() {
     renderOpenTrades(data.open_trades, data.totals);
     renderRRStats(data.rr_stats);
     renderClosedToday(data.closed_today);
-    renderCondor(data.condor_position);
-    renderDirectionalSpread(data.directional_spread_position);
+    renderCondor(data.condor_position, data.condor_position_age_seconds, data.condor_poll_interval_seconds);
+    renderDirectionalSpread(data.directional_spread_position, data.directional_spread_position_age_seconds, data.directional_spread_poll_interval_seconds);
     renderApprovals(data.pending_approvals);
     renderActivity(data.recent_cycles);
   } catch (e) {

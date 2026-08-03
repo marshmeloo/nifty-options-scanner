@@ -146,6 +146,12 @@ def update_position(state: dict, snapshot) -> dict:
     current_prices = _current_leg_prices(snapshot.chain, plan_dict)
     mtm_pnl = _mark_to_market_pnl_inr(plan_dict, current_prices)
     position["current_mtm_pnl_inr"] = mtm_pnl
+    # Persisted so the dashboard can show live leg prices next to entry
+    # premiums, not just the aggregate MTM number -- "what are the shorts
+    # actually worth right now" was previously only visible by reading
+    # this cycle's live log line, not the state file the dashboard reads.
+    position["current_leg_prices"] = current_prices
+    position["mtm_updated_at"] = snapshot.timestamp.isoformat()
     _update_excursion(position, mtm_pnl, plan_dict, timestamp=snapshot.timestamp)
 
     warning = check_breach_warning(snapshot.spot, plan_dict)
