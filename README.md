@@ -1035,6 +1035,61 @@ Each tier has a cooldown after a failure so a genuinely-down source
 doesn't add latency/log-noise to every 30s poll — see
 `FALLBACK_RETRY_COOLDOWN_SECONDS` in `config.py`.
 
+## Added: 2026-08-02 -- profit-milestone tracking for the directional spread and condor
+
+The momentum scanner has tracked R-multiple milestones since the
+2026-07-27 session (`config.RR_MILESTONES`, `trade_tracker._update_excursion`
+/ `rr_milestone_stats`) -- the dataset behind "is `DEFAULT_TARGET_RR = 2.0`
+actually the right target?". The other two strategies had nothing
+equivalent: `directional_spread_tracker.py` and `condor_tracker.py` marked
+P&L every cycle but threw the excursion away, so there was no way to ask
+whether `PROFIT_TARGET_PCT_OF_MAX_PROFIT = 60` is well-chosen, or whether
+the condor (which has no active exit at all, held to expiry unless
+manually closed on a breach) should get one.
+
+Same shape as the momentum version, in this domain's own unit -- % of
+`max_profit_inr`, since a credit spread/condor has no symmetric "R" the
+way a fixed-stop long option does (max profit and max loss are related
+through the hedge width, not equal by construction):
+
+  - `PROFIT_MILESTONES_PCT = [10, 20, ..., 100]` added to both
+    `config_directional_spread.py` and `config_condor.py`.
+  - Both trackers now record, on every cycle a position is open, the
+    running max/min mark-to-market P&L and which milestones have been
+    touched and when (`_update_excursion`, called from both
+    `update_position()` and `close_position()` so a milestone touched
+    only on the closing cycle -- e.g. expiry settling right at max
+    profit -- isn't missed). A cycle with no priceable P&L (a leg's quote
+    missing) updates nothing, same "missing information is not a zero"
+    rule as the 2026-07-30 condor MTM incident.
+  - At close, `_excursion_summary()` adds `max_pct_of_max_profit`,
+    `would_have_won_at` (every milestone this position actually reached),
+    and `capture_efficiency_pct` (what fraction of its own best-ever mark
+    the actual exit captured -- 100% means it closed at or beyond its
+    peak).
+  - `profit_milestone_stats()` / `summarize_profit_milestones()` in both
+    trackers turn the journal into the same evidence-for-tuning view
+    `rr_milestone_stats()` gives momentum. The condor's version has no
+    `current_target_pct` to mark, since there is no active target to
+    compare against yet -- this is explicitly the dataset for deciding
+    whether to add one.
+  - Per-cycle log line in `main_condor.py`/`main_directional_spread.py`
+    now shows peak MTM and the highest milestone hit so far, mirroring
+    `main_live.py`'s existing R-multiple line. Both trackers' stats are
+    also on the dashboard (`dashboard_server.py`), alongside momentum's
+    `rr_stats`.
+
+No live decision changed. This is purely additive tracking -- the
+condor's 60%/50% target and stop, and the fact that the condor still has
+no active exit, are both untouched. `condor_tracker.py` had no dedicated
+unit tests before this (only its expiry-selection and backtest-module
+neighbours did); `tests/test_condor_tracker.py` is new and covers the
+whole lifecycle, not just the milestone addition.
+
+370 tests passing (348 + 22: 11 for the spread tracker's milestone
+tracking, 12 for the condor tracker overall since it had no prior direct
+coverage).
+
 ## Added: 2026-08-02 -- live order-flow feed (WebSocket), not yet wired into any strategy
 
 Four new modules, the first non-REST data path in this project:

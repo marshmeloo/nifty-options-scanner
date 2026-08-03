@@ -74,6 +74,17 @@ AUTO_APPROVE_NEW_POSITIONS = True
 # call in the moment is the right tradeoff here, not either extreme.
 BREACH_WARNING_BUFFER_POINTS = 50
 
+# Milestones tracked on EVERY position, purely for analysis -- the condor
+# currently has NO active profit-target exit (held to expiry unless
+# manually closed on a breach warning, see above), so nothing here gates
+# a live decision yet. This exists to build the evidence for whether it
+# should: "reached 70% of max profit by Tuesday, then gave it back to a
+# Thursday breach" is exactly the kind of pattern that argues for an
+# early-exit rule, and there is currently no data trail to see it in.
+# Same % of max_profit_inr framing as config_directional_spread.py's
+# PROFIT_MILESTONES_PCT, for the same reason (no symmetric "R" here).
+PROFIT_MILESTONES_PCT = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
 # --- Timing ---
 # main_condor.py polls this often during market hours -- much coarser
 # than the momentum scanner's 30s, since this is a weekly swing

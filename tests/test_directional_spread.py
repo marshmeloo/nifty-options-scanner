@@ -361,3 +361,155 @@ def test_live_config_matches_the_2026_08_02_sweep_winner():
     assert dcfg.SHORT_PREMIUM_MIN == 40.0
     assert dcfg.SHORT_PREMIUM_MAX == 70.0
     assert dcfg.HEDGE_DISTANCE_POINTS == 100
+
+
+# --------------------------------------------------------------------------
+# Profit-milestone tracking (2026-08-02)
+# --------------------------------------------------------------------------
+
+def test_update_position_tracks_peak_mtm_and_milestones(state_paths, monkeypatch):
+    monkeypatch.setattr(dcfg, "PROFIT_TARGET_PCT_OF_MAX_PROFIT", 999.0)  # never trip early
+    monkeypatch.setattr(dcfg, "STOP_LOSS_PCT_OF_MAX_LOSS", 999.0)
+    monkeypatch.setattr(dcfg, "PROFIT_MILESTONES_PCT", [10, 20, 30])
+    plan = _approved_plan(monkeypatch)   # max_profit = 30 * 65 = 1950
+    state = {"position": None, "opened_today": 0}
+    dst.open_position(state, plan)
+
+    # cost to close = 20, captured = (30-20)*65 = 650 -> 650/1950 = ~33% -> hits 10/20/30
+    chain = [_quote(23850, "PE", 24), _quote(23700, "PE", 4)]
+    position = dst.update_position(state, _snapshot(chain, spot=24050))
+
+    assert position["max_pnl_inr_seen"] == pytest.approx(position["current_mtm_pnl_inr"])
+    hits = position["profit_milestones_hit"]
+    assert set(hits) == {"10", "20", "30"}
+
+
+def test_milestones_are_sticky_even_after_giving_back_the_move(state_paths, monkeypatch):
+    """
+    A milestone once touched must stay recorded even if MTM later falls
+    back below it -- "reached 70%, then gave it back" is the exact lesson
+    this tracking exists to preserve, and losing the flag on pullback
+    would erase it.
+    """
+    monkeypatch.setattr(dcfg, "PROFIT_TARGET_PCT_OF_MAX_PROFIT", 999.0)
+    monkeypatch.setattr(dcfg, "STOP_LOSS_PCT_OF_MAX_LOSS", 999.0)
+    monkeypatch.setattr(dcfg, "PROFIT_MILESTONES_PCT", [10, 20, 30])
+    plan = _approved_plan(monkeypatch)
+    state = {"position": None, "opened_today": 0}
+    dst.open_position(state, plan)
+
+    # First cycle: deep in profit, hits all three milestones.
+    dst.update_position(state, _snapshot(
+        [_quote(23850, "PE", 24), _quote(23700, "PE", 4)], spot=24050))
+    # Second cycle: pulls back to nearly flat.
+    position = dst.update_position(state, _snapshot(
+        [_quote(23850, "PE", 56), _quote(23700, "PE", 27)], spot=23900))
+
+    assert set(position["profit_milestones_hit"]) == {"10", "20", "30"}
+    assert position["current_mtm_pnl_inr"] < position["max_pnl_inr_seen"]
+
+
+def test_missing_quote_cycle_is_skipped_not_treated_as_flat(state_paths, monkeypatch):
+    """
+    A cycle with no priceable mtm_pnl must not touch max/min_pnl_inr_seen
+    at all -- the same missing-information-is-not-a-zero rule behind the
+    2026-07-30 condor MTM incident.
+    """
+    monkeypatch.setattr(dcfg, "PROFIT_TARGET_PCT_OF_MAX_PROFIT", 999.0)
+    monkeypatch.setattr(dcfg, "STOP_LOSS_PCT_OF_MAX_LOSS", 999.0)
+    plan = _approved_plan(monkeypatch)
+    state = {"position": None, "opened_today": 0}
+    dst.open_position(state, plan)
+
+    dst.update_position(state, _snapshot(
+        [_quote(23850, "PE", 24), _quote(23700, "PE", 4)], spot=24050))
+    before = dict(state["position"])
+
+    # No quotes at all this cycle.
+    position = dst.update_position(state, _snapshot([], spot=24050))
+    assert position["max_pnl_inr_seen"] == before["max_pnl_inr_seen"]
+    assert position["min_pnl_inr_seen"] == before["min_pnl_inr_seen"]
+
+
+def test_closed_position_gets_excursion_summary_fields(state_paths, monkeypatch):
+    monkeypatch.setattr(dcfg, "PROFIT_TARGET_PCT_OF_MAX_PROFIT", 60.0)
+    monkeypatch.setattr(dcfg, "STOP_LOSS_PCT_OF_MAX_LOSS", 999.0)
+    monkeypatch.setattr(dcfg, "PROFIT_MILESTONES_PCT", [10, 20, 30, 40, 50, 60])
+    plan = _approved_plan(monkeypatch)   # max_profit = 1950
+    state = {"position": None, "opened_today": 0}
+    dst.open_position(state, plan)
+
+    # captured = 22*65 = 1430 -> 73%, well past the 60% target -> closes here.
+    chain = [_quote(23850, "PE", 10), _quote(23700, "PE", 2)]
+    closed = dst.update_position(state, _snapshot(chain, spot=24100))
+
+    assert closed["status"] == "CLOSED"
+    assert closed["max_pct_of_max_profit"] == pytest.approx(73.3, abs=0.5)
+    assert closed["would_have_won_at"] == [10, 20, 30, 40, 50, 60]
+    assert closed["capture_efficiency_pct"] == pytest.approx(100.0, abs=0.1)  # closed AT its own peak
+
+
+def test_capture_efficiency_reflects_a_real_giveback(state_paths, monkeypatch):
+    """A position that peaks then pulls back before its eventual (non-target) exit must show <100%."""
+    monkeypatch.setattr(dcfg, "PROFIT_TARGET_PCT_OF_MAX_PROFIT", 999.0)
+    monkeypatch.setattr(dcfg, "STOP_LOSS_PCT_OF_MAX_LOSS", 999.0)
+    plan = _approved_plan(monkeypatch)
+    state = {"position": None, "opened_today": 0}
+    dst.open_position(state, plan)
+
+    dst.update_position(state, _snapshot(   # peak: captured 22*65=1430
+        [_quote(23850, "PE", 10), _quote(23700, "PE", 2)], spot=24100))
+    closed = dst.close_position(state, _snapshot(   # settle much lower
+        [_quote(23850, "PE", 40), _quote(23700, "PE", 15)], spot=23950), reason="manual")
+
+    assert closed["capture_efficiency_pct"] < 100.0
+
+
+def test_profit_milestone_stats_empty_journal():
+    stats = dst.profit_milestone_stats()
+    assert stats["sample"] == 0
+    assert stats["milestones"] == []
+
+
+def test_profit_milestone_stats_computes_hit_rate_and_simulated_pct(state_paths, monkeypatch):
+    monkeypatch.setattr(dcfg, "PROFIT_MILESTONES_PCT", [50])
+    entries = [
+        {"max_pct_of_max_profit": 80.0, "pnl_pct_of_max_profit": 80.0},   # reached 50%
+        {"max_pct_of_max_profit": 20.0, "pnl_pct_of_max_profit": -10.0},  # never reached 50%
+    ]
+    state_paths[1].write_text("\n".join(json.dumps(e) for e in entries))
+
+    stats = dst.profit_milestone_stats()
+    assert stats["sample"] == 2
+    m = stats["milestones"][0]
+    assert m["pct"] == 50
+    assert m["reached"] == 1
+    assert m["hit_rate_pct"] == 50.0
+    # simulated: reached -> 50, missed -> its actual -10 -> avg = 20
+    assert m["simulated_avg_pct_of_max_profit"] == pytest.approx(20.0)
+
+
+def test_profit_milestone_stats_excludes_entries_predating_the_tracking(state_paths, monkeypatch):
+    """An unmeasured position is not a failed one -- it must not count as a miss."""
+    entries = [
+        {"pnl_inr": -100},                          # pre-tracking, no max_pct_of_max_profit at all
+        {"max_pct_of_max_profit": 90.0, "pnl_pct_of_max_profit": 90.0},
+    ]
+    state_paths[1].write_text("\n".join(json.dumps(e) for e in entries))
+    stats = dst.profit_milestone_stats()
+    assert stats["sample"] == 1
+
+
+def test_summarize_profit_milestones_with_no_history():
+    assert "none yet" in dst.summarize_profit_milestones()
+
+
+def test_summarize_profit_milestones_marks_the_current_target(state_paths, monkeypatch):
+    monkeypatch.setattr(dcfg, "PROFIT_TARGET_PCT_OF_MAX_PROFIT", 60.0)
+    monkeypatch.setattr(dcfg, "PROFIT_MILESTONES_PCT", [40, 60])
+    entries = [{"max_pct_of_max_profit": 70.0, "pnl_pct_of_max_profit": 70.0}]
+    state_paths[1].write_text("\n".join(json.dumps(e) for e in entries))
+
+    text = dst.summarize_profit_milestones()
+    assert "<-- current" in text
+    assert "60%" in text

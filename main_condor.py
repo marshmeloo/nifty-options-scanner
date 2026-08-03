@@ -117,6 +117,13 @@ def run_once(state: dict):
             f"short PE {position['plan']['short_pe_strike']}  "
             f"MTM P&L: {'Rs ' + format(mtm, ',.0f') if mtm is not None else 'unavailable this cycle'}"
         )
+        max_profit = position["plan"].get("max_profit_inr")
+        max_seen = position.get("max_pnl_inr_seen")
+        if max_profit and max_seen is not None:
+            hits = sorted(int(m) for m in position.get("profit_milestones_hit", {}))
+            peak_pct = max_seen / max_profit * 100
+            milestone_note = f", milestone {max(hits)}%" if hits else ", no milestone yet"
+            log.info(f"    peak MTM Rs {max_seen:,.0f} ({peak_pct:.0f}% of max profit){milestone_note}")
 
         expiry_ctx_date = datetime.strptime(position["plan"]["expiry"], "%Y-%m-%d").date()
         if datetime.now().date() >= expiry_ctx_date and not market_is_open():

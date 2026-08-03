@@ -90,6 +90,16 @@ MAX_CAPITAL_AT_RISK = 30000.0
 PROFIT_TARGET_PCT_OF_MAX_PROFIT = 60.0   # close once this % of the max possible credit is captured
 STOP_LOSS_PCT_OF_MAX_LOSS = 50.0         # close once mark-to-market loss reaches this % of max possible loss
 
+# Milestones tracked on EVERY position (win, loss, or expiry), independent
+# of the two live thresholds above -- same purpose as config.RR_MILESTONES
+# for the momentum scanner: the dataset for answering "is 60% the right
+# profit target?" with evidence instead of intuition. Expressed as % of
+# max_profit_inr because this strategy has no symmetric "R" the way a
+# fixed-stop long option does -- max profit and max loss are related
+# through the hedge width, not equal by construction, so the momentum
+# scanner's R-multiple concept doesn't transfer here.
+PROFIT_MILESTONES_PCT = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
 # If spot gets within this many points of the short strike, that's a
 # "breach warning" -- staged for human review rather than closed
 # automatically, same reasoning as config_condor.py's identical setting.

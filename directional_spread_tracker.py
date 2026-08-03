@@ -104,6 +104,47 @@ def check_breach_warning(spot: float, plan_dict: dict) -> str:
     return None
 
 
+def _update_excursion(position: dict, mtm_pnl: float, plan_dict: dict, timestamp=None):
+    """
+    Track the running best/worst mark-to-market P&L seen this position,
+    and which PROFIT_MILESTONES_PCT levels it has touched and WHEN --
+    same purpose as trade_tracker._update_excursion's R-multiple tracking
+    for the momentum scanner, in this strategy's own unit (% of
+    max_profit_inr, since a credit spread has no symmetric "R" the way a
+    fixed-stop long option does).
+
+    Called every cycle a position is evaluated, including the cycle that
+    ends up closing it -- "reached 70% of max profit, then gave it back
+    and stopped out" is a different lesson from "never got going", and
+    that timing can't be reconstructed afterwards from the close alone.
+
+    A cycle with no priceable mtm_pnl (a leg's quote missing) is skipped
+    entirely rather than treated as flat -- same reasoning as
+    check_managed_exit and the 2026-07-30 condor MTM incident this
+    project keeps citing: missing information is not a zero.
+    """
+    if mtm_pnl is None:
+        return
+
+    max_seen = position.get("max_pnl_inr_seen")
+    position["max_pnl_inr_seen"] = mtm_pnl if max_seen is None else max(max_seen, mtm_pnl)
+    min_seen = position.get("min_pnl_inr_seen")
+    position["min_pnl_inr_seen"] = mtm_pnl if min_seen is None else min(min_seen, mtm_pnl)
+
+    max_profit = plan_dict.get("max_profit_inr")
+    if not max_profit:
+        return
+
+    pct_of_max_profit = mtm_pnl / max_profit * 100
+    hits = position.setdefault("profit_milestones_hit", {})
+    stamp = (timestamp.isoformat() if hasattr(timestamp, "isoformat")
+             else (timestamp or datetime.now().isoformat(timespec="seconds")))
+    for milestone in dcfg.PROFIT_MILESTONES_PCT:
+        key = str(milestone)
+        if key not in hits and pct_of_max_profit >= milestone:
+            hits[key] = stamp
+
+
 def check_managed_exit(mtm_pnl: float, plan_dict: dict) -> str:
     """
     Returns "profit_target", "stop_loss", or None. Unlike the condor
@@ -142,6 +183,7 @@ def update_position(state: dict, snapshot) -> dict:
     current_prices = _current_leg_prices(snapshot.chain, plan_dict)
     mtm_pnl = _mark_to_market_pnl_inr(plan_dict, current_prices)
     position["current_mtm_pnl_inr"] = mtm_pnl
+    _update_excursion(position, mtm_pnl, plan_dict, timestamp=snapshot.timestamp)
 
     exit_reason = check_managed_exit(mtm_pnl, plan_dict)
     if exit_reason:
@@ -183,6 +225,11 @@ def close_position(state: dict, snapshot, reason: str) -> dict:
             position.setdefault("legs_settled_at_intrinsic", []).append(key)
 
     pnl_inr = _mark_to_market_pnl_inr(plan_dict, current_prices)
+    # One last excursion update at the settlement price itself, so a
+    # milestone touched only on the closing cycle (e.g. expiry settling
+    # right at max profit) is still captured rather than missed because
+    # the position closes in the same call that would have recorded it.
+    _update_excursion(position, pnl_inr, plan_dict, timestamp=snapshot.timestamp)
 
     position["status"] = "EXPIRED" if reason == "expiry_settlement" else "CLOSED"
     position["closed_at"] = datetime.now().isoformat(timespec="seconds")
@@ -191,8 +238,123 @@ def close_position(state: dict, snapshot, reason: str) -> dict:
     position["pnl_pct_of_max_profit"] = (
         round(pnl_inr / plan_dict["max_profit_inr"] * 100, 1) if plan_dict["max_profit_inr"] else None
     )
+    position.update(_excursion_summary(position, plan_dict))
 
     _append_journal(position)
     state["position"] = None
     save_state(state)
     return position
+
+
+def _excursion_summary(position: dict, plan_dict: dict) -> dict:
+    """
+    Derived stats computed at close time from the running excursion
+    _update_excursion tracked all along. `capture_efficiency_pct` answers
+    "did we give back a real move before closing": of the best mark-to-
+    market P&L this position ever showed, what fraction did the ACTUAL
+    exit capture? 100% means it closed at or beyond its own peak.
+    """
+    max_profit = plan_dict.get("max_profit_inr")
+    max_loss = plan_dict.get("max_loss_inr")
+    max_seen = position.get("max_pnl_inr_seen")
+    min_seen = position.get("min_pnl_inr_seen")
+    pnl_inr = position.get("pnl_inr")
+
+    summary = {
+        "max_pnl_inr_seen": max_seen,
+        "min_pnl_inr_seen": min_seen,
+        "profit_milestones_hit": position.get("profit_milestones_hit", {}),
+    }
+    if max_profit and max_seen is not None:
+        max_pct = round(max_seen / max_profit * 100, 1)
+        summary["max_pct_of_max_profit"] = max_pct
+        summary["would_have_won_at"] = [m for m in dcfg.PROFIT_MILESTONES_PCT if max_pct >= m]
+        if pnl_inr is not None and max_seen > 0:
+            summary["capture_efficiency_pct"] = round(pnl_inr / max_seen * 100, 1)
+    if max_loss and min_seen is not None:
+        summary["max_pct_of_max_loss"] = round(-min_seen / max_loss * 100, 1)
+    return summary
+
+
+def profit_milestone_stats(limit=None) -> dict:
+    """
+    Across closed journal entries: how many positions ever reached each
+    configured % of max profit, and what the actual exits looked like.
+
+    This is the dataset for answering "is 60% the right profit target?"
+    (config.PROFIT_TARGET_PCT_OF_MAX_PROFIT) with evidence instead of
+    intuition -- same purpose as trade_tracker.rr_milestone_stats() for
+    the momentum scanner's DEFAULT_TARGET_RR. `reached` counts positions
+    whose BEST mark-to-market P&L touched that % at any point while open,
+    i.e. the positions a target set there would have converted into wins
+    at that level.
+
+    Entries from before this tracking existed have no max_pct_of_max_profit
+    and are excluded from `sample` rather than counted as zero -- an
+    unmeasured position is not a failed one.
+    """
+    entries = [
+        e for e in _load_recent_journal(limit)
+        if e.get("max_pct_of_max_profit") is not None
+    ]
+    if not entries:
+        return {"sample": 0, "milestones": []}
+
+    milestones = []
+    for m in dcfg.PROFIT_MILESTONES_PCT:
+        reached = sum(1 for e in entries if e["max_pct_of_max_profit"] >= m)
+        # Simulated P&L if the target had been set here: a position whose
+        # peak reached this level exits AT it (as a fraction of its own
+        # max_profit_inr); every other position keeps the % it actually
+        # closed at. Same "expectancy, not hit-rate" reasoning as the
+        # momentum version -- a low target hits more often but captures
+        # less each time, and can still be worse overall.
+        simulated = []
+        for e in entries:
+            if e["max_pct_of_max_profit"] >= m:
+                simulated.append(m)
+            else:
+                simulated.append(e.get("pnl_pct_of_max_profit") or 0.0)
+        milestones.append({
+            "pct": m,
+            "reached": reached,
+            "hit_rate_pct": round(reached / len(entries) * 100, 1),
+            "simulated_avg_pct_of_max_profit": round(sum(simulated) / len(simulated), 1),
+        })
+
+    return {
+        "sample": len(entries),
+        "milestones": milestones,
+        "current_target_pct": dcfg.PROFIT_TARGET_PCT_OF_MAX_PROFIT,
+    }
+
+
+def _load_recent_journal(limit=None) -> list:
+    limit = limit or 500
+    if not JOURNAL_PATH.exists():
+        return []
+    lines = [l for l in JOURNAL_PATH.read_text().strip().split("\n") if l]
+    return [json.loads(l) for l in lines[-limit:]]
+
+
+def summarize_profit_milestones(limit=None) -> str:
+    """Human-readable version of profit_milestone_stats(), for session startup."""
+    stats = profit_milestone_stats(limit)
+    if not stats["sample"]:
+        return ("Directional spread profit-milestone history: none yet (tracking "
+                "starts with positions opened from now on).")
+
+    lines = [
+        f"Directional spread profit-milestone history ({stats['sample']} closed "
+        f"positions, current target {stats['current_target_pct']:g}% of max profit):"
+    ]
+    best = max(m["simulated_avg_pct_of_max_profit"] for m in stats["milestones"])
+    for m in stats["milestones"]:
+        marker = "  <-- current" if m["pct"] == stats["current_target_pct"] else ""
+        if m["simulated_avg_pct_of_max_profit"] == best:
+            marker += "  [best simulated]"
+        lines.append(
+            f"  {m['pct']:>4}% reached by {m['reached']:>3} ({m['hit_rate_pct']:>5.1f}%), "
+            f"simulated avg {m['simulated_avg_pct_of_max_profit']:+.1f}% of max profit{marker}"
+        )
+    return "\n".join(lines)

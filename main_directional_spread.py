@@ -96,6 +96,13 @@ def run_once(state: dict):
                 f"hedge {plan['hedge_strike']}  "
                 f"MTM P&L: {'Rs ' + format(mtm, ',.0f') if mtm is not None else 'unavailable this cycle'}"
             )
+            max_profit = plan.get("max_profit_inr")
+            max_seen = position.get("max_pnl_inr_seen")
+            if max_profit and max_seen is not None:
+                hits = sorted(int(m) for m in position.get("profit_milestones_hit", {}))
+                peak_pct = max_seen / max_profit * 100
+                milestone_note = f", milestone {max(hits)}%" if hits else ", no milestone yet"
+                log.info(f"    peak MTM Rs {max_seen:,.0f} ({peak_pct:.0f}% of max profit){milestone_note}")
         elif position:
             log.info(f"  [SPREAD CLOSED: {position['close_reason']}] pnl Rs {position['pnl_inr']:,.0f} "
                      f"({position['pnl_pct_of_max_profit']}% of max profit)")

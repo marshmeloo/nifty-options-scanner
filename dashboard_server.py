@@ -22,6 +22,8 @@ from datetime import datetime, date
 
 import config
 import trade_tracker as tt
+import condor_tracker as ct
+import directional_spread_tracker as dst
 
 HOST = "127.0.0.1"
 PORT = 8787
@@ -166,6 +168,18 @@ def build_state() -> dict:
     except Exception as e:
         rr_stats = {"error": str(e), "sample": 0, "milestones": []}
 
+    # Same evidence, other two strategies' own unit (% of max profit,
+    # since a credit spread/condor has no symmetric "R" -- see each
+    # tracker's profit_milestone_stats docstring).
+    try:
+        spread_profit_stats = dst.profit_milestone_stats()
+    except Exception as e:
+        spread_profit_stats = {"error": str(e), "sample": 0, "milestones": []}
+    try:
+        condor_profit_stats = ct.profit_milestone_stats()
+    except Exception as e:
+        condor_profit_stats = {"error": str(e), "sample": 0, "milestones": []}
+
     main_log_path = todays_main_log_path()
     log_age_seconds = None
     if main_log_path.exists():
@@ -196,6 +210,8 @@ def build_state() -> dict:
         # each candidate target, and the simulated expectancy of setting
         # the target there. Evidence for tuning DEFAULT_TARGET_RR later.
         "rr_stats": rr_stats,
+        "directional_spread_profit_stats": spread_profit_stats,
+        "condor_profit_stats": condor_profit_stats,
     }
 
 
