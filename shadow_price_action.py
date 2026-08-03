@@ -181,13 +181,25 @@ def _walk_forward(day_cache: dict, window_days: list, entry_day: str, entry_idx:
                      max(peak, px), min(trough, px), lots)
 
 
-def run_pair(pair_name: str, days: list, verbose: bool = False) -> list:
+def run_pair(pair_name: str, days: list, target_rr: float = None,
+            one_lot: bool = True, verbose: bool = False) -> list:
     """
     Replay every recorded day under one timeframe pair, opening at most
     one position at a time (a new signal is ignored while a position
     from an earlier signal is still open -- mirrors every other
     strategy's one_at_a_time default in this project, and is the
     natural fit for a single-leg swing hold).
+
+    target_rr: when given, overrides config_price_action.TARGET_RR --
+    the target is RE-DERIVED from the plan's own entry/stop (entry +
+    risk * target_rr), same as shadow.py's run_policy does for the
+    momentum scanner, so an R:R sweep needs no config edits between runs.
+
+    one_lot (default True, per this project's standing sizing
+    convention for a first-lot test): every trade is sized at exactly 1
+    lot regardless of build_plan's own risk-budget arithmetic -- the
+    question being asked here is "how does this R:R perform," not
+    "would the risk budget have allowed it."
     """
     tf = pcfg.TIMEFRAME_PAIRS[pair_name]
     day_cache = {}
@@ -246,7 +258,14 @@ def run_pair(pair_name: str, days: list, verbose: bool = False) -> list:
                 plan = pag.build_plan(snapshot, setup, signal)
             except ValueError:
                 continue
-            if plan.lots <= 0:
+
+            risk_unit = plan.entry - plan.stop
+            if risk_unit <= 0:
+                continue
+            target = (round(plan.entry + risk_unit * target_rr, 2)
+                     if target_rr is not None else plan.target)
+            lots = 1 if one_lot else plan.lots
+            if lots <= 0:
                 continue
 
             expiry_date = _nominal_expiry_date(date.fromisoformat(day))
@@ -254,11 +273,11 @@ def run_pair(pair_name: str, days: list, verbose: bool = False) -> list:
 
             trade = ShadowPATrade(
                 pair=pair_name, strike=setup.strike, option_type=setup.option_type,
-                opened_at=ts.isoformat(), entry=plan.entry, stop=plan.stop, target=plan.target,
+                opened_at=ts.isoformat(), entry=plan.entry, stop=plan.stop, target=target,
                 reasons=list(setup.reasons)[:4],
             )
             trade = _walk_forward(day_cache, window, day, idx, setup.strike, setup.option_type,
-                                  trade, plan.lots)
+                                  trade, lots)
             trades.append(trade)
             if trade.closed_at:
                 open_until = (day, datetime.fromisoformat(trade.closed_at))
@@ -293,9 +312,35 @@ def summarise(trades: list, label: str = "") -> str:
     )
 
 
+def sweep_target_rr(rr_values: list, pairs: list = None, days: list = None,
+                    one_lot: bool = True, verbose: bool = False) -> dict:
+    """
+    Run every (pair, R:R) combination over the same recorded days and
+    return {(pair, rr): trades}. Each combination is a FULL independent
+    replay -- a different R:R changes which cycle first resolves a
+    trade (target reached sooner/later), which in turn changes
+    `open_until` and therefore every later entry, so results cannot be
+    derived from one run's trades by rescaling -- they must be re-walked.
+    """
+    pairs = pairs or list(pcfg.TIMEFRAME_PAIRS)
+    days = days or sorted(snapshot_recorder.available_days())
+    results = {}
+    for pair_name in pairs:
+        for rr in rr_values:
+            results[(pair_name, rr)] = run_pair(
+                pair_name, days, target_rr=rr, one_lot=one_lot, verbose=verbose)
+    return results
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--pair", choices=list(pcfg.TIMEFRAME_PAIRS) + ["both"], default="both")
+    p.add_argument("--rr", type=float, default=None,
+                   help="single target R:R override (default: config_price_action.TARGET_RR)")
+    p.add_argument("--rr-sweep", type=str, default=None,
+                   help="comma-separated list of target R:R values to test, e.g. 1.0,1.5,2.0,2.5,3.0")
+    p.add_argument("--all-lots", action="store_true",
+                   help="size by the plan's own risk budget instead of forcing 1 lot")
     p.add_argument("--verbose", action="store_true")
     args = p.parse_args()
 
@@ -305,8 +350,20 @@ def main():
         return
 
     pairs = list(pcfg.TIMEFRAME_PAIRS) if args.pair == "both" else [args.pair]
+    one_lot = not args.all_lots
+
+    if args.rr_sweep:
+        rr_values = [float(x) for x in args.rr_sweep.split(",")]
+        results = sweep_target_rr(rr_values, pairs=pairs, days=days, one_lot=one_lot, verbose=args.verbose)
+        print(f"R:R sweep over {len(days)} days, {'1 lot' if one_lot else 'risk-budgeted lots'}:\n")
+        for pair_name in pairs:
+            for rr in rr_values:
+                print(summarise(results[(pair_name, rr)], f"{pair_name} @ 1:{rr:g}"))
+            print()
+        return
+
     for pair_name in pairs:
-        trades = run_pair(pair_name, days, verbose=args.verbose)
+        trades = run_pair(pair_name, days, target_rr=args.rr, one_lot=one_lot, verbose=args.verbose)
         print(summarise(trades, pair_name))
 
 
