@@ -3,6 +3,81 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Build a live/daily runner for the pure price-action strategy (added 2026-08-04)
+
+Only `shadow_price_action.py` (backtest) exists for this strategy --
+there is no `main_price_action.py` to run daily analysis the way
+`main_live.py`/`main_condor.py`/`main_directional_spread.py` already do
+for the other three. Deliberately not built yet: the 2-year backtest
+(`daily_hourly` and `intraday` timeframe pairs, see README's 2026-08-04
+entries once logged) found only 19-24 distinct qualifying setups across
+497 days, a 26% max drawdown on the `intraday @ 1:3` account walk, and a
+result that depended on one weekend-gap trade for ~half its total P&L
+before that trade was stripped out. None of that is disqualifying, but
+none of it clears the bar for "build the live wiring" either.
+
+Build this once (a) the gap-fill blind spot in `shadow_price_action.py`
+is fixed (weekend/overnight target hits currently resolve at the next
+recorded LTP with no slippage modelling -- see `_walk_forward`'s
+docstring) and the corrected sweep still shows a positive, non-outlier-
+dependent edge, or (b) a larger sample (more history, or paper-traded
+live data) gives the same read. When it is built, it should be
+analysis-only and manually approved, mirroring every other strategy's
+`AUTO_APPROVE_*` convention in this project -- never auto-execute.
+
+Capital/sizing for the day this gets started: `config_price_action.py`
+now carries TOTAL_CAPITAL=50,000 and MAX_LOTS_PER_TRADE=1 (set
+2026-08-04, matching the ~Rs 5-7k premium outlays actually seen in the
+backtest rather than the momentum scanner's Rs 5L base).
+
+## Run every strategy on Bank Nifty as well as NIFTY (added 2026-08-04)
+
+Currently all four strategies (momentum, condor, directional spread,
+price-action) trade/analyze NIFTY only. Extending to Bank Nifty is a
+real, multi-part build, not a config flag:
+
+  - `banknifty_context.py` already has Bank Nifty's INDEX security ID
+    (25, IDX_I segment) and fetches its candles -- but only as a
+    divergence/context signal for the NIFTY scanner, never to trade Bank
+    Nifty options itself. That scaffolding does not extend to the
+    option CHAIN.
+  - `dhan_source.py`'s option-chain fetch, `historical_source.py`'s
+    NIFTY_SECURITY_ID=13 reconstruction, and `instrument_master.py`'s
+    lookups are all hardcoded to NIFTY today and would need an
+    underlying-aware parameter, not a second copy-pasted module per
+    strategy per index (that path already caused real bugs once in this
+    project when config got duplicated instead of parameterized -- see
+    `detect_support_resistance`'s config-coupling bug fixed 2026-08-03).
+  - Bank Nifty's lot size is NOT 65 (NIFTY's) and has changed over time
+    on NSE's own schedule -- must be looked up fresh from Dhan/NSE at
+    build time, never assumed from memory or copied from NIFTY's
+    config.
+  - Every existing config file (`config.py`, `config_condor.py`,
+    `config_directional_spread.py`, `config_price_action.py`) currently
+    encodes NIFTY-specific premium bands, strike spacing, and capital
+    assumptions that do NOT automatically transfer to Bank Nifty's
+    different price level, strike spacing (100pt, not 50pt), and
+    volatility profile -- each strategy needs its own Bank Nifty tuning
+    pass, not a shared multiplier.
+  - `historical_source.py`'s ATM+/-10 strike-offset cap is a hard API
+    limit (see its own docstring) -- Bank Nifty's wider 100pt spacing
+    means that same +/-10 offset covers a WIDER points-from-spot window
+    than NIFTY's 50pt spacing does, which changes each strategy's
+    historical-data coverage math and needs re-deriving per strategy,
+    not assumed to carry over unchanged.
+
+Scope this as one design pass across all four strategies before writing
+code for any single one -- an underlying-aware `Underlying` config/
+security-id abstraction shared by every strategy's data source and
+scanner, rather than four independent Bank Nifty forks that could each
+drift differently from their own NIFTY counterpart. Sequencing: do this
+AFTER the price-action live runner above and NIFTY forward-validation of
+the two adopted re-tunings (directional spread's strike selection,
+momentum's SCORING_MODE) below -- Bank Nifty adds a second full
+evaluation surface on top of strategies whose NIFTY behavior isn't fully
+forward-validated yet, and stacking that now would make any surprising
+result impossible to attribute to "the strategy" vs. "the new index."
+
 ## Forward-validate directional spread's re-tuned strike selection (added 2026-08-02)
 
 `config_directional_spread.py`'s SHORT_PREMIUM_MIN/MAX and

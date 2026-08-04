@@ -77,7 +77,12 @@ PREMIUM_MAX = 200.0
 # --- Position sizing / capital (copied from config.py rather than
 # shared, so this strategy's risk cannot silently change if the
 # momentum scanner's capital assumptions ever do) ---
-TOTAL_CAPITAL = 500000
+# Set to Rs 50,000 (2026-08-04) -- this strategy is still evaluation-only
+# (see BACKLOG.md's "no live runner yet" entry), and a small dedicated
+# capital base keeps MAX_RISK_PER_TRADE_PCT's 1% meaningful (Rs 500) at
+# the ~Rs 4,900-7,000 premium outlays seen in the 2-year backtest, rather
+# than sizing as if the strategy shared the momentum scanner's Rs 5L base.
+TOTAL_CAPITAL = 50000
 MAX_RISK_PER_TRADE_PCT = 1.0
 MAX_LOTS_PER_TRADE = 1
 NIFTY_LOT_SIZE = 65
