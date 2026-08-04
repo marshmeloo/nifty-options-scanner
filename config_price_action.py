@@ -77,12 +77,64 @@ PREMIUM_MAX = 200.0
 # --- Position sizing / capital (copied from config.py rather than
 # shared, so this strategy's risk cannot silently change if the
 # momentum scanner's capital assumptions ever do) ---
-# Set to Rs 50,000 (2026-08-04) -- this strategy is still evaluation-only
-# (see BACKLOG.md's "no live runner yet" entry), and a small dedicated
-# capital base keeps MAX_RISK_PER_TRADE_PCT's 1% meaningful (Rs 500) at
-# the ~Rs 4,900-7,000 premium outlays seen in the 2-year backtest, rather
-# than sizing as if the strategy shared the momentum scanner's Rs 5L base.
+# Set to Rs 50,000 (2026-08-04), a small dedicated base rather than the
+# momentum scanner's Rs 5L.
 TOTAL_CAPITAL = 50000
-MAX_RISK_PER_TRADE_PCT = 1.0
+# NOT 1% (momentum's default): with MAX_LOTS_PER_TRADE hard-capped at 1
+# below, this percentage only ever functions as a GATE deciding whether
+# even a single lot is affordable -- it can never scale UP position
+# size the way it does for momentum. At 1% of Rs 50,000 (Rs 500), the
+# worst-case 1-lot risk in this strategy's own PREMIUM_MIN/MAX band
+# (entry up to 200, stop up to MAX_STOP_PCT=40% away -> Rs 80/pt x 65 lot
+# size = Rs 5,200) silently rounds down to 0 lots on almost every real
+# signal -- caught by test_main_price_action.py's
+# test_forced_signal_opens_a_tracked_position_via_auto_approve before it
+# could ship as a strategy that looks alive but never actually trades.
+# 15% comfortably covers that worst case (Rs 7,500) with margin.
+MAX_RISK_PER_TRADE_PCT = 15.0
 MAX_LOTS_PER_TRADE = 1
 NIFTY_LOT_SIZE = 65
+
+# --- R-multiple milestones (copied from config.RR_MILESTONES, not
+# imported -- same isolation reasoning as every other constant here).
+# Used by price_action_tracker.py's excursion tracking. ---
+RR_MILESTONES = [0.5, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0]
+
+# A long option closes by hitting the BID, not marking at LTP -- unlike
+# the historical backtest data (no book at all, see historical_source.py),
+# the live Dhan feed does publish one, so this defaults True to match
+# every other live tracker's convention (trade_tracker.exit_price_for,
+# condor_tracker/directional_spread_tracker's current-price marking).
+USE_BID_ASK_FILLS = True
+
+# --- Live runner (main_price_action.py) ---
+# Which of TIMEFRAME_PAIRS to actually run live. Both by default -- kept
+# as a list (not a single active pair) so either can be disabled without
+# code changes if one turns out not to be worth running.
+ACTIVE_PAIRS = ["daily_hourly", "intraday"]
+
+# How often the live loop polls. 300s (5 min) matches the finest candle
+# interval either pair's LTF ever resamples from (5-min) -- polling
+# faster than the data's own granularity would just re-evaluate the same
+# candles repeatedly for no benefit.
+POLL_INTERVAL_SECONDS = 300
+
+# How far back to fetch real daily NIFTY candles for "daily_hourly"'s HTF
+# zones. Generous margin over the SWING_LOOKBACK*2+2 (12) minimum so
+# zones have real touch history behind them, not just the bare minimum.
+HTF_DAILY_LOOKBACK_DAYS = 90
+
+# How far back to fetch 5-min candles (then resample to 60-min) for
+# "daily_hourly"'s LTF. ~10 trading days gives ~60 hourly bars at ~6/
+# session -- comfortably past the 12-bar minimum with room to spare.
+LTF_HOURLY_LOOKBACK_DAYS = 15
+
+# Same meaning as config_condor.AUTO_APPROVE_NEW_POSITIONS: nothing in
+# this project places real broker orders regardless of this flag (see
+# trade_staging.py's own docstring) -- "opening a position" only ever
+# means writing this strategy's own tracked state. True skips the manual
+# approve_orders.py step; False stages every candidate for review first.
+AUTO_APPROVE_NEW_POSITIONS = True
+
+STATE_PATH = "state/price_action_position.json"
+JOURNAL_PATH = "logs/price_action_journal.jsonl"

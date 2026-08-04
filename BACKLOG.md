@@ -3,32 +3,44 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
-## Build a live/daily runner for the pure price-action strategy (added 2026-08-04)
+## Forward-validate the pure price-action live runner (added 2026-08-04, updated same day)
 
-Only `shadow_price_action.py` (backtest) exists for this strategy --
-there is no `main_price_action.py` to run daily analysis the way
-`main_live.py`/`main_condor.py`/`main_directional_spread.py` already do
-for the other three. Deliberately not built yet: the 2-year backtest
-(`daily_hourly` and `intraday` timeframe pairs, see README's 2026-08-04
-entries once logged) found only 19-24 distinct qualifying setups across
-497 days, a 26% max drawdown on the `intraday @ 1:3` account walk, and a
-result that depended on one weekend-gap trade for ~half its total P&L
-before that trade was stripped out. None of that is disqualifying, but
-none of it clears the bar for "build the live wiring" either.
+`main_price_action.py` was built 2026-08-04, ahead of this project's own
+usual bar ("build once the backtest edge holds without an outlier, or a
+larger sample confirms it" -- see the original version of this entry
+below the strikethrough). Built at the user's explicit request despite
+that caveat, not because the backtest cleared it: the 2-year backtest
+(`daily_hourly` and `intraday` pairs) found only 19-24 distinct
+qualifying setups across 497 days, a 26% max drawdown on the
+`intraday @ 1:3` Rs 20k account walk, and a result that depended on one
+weekend-gap trade for ~half its total P&L before that trade was
+stripped out.
 
-Build this once (a) the gap-fill blind spot in `shadow_price_action.py`
-is fixed (weekend/overnight target hits currently resolve at the next
-recorded LTP with no slippage modelling -- see `_walk_forward`'s
-docstring) and the corrected sweep still shows a positive, non-outlier-
-dependent edge, or (b) a larger sample (more history, or paper-traded
-live data) gives the same read. When it is built, it should be
-analysis-only and manually approved, mirroring every other strategy's
-`AUTO_APPROVE_*` convention in this project -- never auto-execute.
+What IS in place: `price_action_tracker.py` (open/mark/close, R-multiple
+milestones, real-expiry settlement with an intrinsic-value fallback),
+`main_price_action.py` runs both `ACTIVE_PAIRS` as independent tracked
+positions, `AUTO_APPROVE_NEW_POSITIONS` defaults True but nothing here
+places a real broker order regardless (see `trade_staging.py`). Test
+coverage: `tests/test_price_action_tracker.py`,
+`tests/test_main_price_action.py` (36 tests total across the strategy).
 
-Capital/sizing for the day this gets started: `config_price_action.py`
-now carries TOTAL_CAPITAL=50,000 and MAX_LOTS_PER_TRADE=1 (set
-2026-08-04, matching the ~Rs 5-7k premium outlays actually seen in the
-backtest rather than the momentum scanner's Rs 5L base).
+What is STILL open and should happen before trusting its live output:
+  1. Fix the gap-fill blind spot in `shadow_price_action.py`
+     (`_walk_forward`'s weekend/overnight target hits resolve at the
+     next recorded LTP with no slippage modelling) and re-check whether
+     the sweep's edge survives without the outlier it currently leans on.
+  2. Watch live/paper results accumulate for real before increasing
+     size beyond MAX_LOTS_PER_TRADE=1 -- 19-24 historical setups is not
+     a sample this project would otherwise treat as validated.
+
+`config_price_action.py` carries TOTAL_CAPITAL=50,000, MAX_LOTS_PER_TRADE=1.
+MAX_RISK_PER_TRADE_PCT is 15% (not momentum's 1%) -- with lots hard-
+capped at 1, this constant only ever GATES whether a single lot is
+affordable, never scales size up, and at 1% it silently sized every
+signal to 0 lots against this strategy's own PREMIUM_MIN/MAX band (see
+that constant's own comment; caught by
+`test_forced_signal_opens_a_tracked_position_via_auto_approve` before
+it could ship as a strategy that looks alive but never actually trades).
 
 ## Run every strategy on Bank Nifty as well as NIFTY (added 2026-08-04)
 

@@ -59,6 +59,21 @@ useful on its own for watching the live book and measuring real spreads.
 | `python3 main_condor.py` | Run the condor strategy loop | Separate terminal, any day flat (any day works now, not just after expiry) |
 | `python3 open_approved_condor.py` | Actually open a condor once approved | After approving via `approve_orders.py` |
 
+## Pure price-action strategy (separate, optional, added 2026-08-04)
+
+Structure-only signal (no OI/IV/PCR) -- see `price_structure.py`'s
+docstring for the entry rule. Runs BOTH timeframe pairs
+(`daily_hourly` and `intraday`, `config_price_action.ACTIVE_PAIRS`) in
+the same process, each with its own independent position. Backtest
+evidence (2-year, 497 days) found only 19-24 distinct qualifying setups
+and a 26% max drawdown on a Rs 20k account walk -- mildly positive, not
+proven; see BACKLOG.md's 2026-08-04 entry before trusting its size.
+
+| Command | Purpose | When |
+|---|---|---|
+| `python3 main_price_action.py` | Run the price-action strategy loop | Separate terminal, any time market is open |
+| `python3 open_approved_price_action.py` | Actually open a position once approved | After approving via `approve_orders.py` (only needed if `AUTO_APPROVE_NEW_POSITIONS = False`) |
+
 ## Backtesting / research (offline, no live impact)
 
 | Command | Purpose | When |
@@ -67,6 +82,7 @@ useful on its own for watching the live book and measuring real spreads.
 | `python3 shadow.py` | Backtest momentum over recorded history | After a config/scoring change |
 | `python3 shadow_directional_spread.py` | Backtest directional spread (multi-day, expiry-bounded) | After a config change |
 | `python3 shadow_condor.py` | Backtest iron condor | After a config change |
+| `python3 shadow_price_action.py --pair both --rr-sweep 1.0,1.5,2.0,2.5,3.0,4.0` | Backtest price-action, both timeframe pairs, sweep target R:R | After a config change |
 | `python3 sweep_threshold.py` / `sweep_spread_config.py` / `sweep_condor_config.py` | Grid-search a strategy's parameters against recorded history | Before adopting a new config — never adopt from a single run |
 
 ## Debugging / offline only
