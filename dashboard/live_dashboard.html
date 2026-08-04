@@ -181,6 +181,11 @@
   <div id="spread-container"></div>
 </div>
 
+<div class="panel" id="price-action-panel" style="display:none;">
+  <h2>Price Action Strategy <span style="font-weight:400; color:var(--muted); font-size:12px;">— structure-only signal, evaluation phase</span></h2>
+  <div id="price-action-container"></div>
+</div>
+
 <div class="panel" id="approvals-panel" style="display:none;">
   <h2>Pending Approvals</h2>
   <div id="approvals-container"></div>
@@ -504,6 +509,67 @@ function renderClosedToday(trades) {
     </table>`;
 }
 
+function renderPriceAction(trades, closedToday, logAgeSeconds, pollIntervalSeconds) {
+  const panel = document.getElementById("price-action-panel");
+  const container = document.getElementById("price-action-container");
+  const hasOpen = trades && trades.length;
+  const hasClosed = closedToday && closedToday.length;
+  if (!hasOpen && !hasClosed) {
+    panel.style.display = "block";
+    container.innerHTML = `<div class="empty-state">No price-action positions (open or closed today). ${freshnessBadge(logAgeSeconds, pollIntervalSeconds)}</div>`;
+    return;
+  }
+  panel.style.display = "block";
+
+  const openTable = hasOpen ? `
+    <div style="margin-bottom:6px; font-weight:600;">Open</div>
+    <table>
+      <thead><tr><th>Pair</th><th>Strike</th><th>Type</th><th>Entry</th><th>Target</th><th>Stop</th><th>Current</th><th>R now</th><th>Peak R</th><th>Capital</th><th>P&amp;L (Rs)</th></tr></thead>
+      <tbody>
+        ${trades.map(t => `
+          <tr>
+            <td>${t.pair}</td>
+            <td>${t.strike}</td>
+            <td>${t.option_type}</td>
+            <td>${t.entry}</td>
+            <td>${t.target}</td>
+            <td>${t.stop}</td>
+            <td>${t.current_ltp ?? "?"}</td>
+            <td class="${pnlClass(t.current_r)}">${fmtSigned(t.current_r, 2, "R")}</td>
+            <td class="${pnlClass(t.max_r_seen)}">${fmtSigned(t.max_r_seen, 2, "R")}</td>
+            <td>${fmtInr(t.capital_deployed)}</td>
+            <td class="${pnlClass(t.running_pnl_inr)}">${fmtInr(t.running_pnl_inr)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>` : `<div class="empty-state" style="margin-bottom:10px;">No open positions.</div>`;
+
+  const closedTable = hasClosed ? `
+    <div style="margin:14px 0 6px; font-weight:600;">Closed Today</div>
+    <table>
+      <thead><tr><th>Pair</th><th>Closed</th><th>Strike</th><th>Type</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>P&amp;L (Rs)</th></tr></thead>
+      <tbody>
+        ${closedToday.map(t => `
+          <tr>
+            <td>${t.pair}</td>
+            <td>${(t.closed_at || "").split("T")[1] || t.closed_at}</td>
+            <td>${t.strike}</td>
+            <td>${t.option_type}</td>
+            <td>${t.entry}</td>
+            <td>${t.exit_ltp ?? "—"}</td>
+            <td><span class="badge ${t.outcome === "WIN" ? "opened" : (t.outcome === "LOSS" ? "rejected" : "notselected")}">${t.outcome}</span></td>
+            <td class="${pnlClass(t.pnl_inr_net ?? t.pnl_inr)}">${fmtInr(t.pnl_inr_net ?? t.pnl_inr)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>` : "";
+
+  container.innerHTML = `
+    <div style="margin-bottom:10px;">${freshnessBadge(logAgeSeconds, pollIntervalSeconds)}</div>
+    ${openTable}
+    ${closedTable}`;
+}
+
 function freshnessBadge(ageSeconds, pollIntervalSeconds) {
   // "Live" means the last poll cycle updated this position; a poll cycle
   // that's overdue by more than ~2x its own interval means the strategy
@@ -685,6 +751,7 @@ async function refresh() {
     renderClosedToday(data.closed_today);
     renderCondor(data.condor_position, data.condor_position_age_seconds, data.condor_poll_interval_seconds);
     renderDirectionalSpread(data.directional_spread_position, data.directional_spread_position_age_seconds, data.directional_spread_poll_interval_seconds);
+    renderPriceAction(data.price_action_trades, data.price_action_closed_today, data.price_action_log_age_seconds, data.price_action_poll_interval_seconds);
     renderApprovals(data.pending_approvals);
     renderActivity(data.recent_cycles);
   } catch (e) {

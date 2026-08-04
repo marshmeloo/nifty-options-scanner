@@ -23,9 +23,11 @@ from datetime import datetime, date
 import config
 import config_condor as ccfg
 import config_directional_spread as dcfg
+import config_price_action as pacfg
 import trade_tracker as tt
 import condor_tracker as ct
 import directional_spread_tracker as dst
+import price_action_tracker as pat
 
 HOST = "127.0.0.1"
 PORT = 8787
@@ -89,6 +91,48 @@ def _enrich_open_trades(trades: list) -> list:
     return enriched
 
 
+def _read_price_action_closed_today() -> list:
+    """Same shape and reasoning as _read_todays_closed_trades, pointed at
+    the price-action strategy's own journal instead of momentum's."""
+    path = Path(pacfg.JOURNAL_PATH)
+    if not path.exists():
+        return []
+    today_str = date.today().isoformat()
+    closed_today = []
+    try:
+        with open(path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (entry.get("closed_at") or "").startswith(today_str):
+                    closed_today.append(entry)
+    except Exception:
+        return []
+    return closed_today
+
+
+def _enrich_price_action_trades(trades: list) -> list:
+    """Same computed fields as _enrich_open_trades (capital deployed,
+    live R-multiple), using price_action_tracker's own r_multiple and
+    config_price_action's lot size/target R rather than momentum's."""
+    lot_size = getattr(pacfg, "NIFTY_LOT_SIZE", 65)
+    enriched = []
+    for t in trades:
+        t = dict(t)
+        t["capital_deployed"] = round(t.get("entry", 0) * lot_size * t.get("lots", 1), 2)
+        t["current_r"] = pat.r_multiple(t, t.get("current_ltp"))
+        t["target_r"] = getattr(pacfg, "TARGET_RR", None)
+        hit = sorted(float(m) for m in (t.get("rr_milestones_hit") or {}))
+        t["best_milestone_hit"] = hit[-1] if hit else None
+        enriched.append(t)
+    return enriched
+
+
 def _read_json(path: Path, default=None):
     try:
         return json.loads(path.read_text())
@@ -128,6 +172,10 @@ def todays_main_log_path() -> Path:
     return LOGS_DIR / f"nifty_scan_{datetime.now().strftime('%Y%m%d')}.log"
 
 
+def todays_price_action_log_path() -> Path:
+    return LOGS_DIR / f"price_action_{datetime.now().strftime('%Y%m%d')}.log"
+
+
 def build_state() -> dict:
     """Assemble everything the dashboard needs from whatever's on disk right now."""
     decision_cycles = _read_jsonl_tail(todays_decision_log_path(), DECISION_LOG_TAIL_LINES)
@@ -150,6 +198,11 @@ def build_state() -> dict:
     # panel for it either. A real position was opened, breached, and
     # approved via approve_orders.py entirely invisibly on the dashboard.
     spread_state = _read_json(STATE_DIR / "directional_spread_position.json", default={})
+    price_action_state = _read_json(STATE_DIR / "price_action_position.json", default={})
+    price_action_trades = _enrich_price_action_trades(
+        (price_action_state or {}).get("trades", []) if price_action_state else []
+    )
+    price_action_closed_today = _read_price_action_closed_today()
     opening_gap = _read_json(STATE_DIR / "opening_gap.json", default={})
     staged_orders = _read_json(STATE_DIR / "staged_orders.json", default=[])
     pending_staged = [r for r in (staged_orders or []) if r.get("status") == "PENDING"]
@@ -192,6 +245,13 @@ def build_state() -> dict:
     log_age_seconds = None
     if main_log_path.exists():
         log_age_seconds = round(datetime.now().timestamp() - main_log_path.stat().st_mtime, 1)
+
+    price_action_log_path = todays_price_action_log_path()
+    price_action_log_age_seconds = None
+    if price_action_log_path.exists():
+        price_action_log_age_seconds = round(
+            datetime.now().timestamp() - price_action_log_path.stat().st_mtime, 1
+        )
 
     def _position_age_seconds(position: dict):
         """
@@ -243,6 +303,10 @@ def build_state() -> dict:
         "rr_stats": rr_stats,
         "directional_spread_profit_stats": spread_profit_stats,
         "condor_profit_stats": condor_profit_stats,
+        "price_action_trades": price_action_trades,
+        "price_action_closed_today": price_action_closed_today,
+        "price_action_poll_interval_seconds": getattr(pacfg, "POLL_INTERVAL_SECONDS", None),
+        "price_action_log_age_seconds": price_action_log_age_seconds,
     }
 
 
