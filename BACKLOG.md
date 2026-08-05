@@ -82,29 +82,48 @@ expiry settlement to use it if one exists.
 usual bar ("build once the backtest edge holds without an outlier, or a
 larger sample confirms it" -- see the original version of this entry
 below the strikethrough). Built at the user's explicit request despite
-that caveat, not because the backtest cleared it: the 2-year backtest
-(`daily_hourly` and `intraday` pairs) found only 19-24 distinct
-qualifying setups across 497 days, a 26% max drawdown on the
-`intraday @ 1:3` Rs 20k account walk, and a result that depended on one
-weekend-gap trade for ~half its total P&L before that trade was
-stripped out.
+that caveat, not because the 2-year backtest cleared it (19-24 distinct
+setups, 26% drawdown, one outlier trade for ~half the P&L).
 
-What IS in place: `price_action_tracker.py` (open/mark/close, R-multiple
-milestones, real-expiry settlement with an intrinsic-value fallback),
-`main_price_action.py` runs both `ACTIVE_PAIRS` as independent tracked
-positions, `AUTO_APPROVE_NEW_POSITIONS` defaults True but nothing here
-places a real broker order regardless (see `trade_staging.py`). Test
-coverage: `tests/test_price_action_tracker.py`,
-`tests/test_main_price_action.py` (36 tests total across the strategy).
+UPDATE 2026-08-04, same day: the backfill was extended to the real
+6-year depth (2020-08-03..2026-08-04, 1,490 days -- see the historical-
+data-corruption entry above) and the sweep re-run. Full results, both
+pairs, 1 lot, R:R 1.0-4.0:
 
-What is STILL open and should happen before trusting its live output:
-  1. Fix the gap-fill blind spot in `shadow_price_action.py`
-     (`_walk_forward`'s weekend/overnight target hits resolve at the
-     next recorded LTP with no slippage modelling) and re-check whether
-     the sweep's edge survives without the outlier it currently leans on.
-  2. Watch live/paper results accumulate for real before increasing
-     size beyond MAX_LOTS_PER_TRADE=1 -- 19-24 historical setups is not
-     a sample this project would otherwise treat as validated.
+    daily_hourly: n=140-225 per cell, win 32.9-50.2%, expectancy
+      +0.06 to +0.44R, total Rs 1,459-38,065 (rises with R:R)
+    intraday:     n=88-108 per cell, win 44.3-68.5%, expectancy
+      +0.62 to +0.94R, total Rs 63,087-96,167 (rises with R:R)
+
+Investigated the "outlier-dependent" concern directly rather than
+re-assert it: intraday@1:3's 9 weekend-gap trades (opened Friday
+afternoon, resolved Monday) account for 62% of that cell's total. But
+checked whether those fills were real or backtest artifacts by looking
+at price action for the 30 minutes AFTER each recorded fill -- 7 of 9
+PERSISTED (the price held near the fill level, including the actual
+2024-08-05 NIFTY selloff), only 2 of 9 showed any reversion, and both
+of those were small. Conclusion: carrying a stop/target position across
+a weekend is not a bug in either pair (neither has a same-day-exit rule
+in the code, and none should be added -- an options market that doesn't
+trade over the weekend legitimately resolves at the next available
+price, gap and all). The 6-year numbers are trusted as reported, not
+provisional on stripping outliers.
+
+Both pairs positive at every R:R tested, both consistent in shape with
+the earlier 2-year read (intraday stronger per-trade, daily_hourly more
+frequent). Sample size grew roughly proportionally with the 3x longer
+window (497->1,490 days, 19-24->88-225 trades per cell), which is
+itself mild evidence the edge isn't a fluke of the shorter window.
+
+Still open before trusting live output further:
+  1. Watch live/paper results accumulate for real -- even 88-225
+     historical trades per cell is a backtest sample, not a live one,
+     and this project's own standard is to prefer live confirmation
+     over any amount of backtesting.
+  2. See the historical-data-corruption entry above: momentum and
+     price-action both trade near-ATM (inside the zero-contamination
+     band), so this sweep is NOT exposed to the far-OTM data issue that
+     compromises the condor's numbers.
 
 `config_price_action.py` carries TOTAL_CAPITAL=50,000, MAX_LOTS_PER_TRADE=1.
 MAX_RISK_PER_TRADE_PCT is 15% (not momentum's 1%) -- with lots hard-
