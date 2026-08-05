@@ -60,11 +60,19 @@ SNAPSHOT_DIR = Path(__file__).parent / "logs" / "snapshots"
 _DT_FIELDS = ("timestamp",)
 
 
-def path_for(day) -> Path:
-    """logs/snapshots/YYYYMMDD.jsonl.gz for a date or ISO date string."""
+def path_for(day, snapshot_dir: Path = None) -> Path:
+    """
+    logs/snapshots/YYYYMMDD.jsonl.gz for a date or ISO date string.
+
+    `snapshot_dir` overrides the default -- used to keep a second
+    underlying's history (e.g. Bank Nifty) in its own directory,
+    completely separate from NIFTY's. Without this, two underlyings
+    backfilling the same calendar date would collide on the exact same
+    filename and one would silently overwrite the other's real history.
+    """
     if isinstance(day, str):
         day = date.fromisoformat(day)
-    return SNAPSHOT_DIR / f"{day.strftime('%Y%m%d')}.jsonl.gz"
+    return (snapshot_dir or SNAPSHOT_DIR) / f"{day.strftime('%Y%m%d')}.jsonl.gz"
 
 
 def _encode_dt(value):
@@ -148,12 +156,13 @@ def record(snapshot: MarketSnapshot, candles: list = None, logic_version: str = 
         return False
 
 
-def available_days() -> list:
+def available_days(snapshot_dir: Path = None) -> list:
     """Recorded days, oldest first, as ISO date strings."""
-    if not SNAPSHOT_DIR.exists():
+    target_dir = snapshot_dir or SNAPSHOT_DIR
+    if not target_dir.exists():
         return []
     days = []
-    for p in SNAPSHOT_DIR.glob("*.jsonl.gz"):
+    for p in target_dir.glob("*.jsonl.gz"):
         stem = p.name.split(".")[0]
         try:
             days.append(datetime.strptime(stem, "%Y%m%d").date().isoformat())
@@ -162,15 +171,19 @@ def available_days() -> list:
     return sorted(days)
 
 
-def load_day(day):
+def load_day(day, snapshot_dir: Path = None, symbol: str = "NIFTY"):
     """
     Yields (MarketSnapshot, candles, meta) per recorded cycle, in order.
 
     A corrupt trailing line is skipped rather than aborting the day --
     a gzip stream cut mid-write by a kill leaves exactly that, and one
     truncated cycle shouldn't cost you the session.
+
+    `snapshot_dir`/`symbol` let a second underlying's own recordings
+    (own directory, own symbol) be read back without touching NIFTY's
+    default path or its hardcoded "NIFTY" label.
     """
-    path = path_for(day)
+    path = path_for(day, snapshot_dir=snapshot_dir)
     if not path.exists():
         return
     with gzip.open(path, "rt", encoding="utf-8") as f:
@@ -184,7 +197,7 @@ def load_day(day):
                 continue
             try:
                 snapshot = MarketSnapshot(
-                    symbol="NIFTY",
+                    symbol=symbol,
                     spot=rec["spot"],
                     vwap=rec["vwap"],
                     pcr=rec["pcr"],

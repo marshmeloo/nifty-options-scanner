@@ -155,6 +155,101 @@ def test_cycle_without_spot_is_dropped(monkeypatch):
     assert hs.reconstruct_range("2026-07-01", "2026-07-02", max_offset=0) == []
 
 
+# --- Bank Nifty parameterization: security_id/symbol/snapshot_dir ----------
+
+def test_reconstruct_range_stamps_the_given_symbol(monkeypatch):
+    """
+    Added for Bank Nifty support: symbol must flow through to both the
+    snapshot AND every quote in its chain, not just one or the other --
+    a mismatch would make a backtest reading this data misidentify which
+    underlying it's actually looking at.
+    """
+    monkeypatch.setattr(hs, "fetch_series", lambda o, t, *a, **kw: _block(57500, 57535.2, [852.6]))
+    snap = hs.reconstruct_range("2026-07-01", "2026-07-02", max_offset=0,
+                                security_id=hs.BANKNIFTY_SECURITY_ID, symbol="BANKNIFTY")[0]
+    assert snap.symbol == "BANKNIFTY"
+    assert all(q.symbol == "BANKNIFTY" for q in snap.chain)
+
+
+def test_reconstruct_range_passes_security_id_to_fetch_series(monkeypatch):
+    seen = []
+    def fake_fetch(offset, option_type, *a, security_id=None, **kw):
+        seen.append(security_id)
+        return _block(57500, 57535.2, [852.6])
+    monkeypatch.setattr(hs, "fetch_series", fake_fetch)
+    hs.reconstruct_range("2026-07-01", "2026-07-02", max_offset=0, security_id=hs.BANKNIFTY_SECURITY_ID)
+    assert all(sid == hs.BANKNIFTY_SECURITY_ID for sid in seen)
+
+
+def test_backfill_writes_to_a_custom_snapshot_dir_without_touching_the_default(monkeypatch, tmp_path):
+    """
+    Pins the exact collision this parameterization exists to prevent:
+    writing a second underlying's history into the SAME default
+    directory would silently overwrite NIFTY's real recordings for any
+    overlapping date, since both share the same YYYYMMDD.jsonl.gz naming.
+    """
+    import snapshot_recorder as sr
+
+    default_dir = tmp_path / "default_nifty_snapshots"
+    bn_dir = tmp_path / "banknifty_snapshots"
+    monkeypatch.setattr(sr, "SNAPSHOT_DIR", default_dir)
+
+    monkeypatch.setattr(hs, "reconstruct_range", lambda *a, **kw: [
+        type("S", (), {
+            "timestamp": datetime(2026, 7, 1, 9, 20), "spot": 57500.0, "vwap": 57500.0,
+            "pcr": 1.0, "source": "dhan_historical", "chain": [],
+        })()
+    ])
+    monkeypatch.setattr("historical_consistency.check_range", lambda *a, **kw: {"passed": True, "failed_days": []})
+    monkeypatch.setattr("historical_consistency.describe", lambda *a, **kw: "")
+
+    written = hs.backfill("2026-07-01", "2026-07-01", snapshot_dir=bn_dir, symbol="BANKNIFTY")
+
+    assert written == {"2026-07-01": 1}
+    assert (bn_dir / "20260701.jsonl.gz").exists()
+    assert not default_dir.exists() or not list(default_dir.glob("*.jsonl.gz"))
+
+
+def test_load_day_respects_custom_snapshot_dir_and_symbol(tmp_path):
+    """snapshot_recorder's own parameterization, exercised end-to-end
+    through a real write/read round trip rather than mocked."""
+    import snapshot_recorder as sr
+    import json, gzip
+
+    bn_dir = tmp_path / "banknifty_snapshots"
+    bn_dir.mkdir()
+    path = sr.path_for("2026-07-01", snapshot_dir=bn_dir)
+    with gzip.open(path, "wt", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "timestamp": "2026-07-01T09:20:00", "logic_version": None,
+            "spot": 57500.0, "vwap": 57500.0, "pcr": 1.0, "source": "dhan_historical",
+            "chain": [], "candles": [],
+        }) + "\n")
+
+    assert sr.available_days(snapshot_dir=bn_dir) == ["2026-07-01"]
+    cycles = list(sr.load_day("2026-07-01", snapshot_dir=bn_dir, symbol="BANKNIFTY"))
+    assert len(cycles) == 1
+    assert cycles[0][0].symbol == "BANKNIFTY"
+
+
+def test_load_day_default_behaviour_is_unchanged(tmp_path, monkeypatch):
+    """No snapshot_dir/symbol given -> exact old behaviour (default dir, "NIFTY")."""
+    import snapshot_recorder as sr
+    import json, gzip
+
+    monkeypatch.setattr(sr, "SNAPSHOT_DIR", tmp_path)
+    path = sr.path_for("2026-07-01")
+    with gzip.open(path, "wt", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "timestamp": "2026-07-01T09:20:00", "logic_version": None,
+            "spot": 24000.0, "vwap": 24000.0, "pcr": 1.0, "source": "dhan_historical",
+            "chain": [], "candles": [],
+        }) + "\n")
+
+    cycles = list(sr.load_day("2026-07-01"))
+    assert cycles[0][0].symbol == "NIFTY"
+
+
 def test_coverage_reports_narrowest_side_of_the_strike_window(monkeypatch):
     """
     Coverage must report the NEARER edge: a condor leg outside it finds

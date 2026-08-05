@@ -85,6 +85,32 @@ ROLLING_URL = "https://api.dhan.co/v2/charts/rollingoption"
 # dhan_source.py uses for the live option chain.
 NIFTY_SECURITY_ID = 13
 
+# Bank Nifty index. Confirmed 2026-08-04 by direct probe, NOT the
+# UNDERLYING_SECURITY_ID (26009) found in Dhan's instrument-master CSV
+# for BANKNIFTY option rows -- that ID returns HTTP 200 with an empty
+# block on this endpoint every time, regardless of date/expiryFlag. This
+# ID (25) is the same one banknifty_context.py already uses for the
+# INDEX candle endpoints, and confirmed here to also be what
+# /charts/rollingoption expects (verified by checking the returned spot
+# values are genuinely Bank Nifty's ~57,000 level, not NIFTY's ~24,000).
+BANKNIFTY_SECURITY_ID = 25
+
+# Bank Nifty has no weekly expiries anymore (confirmed against Dhan's
+# instrument master: its currently-listed expiries are monthly). "WEEK"
+# and "MONTH" were confirmed to return IDENTICAL data for Bank Nifty on
+# this endpoint (it appears to just resolve "nearest" regardless of the
+# flag when there's only one expiry series), but "MONTH" is the
+# accurate, honest label for what's actually being fetched.
+BANKNIFTY_EXPIRY_FLAG = "MONTH"
+
+# Real data start dates, found by direct probe (binary search on
+# 2026-08-04), NOT from any documented retention window -- Dhan's own
+# "5 years" claim for this endpoint undersold NIFTY's actual depth by a
+# year. Weekends/holidays show up as empty and are not part of this
+# boundary; these are the first WEEKDAYS with real, non-empty data.
+NIFTY_DATA_START = "2020-08-03"
+BANKNIFTY_DATA_START = "2021-08-04"
+
 # Hard API limit, probed directly 2026-07-31: ATM-10 returns full data,
 # ATM-12+ returns HTTP 200 with an empty block. Not documented as an
 # error, so nothing but this constant stops us requesting strikes that
@@ -125,7 +151,8 @@ def _offset_label(offset: int) -> str:
 
 def fetch_series(offset: int, option_type: str, from_date: str, to_date: str,
                  interval: str = "5", expiry_flag: str = "WEEK",
-                 expiry_code: int = NEAREST_EXPIRY_CODE) -> dict:
+                 expiry_code: int = NEAREST_EXPIRY_CODE,
+                 security_id: int = NIFTY_SECURITY_ID) -> dict:
     """
     One strike offset, one option type, over a date range. Returns the
     raw parallel-array block (or {} when the API returns its silent
@@ -133,6 +160,9 @@ def fetch_series(offset: int, option_type: str, from_date: str, to_date: str,
 
     `option_type` is our own "CE"/"PE"; the API spells these CALL/PUT on
     the way in and ce/pe on the way out.
+
+    `security_id` defaults to NIFTY; pass BANKNIFTY_SECURITY_ID (with
+    expiry_flag=BANKNIFTY_EXPIRY_FLAG) for Bank Nifty.
     """
     if abs(offset) > MAX_STRIKE_OFFSET:
         raise ValueError(
@@ -143,7 +173,7 @@ def fetch_series(offset: int, option_type: str, from_date: str, to_date: str,
     body = {
         "exchangeSegment": "NSE_FNO",
         "interval": str(interval),
-        "securityId": NIFTY_SECURITY_ID,
+        "securityId": security_id,
         "instrument": "OPTIDX",
         "expiryFlag": expiry_flag,
         "expiryCode": expiry_code,
@@ -205,7 +235,9 @@ def _rows(block: dict, interval_minutes: int = 5):
 def reconstruct_range(from_date: str, to_date: str, interval: str = "5",
                       max_offset: int = MAX_STRIKE_OFFSET,
                       expiry_flag: str = "WEEK",
-                      expiry_code: int = NEAREST_EXPIRY_CODE) -> list:
+                      expiry_code: int = NEAREST_EXPIRY_CODE,
+                      security_id: int = NIFTY_SECURITY_ID,
+                      symbol: str = "NIFTY") -> list:
     """
     Fetch every strike offset x option type over a date range and pivot
     them by timestamp into MarketSnapshots, oldest first.
@@ -214,6 +246,9 @@ def reconstruct_range(from_date: str, to_date: str, interval: str = "5",
     spaced by dhan_rate_limiter, so a 30-day pull takes roughly 2.5
     minutes. That is the whole reason this writes to disk (see
     backfill()) rather than being re-fetched per backtest.
+
+    `security_id`/`symbol` default to NIFTY; pass BANKNIFTY_SECURITY_ID/
+    "BANKNIFTY" (with expiry_flag=BANKNIFTY_EXPIRY_FLAG) for Bank Nifty.
     """
     by_time = {}
     spot_by_time = {}
@@ -223,7 +258,7 @@ def reconstruct_range(from_date: str, to_date: str, interval: str = "5",
         for option_type in ("CE", "PE"):
             block = fetch_series(offset, option_type, from_date, to_date,
                                  interval=interval, expiry_flag=expiry_flag,
-                                 expiry_code=expiry_code)
+                                 expiry_code=expiry_code, security_id=security_id)
             if not block:
                 missing.append(f"{_offset_label(offset)} {option_type}")
                 continue
@@ -233,7 +268,7 @@ def reconstruct_range(from_date: str, to_date: str, interval: str = "5",
                     spot_by_time[ts] = float(row["spot"])
                 by_time.setdefault(ts, []).append(
                     OptionQuote(
-                        symbol="NIFTY",
+                        symbol=symbol,
                         # The rolling series doesn't name the contract's
                         # expiry date, only that it was the nearest one
                         # at that timestamp. Nothing downstream parses
@@ -272,7 +307,7 @@ def reconstruct_range(from_date: str, to_date: str, interval: str = "5",
         total_pe = sum(q.oi for q in chain if q.option_type == "PE")
         snapshots.append(
             MarketSnapshot(
-                symbol="NIFTY",
+                symbol=symbol,
                 spot=spot,
                 vwap=spot,  # no published intraday VWAP; same placeholder nse_source uses
                 pcr=round(total_pe / total_ce, 2) if total_ce else 0.0,
@@ -417,7 +452,7 @@ def apply_oi_buildup(cycles: list):
             samples[key] = past
 
 
-def repair_oi_buildup(days: list = None) -> dict:
+def repair_oi_buildup(days: list = None, snapshot_dir=None) -> dict:
     """
     Recompute OI-buildup fields on already-written historical days.
 
@@ -429,14 +464,15 @@ def repair_oi_buildup(days: list = None) -> dict:
     import json
     import snapshot_recorder
 
-    days = days or snapshot_recorder.available_days()
+    target_dir = snapshot_dir or snapshot_recorder.SNAPSHOT_DIR
+    days = days or snapshot_recorder.available_days(snapshot_dir=target_dir)
     repaired = {}
 
     for day in days:
-        path = snapshot_recorder.path_for(day)
+        path = snapshot_recorder.path_for(day, snapshot_dir=target_dir)
         if not path.exists():
             continue
-        cycles = list(snapshot_recorder.load_day(day))
+        cycles = list(snapshot_recorder.load_day(day, snapshot_dir=target_dir))
         if not cycles or cycles[0][0].source != "dhan_historical":
             continue
 
@@ -510,9 +546,17 @@ def repair_iv_percentiles(days: list = None) -> dict:
     return repaired
 
 
-def backfill_candles(days: list = None, interval: str = "5") -> dict:
+def backfill_candles(days: list = None, interval: str = "5",
+                     snapshot_dir=None, candle_fetcher=None) -> dict:
     """
-    Attach real NIFTY index candles to reconstructed days.
+    Attach real index candles to reconstructed days.
+
+    `candle_fetcher(interval=, from_date=, to_date=)` defaults to
+    dhan_source.get_nifty_intraday_candles; pass
+    banknifty_context.get_banknifty_candles for Bank Nifty -- same
+    signature shape, different endpoint underneath (see that function's
+    own docstring for why it's a separate function, not a shared one
+    with a symbol parameter).
 
     WHY THIS IS A SEPARATE PASS
     ---------------------------
@@ -545,15 +589,17 @@ def backfill_candles(days: list = None, interval: str = "5") -> dict:
     import dhan_source
     import snapshot_recorder
 
-    days = days or snapshot_recorder.available_days()
+    fetch = candle_fetcher or dhan_source.get_nifty_intraday_candles
+    target_dir = snapshot_dir or snapshot_recorder.SNAPSHOT_DIR
+    days = days or snapshot_recorder.available_days(snapshot_dir=target_dir)
     updated = {}
 
     for day in days:
-        path = snapshot_recorder.path_for(day)
+        path = snapshot_recorder.path_for(day, snapshot_dir=target_dir)
         if not path.exists():
             continue
 
-        cycles = list(snapshot_recorder.load_day(day))
+        cycles = list(snapshot_recorder.load_day(day, snapshot_dir=target_dir))
         if not cycles:
             continue
         # Only ever touch reconstructed days. A live recording already has
@@ -565,7 +611,7 @@ def backfill_candles(days: list = None, interval: str = "5") -> dict:
             continue  # already enriched
 
         try:
-            day_candles = dhan_source.get_nifty_intraday_candles(
+            day_candles = fetch(
                 interval=interval,
                 from_date=f"{day} 09:15:00",
                 to_date=f"{day} 15:30:00",
@@ -597,14 +643,23 @@ def backfill_candles(days: list = None, interval: str = "5") -> dict:
     return updated
 
 
-def backfill(from_date: str, to_date: str, interval: str = "5") -> dict:
+def backfill(from_date: str, to_date: str, interval: str = "5",
+            security_id: int = NIFTY_SECURITY_ID, symbol: str = "NIFTY",
+            expiry_flag: str = "WEEK", snapshot_dir=None) -> dict:
     """
-    Pull a date range and write it into logs/snapshots/ in the SAME
-    format snapshot_recorder writes live, so replay.py and shadow.py load
-    it through the existing load_day() path with no idea it came from a
-    different source (beyond the "dhan_historical" source tag, which is
-    kept precisely so historical and live days can be told apart and
-    never pooled by accident).
+    Pull a date range and write it into logs/snapshots/ (or `snapshot_dir`
+    if given) in the SAME format snapshot_recorder writes live, so
+    replay.py and shadow.py load it through the existing load_day() path
+    with no idea it came from a different source (beyond the
+    "dhan_historical" source tag, which is kept precisely so historical
+    and live days can be told apart and never pooled by accident).
+
+    `snapshot_dir` MUST be set to something other than the default when
+    `symbol` isn't "NIFTY" -- both underlyings' data would otherwise
+    fight over the exact same YYYYMMDD.jsonl.gz filenames for any
+    overlapping date, and one would silently overwrite the other's real
+    history. See BANKNIFTY_SECURITY_ID's own comment for the values to
+    pass for Bank Nifty.
 
     Returns {day: cycles_written}.
     """
@@ -613,20 +668,24 @@ def backfill(from_date: str, to_date: str, interval: str = "5") -> dict:
     import snapshot_recorder
     import historical_consistency as hc
 
+    target_dir = snapshot_dir or snapshot_recorder.SNAPSHOT_DIR
+
     written = {}
     all_day_snaps = {}
     for chunk_from, chunk_to in _chunks(from_date, to_date):
         log.info(f"  [historical] fetching {chunk_from} .. {chunk_to}")
-        snapshots = reconstruct_range(chunk_from, chunk_to, interval=interval)
+        snapshots = reconstruct_range(chunk_from, chunk_to, interval=interval,
+                                      security_id=security_id, symbol=symbol,
+                                      expiry_flag=expiry_flag)
 
         by_day = {}
         for snap in snapshots:
             by_day.setdefault(snap.timestamp.date(), []).append(snap)
         all_day_snaps.update({d.isoformat(): s for d, s in by_day.items()})
 
-        snapshot_recorder.SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        target_dir.mkdir(parents=True, exist_ok=True)
         for day, day_snaps in by_day.items():
-            path = snapshot_recorder.path_for(day)
+            path = snapshot_recorder.path_for(day, snapshot_dir=target_dir)
             if path.exists():
                 # Never append to an existing day: that would interleave
                 # reconstructed cycles with live-recorded ones in a single
