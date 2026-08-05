@@ -23,6 +23,22 @@ Any report built from data this module hasn't run over pre-July-2026
 days should say so explicitly: decoding is confirmed only for the 2
 live-matched July 2026 days; earlier data has passed consistency checks,
 not cross-validation.
+
+WHAT A CHECK HAS TO EARN (added 2026-08-04)
+--------------------------------------------
+A corruption sweep is only useful if a failure MEANS something. The
+first version of the OI/IV checks flagged any large step between
+adjacent bars, which failed 72% of a sample of days that had already
+been used for every backtest in this project -- and on inspection, most
+of those flags were real market moves, not corruption. A check that
+cries wolf on the majority of good data is worse than no check: it
+buries the genuine signal and trains the reader to skip the report.
+
+Both step checks now require the value to SNAP BACK afterwards, which
+is what actually distinguishes a bad print from a real move (see
+MAX_OI_STEP_RATIO and REVERSION_RATIO). If a future check can't
+articulate what makes its own failures meaningful, it doesn't belong
+here.
 """
 
 from datetime import date as _date
@@ -43,10 +59,37 @@ MIN_BAR_COVERAGE_FRACTION = 0.6
 # tools are for the latter.
 MAX_PLAUSIBLE_DAILY_RANGE_PCT = 8.0
 
-# OI more than doubling or halving between consecutive bars 5 minutes
-# apart is not organic buildup/unwinding at any liquidity this project
-# trades -- it's almost always a bad print or a rollover artifact.
+# OI more than doubling or halving between consecutive bars is the FIRST
+# half of the bad-print test, not the whole test on its own -- see
+# REVERSION_RATIO below.
+#
+# The original assumption here ("not organic buildup/unwinding at any
+# liquidity this project trades") was measured and found WRONG on
+# 2026-08-04. Across a 20-day sample, 93 of 146 flagged jumps were
+# genuinely real -- e.g. 2,133,625 -> 4,811,850 -> 6,515,375, OI simply
+# building hard on a liquid near-ATM weekly strike. The flagged strikes
+# were not thin either: median OI of the larger side was ~158,000. On
+# NIFTY weeklies, OI really can more than double in five minutes.
+#
+# Flagging on ratio alone therefore failed 72% of a sample of days that
+# had already been used for every backtest in this project, which is
+# worse than useless -- it buries the real signal in noise and trains
+# the reader to ignore the sweep.
 MAX_OI_STEP_RATIO = 2.0
+
+# The SECOND half, and what actually separates corruption from a real
+# move: does the jump PERSIST?
+#
+# A genuine OI change stays changed -- the next bar continues from the
+# new level. A bad print spikes for exactly one bar and the level
+# immediately snaps back to where it was, e.g. 43,800 -> 329,125 ->
+# 43,950 (2024-09-17, 24850CE, where LTP jumped anomalously on the same
+# bar and reverted with it). A jump is only reported when the reading
+# AFTER it returns within this ratio of the reading BEFORE it.
+#
+# On the same 20-day sample this splits 146 raw flags into 53 genuine
+# transient spikes and 93 real market moves that are no longer reported.
+REVERSION_RATIO = 1.3
 
 # An IV jump this large between adjacent bars for the SAME strike is a
 # decode/misalignment symptom, not a real vol move -- see the 2026-07-31
@@ -104,31 +147,49 @@ def check_day(snapshots: list, interval_minutes: int = 5) -> dict:
         if any(sp <= 0 for sp in spots):
             issues.append("non-positive spot value present")
 
-    # Track OI/IV per (strike, option_type) across consecutive cycles,
-    # exactly the granularity live buildup classification already uses.
-    last_by_key = {}
+    # Per-(strike, option_type) OI/IV series, at exactly the granularity
+    # live buildup classification already uses. Built as full series
+    # rather than checked pairwise on the fly because the spike test
+    # needs the reading AFTER a jump as well as the one before it -- see
+    # REVERSION_RATIO.
+    series = {}
     for snap in snapshots:
         for q in snap.chain:
             if q.oi < 0:
                 issues.append(f"negative OI at strike {q.strike}{q.option_type}, {snap.timestamp}")
             if q.iv < 0:
                 issues.append(f"negative IV at strike {q.strike}{q.option_type}, {snap.timestamp}")
+            series.setdefault((q.strike, q.option_type), []).append(
+                (snap.timestamp, q.oi, q.iv)
+            )
 
-            key = (q.strike, q.option_type)
-            prev = last_by_key.get(key)
-            if prev is not None:
-                prev_oi, prev_iv = prev
-                if prev_oi > 0 and q.oi > 0:
-                    ratio = max(q.oi, prev_oi) / min(q.oi, prev_oi)
-                    if ratio > MAX_OI_STEP_RATIO:
-                        issues.append(
-                            f"OI jump {prev_oi}->{q.oi} at {q.strike}{q.option_type}, {snap.timestamp}"
-                        )
-                if prev_iv > 0 and q.iv > 0 and abs(q.iv - prev_iv) > MAX_IV_STEP_POINTS:
+    for (strike, option_type), points in series.items():
+        # Stop one short of the end: a jump on the very last reading has
+        # no "after" to confirm against, so it cannot be distinguished
+        # from a real move and is deliberately NOT reported rather than
+        # guessed at either way.
+        for i in range(1, len(points) - 1):
+            _prev_ts, prev_oi, prev_iv = points[i - 1]
+            ts, oi, iv = points[i]
+            _next_ts, next_oi, next_iv = points[i + 1]
+
+            if prev_oi > 0 and oi > 0 and next_oi > 0:
+                ratio = max(oi, prev_oi) / min(oi, prev_oi)
+                reverted = max(next_oi, prev_oi) / min(next_oi, prev_oi) <= REVERSION_RATIO
+                if ratio > MAX_OI_STEP_RATIO and reverted:
                     issues.append(
-                        f"IV jump {prev_iv:.1f}->{q.iv:.1f} at {q.strike}{q.option_type}, {snap.timestamp}"
+                        f"transient OI spike {prev_oi}->{oi}->{next_oi} "
+                        f"at {strike}{option_type}, {ts}"
                     )
-            last_by_key[key] = (q.oi, q.iv)
+
+            if prev_iv > 0 and iv > 0 and next_iv > 0:
+                spiked = abs(iv - prev_iv) > MAX_IV_STEP_POINTS
+                reverted = abs(next_iv - prev_iv) <= MAX_IV_STEP_POINTS / 2
+                if spiked and reverted:
+                    issues.append(
+                        f"transient IV spike {prev_iv:.1f}->{iv:.1f}->{next_iv:.1f} "
+                        f"at {strike}{option_type}, {ts}"
+                    )
 
     # Cap the report: a genuinely corrupt day can produce thousands of
     # per-strike issues, which buries the ones worth reading rather than

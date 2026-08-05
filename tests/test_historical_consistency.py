@@ -72,12 +72,40 @@ def test_negative_iv_flagged():
     assert any("negative IV" in i for i in result["issues"])
 
 
-def test_oi_doubling_between_adjacent_bars_flagged():
+def test_transient_oi_spike_flagged():
+    """A one-bar spike that snaps back is the bad-print signature."""
     snaps = _day("2026-01-05", [24000.0] * 75, oi=1000)
-    snaps[5].chain[0].oi = 5000  # >2x jump from the previous bar's 1000
+    snaps[5].chain[0].oi = 5000  # spikes, then bar 6 is back at 1000
     result = hc.check_day(snaps, interval_minutes=5)
     assert not result["passed"]
-    assert any("OI jump" in i for i in result["issues"])
+    assert any("transient OI spike" in i for i in result["issues"])
+
+
+def test_persistent_oi_jump_is_not_flagged():
+    """
+    Measured 2026-08-04: 93 of 146 raw ratio-flags across a 20-day
+    sample were real market moves, not corruption -- OI on liquid NIFTY
+    weekly strikes genuinely can more than double in five minutes
+    (2,133,625 -> 4,811,850 -> 6,515,375 was one real example). A jump
+    that STAYS jumped is a real move and must not be reported.
+    """
+    snaps = _day("2026-01-05", [24000.0] * 75, oi=1000)
+    for snap in snaps[5:]:
+        snap.chain[0].oi = 5000  # steps up once and stays there
+    result = hc.check_day(snaps, interval_minutes=5)
+    assert result["passed"], result["issues"]
+
+
+def test_oi_spike_on_the_final_bar_is_not_flagged():
+    """
+    A jump on the last reading has no "after" to confirm against, so it
+    cannot be told apart from a real move -- deliberately not reported
+    rather than guessed at in either direction.
+    """
+    snaps = _day("2026-01-05", [24000.0] * 75, oi=1000)
+    snaps[-1].chain[0].oi = 99999
+    result = hc.check_day(snaps, interval_minutes=5)
+    assert result["passed"], result["issues"]
 
 
 def test_organic_oi_growth_across_the_day_not_flagged():
@@ -94,12 +122,22 @@ def test_organic_oi_growth_across_the_day_not_flagged():
     assert result["passed"]
 
 
-def test_iv_jump_flagged():
+def test_transient_iv_spike_flagged():
     snaps = _day("2026-01-05", [24000.0] * 75, iv=15.0)
-    snaps[5].chain[0].iv = 40.0  # 25-point jump from the previous bar's 15.0
+    snaps[5].chain[0].iv = 40.0  # 25-point spike, then back to 15.0
     result = hc.check_day(snaps, interval_minutes=5)
     assert not result["passed"]
-    assert any("IV jump" in i for i in result["issues"])
+    assert any("transient IV spike" in i for i in result["issues"])
+
+
+def test_persistent_iv_shift_is_not_flagged():
+    """Same reasoning as the OI case -- a vol regime that steps up and
+    stays up is a real move, not a decode error."""
+    snaps = _day("2026-01-05", [24000.0] * 75, iv=15.0)
+    for snap in snaps[5:]:
+        snap.chain[0].iv = 40.0
+    result = hc.check_day(snaps, interval_minutes=5)
+    assert result["passed"], result["issues"]
 
 
 def test_iv_flickering_through_zero_is_not_flagged():
@@ -116,13 +154,13 @@ def test_iv_flickering_through_zero_is_not_flagged():
     assert result["passed"], result["issues"]
 
 
-def test_real_iv_jump_between_two_nonzero_values_is_still_flagged():
+def test_real_iv_spike_between_two_nonzero_values_is_still_flagged():
     """The zero exemption must not blind the check to a genuine decode error."""
     snaps = _day("2026-01-05", [24000.0] * 75, iv=15.0)
     snaps[5].chain[0].iv = 45.0
     result = hc.check_day(snaps, interval_minutes=5)
     assert not result["passed"]
-    assert any("IV jump" in i for i in result["issues"])
+    assert any("transient IV spike" in i for i in result["issues"])
 
 
 def test_empty_day_fails_rather_than_silently_passing():
@@ -133,9 +171,12 @@ def test_empty_day_fails_rather_than_silently_passing():
 
 def test_issue_list_is_truncated_with_a_count():
     snaps = _day("2026-01-05", [24000.0] * 75, oi=1000, n_strikes=30)
-    for snap in snaps[1:]:
-        for q in snap.chain:
-            q.oi = 1  # every strike jumps from 1000 -> 1 each bar, far more than 20 issues
+    # Every strike spikes on every other bar and snaps straight back --
+    # a genuine transient-spike pattern, repeated far more than 20 times.
+    for i, snap in enumerate(snaps):
+        if i % 2:
+            for q in snap.chain:
+                q.oi = 100000
     result = hc.check_day(snaps, interval_minutes=5)
     assert not result["passed"]
     assert result["issues"][-1].startswith("... and")
