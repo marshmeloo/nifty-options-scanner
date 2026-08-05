@@ -154,3 +154,72 @@ def test_open_position_for_a_pair_is_not_reopened_while_still_open(monkeypatch, 
 
     mpa.run_once(state)
     assert calls["n"] == 0  # never even reached signal generation for an already-open pair
+
+
+# --- RETAIL_TRADABLE_CLOSE: no new "intraday" entries after 15:15 ----------
+#
+# Pinned 2026-08-04: recorded snapshots showed spot frozen from ~15:15
+# onward, both that day and the day before -- see main_live.py's
+# MARKET_CLOSE comment for the full evidence. "intraday" is a same-
+# session strategy (resolves same day), so a position opened after that
+# point would need to exit before close using exactly the unreliable
+# prices this cutoff exists to avoid. "daily_hourly" is unaffected --
+# its holds already span days.
+
+def test_intraday_pair_gets_no_new_entries_after_retail_tradable_close(monkeypatch, isolated_state):
+    chain = [_quote(24000, "CE", 90.0)]
+    snap = _snapshot(datetime(2026, 8, 4, 15, 20, 0), chain)  # past 15:15
+
+    calls = {"n": 0}
+    def spy(htf, ltf):
+        calls["n"] += 1
+        return None
+    monkeypatch.setattr(mpa.ps, "generate_signal", spy)
+
+    state = pat.load_state()
+    mpa._handle_pair("intraday", state, snap, snap.timestamp)
+    assert calls["n"] == 0  # gated before candles were even fetched
+    assert state.get("trades", []) == []
+
+
+def test_intraday_pair_still_enters_just_before_retail_tradable_close(monkeypatch, isolated_state):
+    chain = [_quote(24000, "CE", 90.0)]
+    snap = _snapshot(datetime(2026, 8, 4, 15, 14, 59), chain)
+    monkeypatch.setattr(mpa, "get_nifty_intraday_candles", lambda **kw: _candles(30, "2026-08-04T09:15:00"))
+    monkeypatch.setattr(mpa.ps, "generate_signal", lambda htf, ltf: None)  # no signal, just proving the gate didn't block it
+
+    calls = {"n": 0}
+    def spy(htf, ltf):
+        calls["n"] += 1
+        return None
+    monkeypatch.setattr(mpa.ps, "generate_signal", spy)
+
+    state = pat.load_state()
+    mpa._handle_pair("intraday", state, snap, snap.timestamp)
+    assert calls["n"] == 1  # reached signal generation -- not gated this close to (but before) the cutoff
+
+
+def test_daily_hourly_pair_is_not_gated_by_retail_tradable_close(monkeypatch, isolated_state):
+    """daily_hourly holds span days, so a late-session entry is no
+    different from any other time relative to its own multi-day
+    resolution -- only "intraday" is gated."""
+    chain = [_quote(24000, "CE", 90.0)]
+    snap = _snapshot(datetime(2026, 8, 4, 15, 20, 0), chain)  # past 15:15
+
+    calls = {"n": 0}
+    def spy(htf, ltf):
+        calls["n"] += 1
+        return None
+    monkeypatch.setattr(mpa.ps, "generate_signal", spy)
+    monkeypatch.setattr(mpa.dhan_source, "get_nifty_daily_candles", lambda **kw: [])
+    monkeypatch.setattr(mpa, "get_nifty_intraday_candles", lambda **kw: _candles(30, "2026-08-04T09:15:00"))
+
+    state = pat.load_state()
+    mpa._handle_pair("daily_hourly", state, snap, snap.timestamp)
+    # daily_hourly's own HTF-length gate inside _htf_ltf_for/run logic may
+    # still skip it (0 daily bars here) -- the point is it must not be
+    # rejected by the retail-tradable-close gate specifically, which only
+    # applies to "intraday". With 0 daily bars the pair's own length
+    # check inside generate_signal would fire, but that only happens if
+    # signal generation is REACHED at all -- confirm it was.
+    assert calls["n"] == 1

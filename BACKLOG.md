@@ -3,6 +3,32 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Verify whether Dhan exposes a real settlement price (added 2026-08-04)
+
+2026-08-04 incident: condor and directional spread both had their own
+contract expiry that day and both sat unsettled past close, traced to
+two compounding issues -- see `main_condor.py`'s `EXPIRY_SETTLEMENT_CUTOFF`
+comment and `tests/test_expiry_settlement_timing.py` for the full
+evidence trail. Fixed for now: settlement fires at 15:40 (NSE's real
+F&O close, confirmed against a published schedule) instead of waiting
+for the nominal 15:30 `market_is_open()` transition, using the last
+available LTP at that point.
+
+That "last available LTP" is still a proxy, not verified to be the best
+one. Checked directly: option premiums in the 15:15-15:40 window swing
+hard (one strike moved 85% in 11 minutes on 2026-08-04), so whichever
+single LTP snapshot happens to land closest to 15:40 could still be an
+outlier rather than a true closing/settlement price. Dhan's option-chain
+response was not inspected field-by-field for a dedicated settlement-
+price field distinct from `last_price` -- attempted 2026-08-04 evening
+but the live `/v2/optionchain/expirylist` endpoint only responds during
+market hours, so this returned a 401 unrelated to the token itself.
+
+Next live session: probe the raw Dhan option-chain JSON response
+(`dhan_source._fetch_raw_chain`) for any field beyond `last_price` that
+might carry a real exchange-published settlement value, and switch
+expiry settlement to use it if one exists.
+
 ## Forward-validate the pure price-action live runner (added 2026-08-04, updated same day)
 
 `main_price_action.py` was built 2026-08-04, ahead of this project's own

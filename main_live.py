@@ -38,7 +38,19 @@ import market_regime
 
 POLL_INTERVAL_SECONDS = 30   # OI/IV don't move meaningfully faster than this
 MARKET_OPEN = dtime(9, 15)
-MARKET_CLOSE = dtime(15, 30)
+# NOT the exchange's nominal 15:30 close. Verified directly against
+# 2026-08-04's and 2026-08-03's recorded snapshots: spot froze at the
+# exact same value for 10+ consecutive 30s cycles starting ~15:15 both
+# days (24463.45 from 15:15:03 through the last recorded cycle at
+# 15:26:13 on the 08-04 expiry day; a similar freeze from 15:21:50 on
+# the non-expiry 08-03 day, ending in one large delayed jump rather than
+# continuous movement). Whatever the cause -- a closing-auction window
+# or the feed itself going stale -- prices in that final stretch are not
+# real, continuously-tradable quotes. Every trade this strategy opens is
+# meant to close the SAME session, so treating 15:15 as the effective
+# close means new entries stop, and any end-of-day force-close uses the
+# last price that was still genuinely live, not a frozen one.
+MARKET_CLOSE = dtime(15, 15)
 
 LOG_DIR = Path(__file__).parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)

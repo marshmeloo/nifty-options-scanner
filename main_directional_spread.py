@@ -46,6 +46,18 @@ import trade_staging as staging
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
 
+# NOT 15:15 -- see main_condor.py's EXPIRY_SETTLEMENT_CUTOFF comment for
+# the full evidence and reasoning (spot froze at 15:15, but option
+# premiums kept moving, sometimes violently, well past it; NSE's real
+# schedule has cash trading end at 15:15 into a closing auction, options
+# get their own reactive window to ~15:40, the true F&O close). Does not
+# change when this strategy can be opened (multi-day hold), only when
+# its own expiry-day settlement fires -- this position also sat
+# unsettled past its own 2026-08-04 expiry, same incident as the condor.
+# STILL UNVERIFIED: whether Dhan exposes a real settlement price
+# distinct from LTP -- needs checking live next session (see BACKLOG.md).
+EXPIRY_SETTLEMENT_CUTOFF = dtime(15, 40)
+
 LOG_DIR = Path(__file__).parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 log_path = LOG_DIR / f"directional_spread_{datetime.now().strftime('%Y%m%d')}.log"
@@ -56,6 +68,15 @@ logging.basicConfig(
     handlers=[logging.FileHandler(log_path, encoding="utf-8"), logging.StreamHandler()],
 )
 log = logging.getLogger("directional_spread")
+
+
+def should_settle_on_expiry(expiry_date, now: datetime = None) -> bool:
+    """Same reasoning as main_condor.py's identical helper -- past the
+    expiry date, or expiry day itself past the true F&O close."""
+    now = now or datetime.now()
+    if now.date() > expiry_date:
+        return True
+    return now.date() == expiry_date and now.time() >= EXPIRY_SETTLEMENT_CUTOFF
 
 
 def market_is_open(now: datetime = None) -> bool:
@@ -114,8 +135,8 @@ def run_once(state: dict):
         position = state.get("position")
         if position and position.get("status") == "OPEN":
             expiry_ctx_date = datetime.strptime(position["plan"]["expiry"], "%Y-%m-%d").date()
-            if datetime.now().date() >= expiry_ctx_date and not market_is_open():
-                log.info("  Expiry reached and market closed -- settling position.")
+            if should_settle_on_expiry(expiry_ctx_date):
+                log.info("  Expiry reached and past the retail-tradable window -- settling position.")
                 closed = dst.close_position(state, snapshot, reason="expiry_settlement")
                 log.info(f"  [SPREAD SETTLED] pnl Rs {closed['pnl_inr']:,.0f} ({closed['pnl_pct_of_max_profit']}% of max profit)")
         return

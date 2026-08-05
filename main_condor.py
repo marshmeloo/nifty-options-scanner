@@ -41,6 +41,33 @@ import trade_staging as staging
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
 
+# NOT 15:15. First guess (2026-08-04) was that quotes go dead at 15:15,
+# based on NIFTY SPOT freezing solid at that time in the recorded data
+# -- but checking actual OPTION premiums in that same window (24450PE:
+# 33.5 -> 5.05, 24400CE: 108.85 -> 159.9, both between 15:15 and 15:26)
+# showed they kept moving, often violently, well past 15:15. The real
+# structure (per NSE's published schedule): continuous CASH trading
+# ends 15:15 and the underlying goes into a closing auction (why spot
+# froze -- it's not a dead feed, the underlying just isn't in
+# continuous trading anymore), options get their own reactive window
+# from roughly 15:35-15:40, and 15:40 is the official F&O close.
+# Settling at 15:15 would grab an arbitrary, still-volatile mid-window
+# price instead of something close to the real final one.
+#
+# This does NOT change when a condor can be OPENED (still governed by
+# MARKET_CLOSE/MARKET_OPEN above) -- only when its OWN expiry-day
+# settlement fires. On 2026-08-04 the live process also stopped polling
+# before 15:30 ever arrived, leaving the position unsettled entirely
+# regardless of price quality; triggering at 15:40 instead of waiting
+# for market_is_open() to go False at 15:30 fixes that too.
+#
+# STILL UNVERIFIED: whether Dhan's option-chain response carries a
+# dedicated settlement/closing-price field distinct from last-traded-
+# price -- the live endpoint only responds during market hours, so this
+# needs checking next session (see BACKLOG.md). Until then, 15:40 with
+# the last available LTP is the best available proxy, not a final answer.
+EXPIRY_SETTLEMENT_CUTOFF = dtime(15, 40)
+
 LOG_DIR = Path(__file__).parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 log_path = LOG_DIR / f"condor_{datetime.now().strftime('%Y%m%d')}.log"
@@ -51,6 +78,19 @@ logging.basicConfig(
     handlers=[logging.FileHandler(log_path, encoding="utf-8"), logging.StreamHandler()],
 )
 log = logging.getLogger("condor")
+
+
+def should_settle_on_expiry(expiry_date, now: datetime = None) -> bool:
+    """
+    Past the expiry date entirely (process was down over the actual
+    expiry), OR it's expiry day and past the true F&O close -- see
+    EXPIRY_SETTLEMENT_CUTOFF's own comment for why this doesn't wait
+    for the nominal 15:30 close, and isn't 15:15 either.
+    """
+    now = now or datetime.now()
+    if now.date() > expiry_date:
+        return True
+    return now.date() == expiry_date and now.time() >= EXPIRY_SETTLEMENT_CUTOFF
 
 
 def market_is_open(now: datetime = None) -> bool:
@@ -126,8 +166,8 @@ def run_once(state: dict):
             log.info(f"    peak MTM Rs {max_seen:,.0f} ({peak_pct:.0f}% of max profit){milestone_note}")
 
         expiry_ctx_date = datetime.strptime(position["plan"]["expiry"], "%Y-%m-%d").date()
-        if datetime.now().date() >= expiry_ctx_date and not market_is_open():
-            log.info("  Expiry reached and market closed -- settling position.")
+        if should_settle_on_expiry(expiry_ctx_date):
+            log.info("  Expiry reached and past the retail-tradable window -- settling position.")
             closed = condor_tracker.close_position(state, snapshot, reason="expiry_settlement")
             log.info(f"  [CONDOR SETTLED] pnl Rs {closed['pnl_inr']:,.0f} ({closed['pnl_pct_of_max_profit']}% of max profit)")
         return

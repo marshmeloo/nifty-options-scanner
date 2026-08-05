@@ -51,6 +51,26 @@ from resilient_source import get_nifty_snapshot, get_nifty_intraday_candles
 
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
+# NOT used as the entry cutoff for the "intraday" pair -- see
+# RETAIL_TRADABLE_CLOSE below. Kept at the nominal close here because
+# "daily_hourly" positions are meant to be held across days and still
+# need marking to market right up to real close, even if the final
+# stretch's prices are lower quality (see RETAIL_TRADABLE_CLOSE's own
+# docstring for why that stretch is unreliable) -- a stale mark is a
+# lesser problem for a multi-day hold than for a same-session strategy.
+
+# Verified directly against 2026-08-04's and 2026-08-03's recorded
+# snapshots: spot froze at the exact same value for 10+ consecutive
+# cycles starting ~15:15 both days (see main_live.py's MARKET_CLOSE
+# comment for the full evidence -- same finding, same root cause).
+# The "intraday" pair (config_price_action.TIMEFRAME_PAIRS) is a
+# same-session strategy by design (5min/15min, resolved same day), so a
+# new position opened after this point would need to exit before close
+# using exactly the unreliable prices this cutoff exists to avoid.
+# "daily_hourly" is unaffected -- its holds already span days, so
+# opening it right before close is no different from opening it any
+# other time relative to its own multi-day resolution.
+RETAIL_TRADABLE_CLOSE = dtime(15, 15)
 
 LOG_DIR = Path(__file__).parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
@@ -108,6 +128,11 @@ def _htf_ltf_for(pair: str, now: datetime = None) -> tuple:
 def _handle_pair(pair: str, state: dict, snapshot, now: datetime):
     if pat.has_open_trade(state, pair):
         return  # already marked to market in run_once via update_positions
+
+    if pair == "intraday" and now.time() >= RETAIL_TRADABLE_CLOSE:
+        log.info(f"  [{pair}] past {RETAIL_TRADABLE_CLOSE.strftime('%H:%M')} -- "
+                 f"no new same-session entries this late (see RETAIL_TRADABLE_CLOSE)")
+        return
 
     try:
         htf, ltf = _htf_ltf_for(pair, now)
@@ -169,8 +194,12 @@ def _handle_pair(pair: str, state: dict, snapshot, now: datetime):
 
 def run_once(state: dict):
     protect = pat.tracked_strikes(state)
-    now = datetime.now()
     snapshot = get_nifty_snapshot(must_include_strikes=protect)
+    # Derived from the snapshot's own timestamp, not a separate
+    # datetime.now() call -- ties the RETAIL_TRADABLE_CLOSE gate to the
+    # same instant the market data was actually fetched, not a
+    # slightly-later wall-clock read.
+    now = snapshot.timestamp
     ts = snapshot.timestamp.strftime("%H:%M:%S")
     log.info(f"[{ts}] ({snapshot.source}) NIFTY spot {snapshot.spot}")
 
