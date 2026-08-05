@@ -3,6 +3,53 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Historical data corruption is real but confined to far-OTM strikes (added 2026-08-04)
+
+Root-caused after the consistency checker was fixed to flag only
+non-persisting spikes (see `historical_consistency.py`). Findings, all
+measured rather than assumed:
+
+  - The corruption is genuine. At flagged bars, ADJACENT STRIKES CARRY
+    IDENTICAL OI -- e.g. 2024-10-23 11:10, strikes 24050 and 24100 both
+    read exactly 33,450 despite different LTP and IV. Two distinct
+    contracts cannot share open interest. IV also frequently reads 0.00
+    on exactly those bars.
+  - It concentrates at the EDGE of the ATM+/-10 offset window that
+    `historical_source.py` fetches: 79% of spikes sit within 4 strikes
+    of the window edge, and none at all deeper than 8 strikes in.
+    Consistent with the offset->strike mapping slipping as spot moves
+    across a rounding boundary, which the edge offsets cross most often.
+  - Contamination by distance from spot (50 sampled days per dataset):
+
+        band          2024-08..2026-08     2020-08..2024-07
+        0-150pts          0.000%               0.000%
+        150-250pts        0.000%               0.133%
+        250-350pts        0.013%               0.526%
+        350+pts           0.293%               1.059%
+
+WHAT THIS MEANS PER STRATEGY (using real live leg distances):
+  - Momentum and price-action both select near-the-money inside a
+    premium band; their strikes sit within ~150pts of spot, where
+    contamination measured ZERO in both datasets. Backtest conclusions
+    for these two stand.
+  - Directional spread's live legs sat 13pts and 87pts from spot --
+    also inside the clean band.
+  - IRON CONDOR IS THE EXPOSED ONE. Its live legs sat 37 / 337 / 613 /
+    913 pts from spot: three of four are in the contaminated zone, the
+    hedges worst of all. Condor backtest results over reconstructed
+    history should be treated as unreliable, and this compounds the
+    coverage gap already documented for it (its wings routinely fall
+    outside the ATM+/-10 window entirely). Worth remembering that 36
+    swept condor configs never produced a tradeable edge -- these
+    results were partly built on the dirtiest slice of the data.
+
+NOT FIXED, deliberately: the reconstruction is not rewritten to repair
+these bars. The clean-band evidence says it isn't needed for three of
+four strategies, and the condor has no adopted config to protect. If
+the condor is ever revisited seriously, fix the data first -- a
+same-strike-adjacent-duplicate detector could repair or drop the
+affected bars rather than pass them through silently.
+
 ## Verify whether Dhan exposes a real settlement price (added 2026-08-04)
 
 2026-08-04 incident: condor and directional spread both had their own

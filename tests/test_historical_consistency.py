@@ -182,6 +182,36 @@ def test_issue_list_is_truncated_with_a_count():
     assert result["issues"][-1].startswith("... and")
 
 
+def test_flagged_issues_carry_distance_from_spot():
+    """
+    WHERE the corruption sits decides who it affects. Measured
+    2026-08-04: contamination is zero within 150pts of spot across both
+    datasets and climbs steeply beyond ~350pts, so a near-ATM strategy
+    is untouched by a day that fails purely on far-OTM strikes. A bare
+    pass/fail cannot express that; the distance can.
+    """
+    # Spot at 24000, spiking strike at 24400 -> 400pts out.
+    base = datetime.fromisoformat("2026-01-05T09:15:00")
+    snaps = []
+    for i in range(75):
+        chain = [_quote(24400.0, "CE", oi=5000 if i == 5 else 1000)]
+        snaps.append(MarketSnapshot(
+            symbol="NIFTY", spot=24000.0, vwap=24000.0, pcr=1.0, chain=chain,
+            timestamp=base + timedelta(minutes=5 * i), source="dhan_historical",
+        ))
+    result = hc.check_day(snaps, interval_minutes=5)
+    assert not result["passed"]
+    assert result["nearest_flagged_pts"] == 400.0
+    assert any("400pts from spot" in i for i in result["issues"])
+
+
+def test_clean_day_reports_no_flagged_distance():
+    snaps = _day("2026-01-05", [24000 + i for i in range(75)])
+    result = hc.check_day(snaps, interval_minutes=5)
+    assert result["passed"]
+    assert result["nearest_flagged_pts"] is None
+
+
 def test_check_range_aggregates_pass_fail_across_days():
     good = _day("2026-01-05", [24000 + i for i in range(75)])
     bad = _day("2026-01-06", [24000, 24001])  # low coverage

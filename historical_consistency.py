@@ -160,8 +160,19 @@ def check_day(snapshots: list, interval_minutes: int = 5) -> dict:
             if q.iv < 0:
                 issues.append(f"negative IV at strike {q.strike}{q.option_type}, {snap.timestamp}")
             series.setdefault((q.strike, q.option_type), []).append(
-                (snap.timestamp, q.oi, q.iv)
+                (snap.timestamp, q.oi, q.iv, abs(q.strike - snap.spot) if snap.spot else None)
             )
+
+    # Distance from spot is carried on every reported issue, and
+    # aggregated below, because WHERE the corruption sits decides who it
+    # affects. Measured 2026-08-04 across 50 sampled days: contamination
+    # is zero within 150pts of spot in both the 2024-2026 and 2020-2024
+    # datasets, and rises with distance (2020-2024: 0.13% at 150-250pts,
+    # 0.53% at 250-350pts, 1.06% beyond 350pts). A near-ATM strategy is
+    # therefore unaffected by a day that fails purely on far-OTM strikes,
+    # while a strategy whose legs sit 400pts+ out is squarely exposed --
+    # a distinction a bare pass/fail cannot make.
+    flagged_distances = []
 
     for (strike, option_type), points in series.items():
         # Stop one short of the end: a jump on the very last reading has
@@ -169,9 +180,10 @@ def check_day(snapshots: list, interval_minutes: int = 5) -> dict:
         # from a real move and is deliberately NOT reported rather than
         # guessed at either way.
         for i in range(1, len(points) - 1):
-            _prev_ts, prev_oi, prev_iv = points[i - 1]
-            ts, oi, iv = points[i]
-            _next_ts, next_oi, next_iv = points[i + 1]
+            _prev_ts, prev_oi, prev_iv, _pd = points[i - 1]
+            ts, oi, iv, dist = points[i]
+            _next_ts, next_oi, next_iv, _nd = points[i + 1]
+            where = f", {dist:.0f}pts from spot" if dist is not None else ""
 
             if prev_oi > 0 and oi > 0 and next_oi > 0:
                 ratio = max(oi, prev_oi) / min(oi, prev_oi)
@@ -179,8 +191,10 @@ def check_day(snapshots: list, interval_minutes: int = 5) -> dict:
                 if ratio > MAX_OI_STEP_RATIO and reverted:
                     issues.append(
                         f"transient OI spike {prev_oi}->{oi}->{next_oi} "
-                        f"at {strike}{option_type}, {ts}"
+                        f"at {strike}{option_type}, {ts}{where}"
                     )
+                    if dist is not None:
+                        flagged_distances.append(dist)
 
             if prev_iv > 0 and iv > 0 and next_iv > 0:
                 spiked = abs(iv - prev_iv) > MAX_IV_STEP_POINTS
@@ -188,8 +202,15 @@ def check_day(snapshots: list, interval_minutes: int = 5) -> dict:
                 if spiked and reverted:
                     issues.append(
                         f"transient IV spike {prev_iv:.1f}->{iv:.1f}->{next_iv:.1f} "
-                        f"at {strike}{option_type}, {ts}"
+                        f"at {strike}{option_type}, {ts}{where}"
                     )
+                    if dist is not None:
+                        flagged_distances.append(dist)
+
+    # `nearest_flagged_pts` is the number to read first on a failure: it
+    # is the closest-to-spot corruption found, so anything trading nearer
+    # than that is untouched by this day's issues.
+    nearest_flagged = min(flagged_distances) if flagged_distances else None
 
     # Cap the report: a genuinely corrupt day can produce thousands of
     # per-strike issues, which buries the ones worth reading rather than
@@ -206,6 +227,7 @@ def check_day(snapshots: list, interval_minutes: int = 5) -> dict:
         "expected_bars": expected,
         "issues": issues,
         "passed": not issues,
+        "nearest_flagged_pts": round(nearest_flagged, 1) if nearest_flagged is not None else None,
     }
 
 
