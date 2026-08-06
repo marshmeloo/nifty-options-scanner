@@ -3,6 +3,54 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Gold/Silver trend-following (Supertrend / MA crossover): every result but one is a single-trade artifact (added 2026-08-06)
+
+Followed up on the zone strategy's failure (entry below) by building
+genuine trend-following strategies instead: Supertrend and moving-
+average crossover, both "always in the market, flip on reversal, no
+fixed target" systems (commodity_trend_strategy.py). RSI deliberately
+NOT used as the primary signal -- it's a mean-reversion oscillator and
+would hit the exact same failure mode as the zone strategy in a real
+trend (stays "overbought" for months); exposed only as an optional
+filter, unused so far.
+
+Swept Supertrend (period 7/10/14 x multiplier 2/3/4) and MA crossover
+(10/30, 20/50, 20/100, 50/200) on both metals' full clean 5-year daily
+series. Several combos looked excellent on the surface (Silver MA
+50/200: n=3, +Rs 136,938; Silver Supertrend p14/m2: n=67,
++Rs 210,627). BEFORE trusting any of it, checked outlier concentration
+(the same check applied to every backtest this session) -- every one of
+these was 95-116% concentrated in its single biggest trade, meaning
+the REST of that strategy's trades net LOST money. Confirmed by
+re-running each series with its single biggest trade removed:
+
+    strategy                  with outlier    without outlier
+    Gold MA 20/100             +Rs 75,446        +Rs 1,067   (flat)
+    Silver MA 50/200          +Rs 136,938        -Rs 7,641   (flips to loss)
+    Silver MA 20/50           +Rs 110,169       -Rs 52,749   (flips to loss)
+    Gold Supertrend p7/m4      +Rs 25,719       -Rs 24,465   (flips to loss)
+    Silver Supertrend p14/m2  +Rs 210,627       +Rs 72,393   (SURVIVES, n=66)
+    Silver Supertrend p10/m2  +Rs 205,709       +Rs 68,471   (SURVIVES, n=66)
+
+The one common outlier across most of these is the same event: silver's
+Nov-2025-to-Jan-2026 squeeze, Rs 153,691 -> Rs 291,925 (+90%) in 81
+days -- the single most extreme move in the whole 5-year dataset. Every
+strategy that happened to be long through it looks great; that says
+"this was long during the outlier," not "this strategy has edge."
+
+ONLY Silver Supertrend (both period/multiplier combos tested) stays
+net POSITIVE across a real sample (66-67 trades) even with that one
+trade removed (+0.024-0.025R expectancy) -- thin, but the one result
+here that isn't purely a single-event artifact. Gold Supertrend and
+every MA-crossover combo do NOT survive the same check.
+
+NOT ADOPTED as a live candidate yet -- this is one in-sample backtest
+result on a genuinely thin universe (2 symbols, ~5 years, one
+dominant historical event). Silver Supertrend is the only credible
+candidate worth further work (forward/paper testing, not more
+in-sample parameter tuning on the same data -- the same discipline
+applied to every other strategy this session before trusting it).
+
 ## Gold/Silver futures: price-action zone strategy essentially never fires, structural mismatch not a calibration problem (added 2026-08-06)
 
 Tried backtesting the same zone+break price-action strategy directly on
