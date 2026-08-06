@@ -3,6 +3,48 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Condor "reverse the trade" idea: tested properly, makes it WORSE not better (added 2026-08-06)
+
+Live dashboard question: the condor's own backtest (87 trades,
+2024-08-07 to 2026-07-27) shows 70.1% win rate but net -Rs 18,941 --
+big infrequent losses outweighing small frequent wins. Asked whether
+buying the same structure instead of selling it ("less loss, more
+profit" shape) would flip that to a win.
+
+A quick sign-flip of the credit side's P&L suggested yes (+Rs 18,941,
+cost-blind). That was MISLEADING -- it used the condor's net_credit
+(short premiums MINUS hedge cost) as if it were symmetric with a real
+buyer's debit, but a genuine 2-leg long strangle has to pay the FULL
+gross premium of both short strikes, a bigger number than net_credit.
+
+Built shadow_long_strangle.py properly instead: same strike-selection
+call as the condor (condor_scanner.find_condor_legs, same
+SHORT_PREMIUM_MIN/MAX + liquidity screen), bought instead of sold, no
+hedge legs (risk already capped at premium paid), walked forward
+through the same day/expiry machinery as shadow_condor.py, same LTP-
+fill assumptions, run over the IDENTICAL 488-day window as the
+condor's own backtest for a fair comparison:
+
+    strategy          n     win%    total
+    long strangle    101    18.8%   -Rs 65,845
+    condor (sold)     87    70.1%   -Rs 21,684  (fresh run, matches the
+                                                  original bt_condor.json's
+                                                  -Rs 18,941 closely)
+
+BOTH lose money in this window -- but reversing to buying is WORSE,
+not better. An 18.8% win rate means the underlying essentially never
+moved far enough, fast enough, to justify what buying those options
+actually cost; premium selling collects theta on the far more common
+"nothing much happened" days, which is exactly why the condor's win
+rate is so much higher even though its own calibration also isn't
+profitable yet.
+
+CONCLUSION: the condor's problem is NOT its credit-vs-debit direction.
+Reversing it is not a fix -- it makes the result worse. If the condor
+needs improving, that work is in entry timing / strike selection /
+IV-regime gating, not the trade's directional structure. Not adopted;
+NOT pursued further as a "buy instead of sell" idea specifically.
+
 ## Gold/Silver trend-following (Supertrend / MA crossover): every result but one is a single-trade artifact (added 2026-08-06)
 
 Followed up on the zone strategy's failure (entry below) by building
