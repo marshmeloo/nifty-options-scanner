@@ -3,6 +3,36 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Gold/Silver futures: price-action zone strategy essentially never fires, structural mismatch not a calibration problem (added 2026-08-06)
+
+Tried backtesting the same zone+break price-action strategy directly on
+the futures (shadow_commodity_futures.py, weekly zones / daily trigger
+-- see the entry below this one for why futures instead of options).
+Zero trades at NIFTY's tuned SR_CLUSTER_TOLERANCE_PCT=0.15%. Traced why:
+every weekly swing point across gold's entire 5-year series landed at a
+UNIQUE price -- not one pair of swing highs (or lows) fell within 0.15%
+of each other, so zero support/resistance zones ever formed (the rule
+requires >=2 touches within tolerance to call something a zone at all).
+
+Widened the clustering tolerance step by step to test whether this was
+a calibration problem: 0.5% and 1.0% still found zero qualifying
+zones; even at 2-3% (13-20x NIFTY's tuned value) gold produced exactly
+ONE trade across 1207 daily bars, and silver 2-3. That is not a sweepable
+parameter -- it is confirmation that the mismatch is structural, not a
+tolerance-tuning problem. This rule is built on "price reaches a zone
+it has touched before, reacts, then breaks the reaction" -- gold and
+silver spent this entire window in an unusually persistent one-way bull
+run (Gold Rs 47,068 -> Rs 145,234/10g, Silver Rs 63,573 -> Rs 227,584/kg),
+which structurally has almost none of the "return to the same level
+multiple times" behaviour this strategy depends on.
+
+NOT ADOPTED, and not swept further -- sweeping a strategy that produces
+1-3 trades total over 5 years would just be curve-fitting to noise, the
+same overfitting risk already documented twice this session. A
+genuinely different strategy shape (trend-following/breakout rather
+than mean-reversion-to-zone) is the honest next step if this asset
+class is worth pursuing, not more parameter tuning on this one.
+
 ## Gold/Silver futures history: pulled, mostly clean, but has real rollover-seam duplicate dates (added 2026-08-06)
 
 Backfilled 5 years of MCX daily futures candles for GOLD and SILVER via
