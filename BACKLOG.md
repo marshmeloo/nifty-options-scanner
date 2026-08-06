@@ -3,6 +3,34 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Gold/Silver futures history: pulled, mostly clean, but has real rollover-seam duplicate dates (added 2026-08-06)
+
+Backfilled 5 years of MCX daily futures candles for GOLD and SILVER via
+commodity_source.py (logs/commodities/gold_daily.json,
+logs/commodities/silver_daily.json) -- 1221 and 1202 bars respectively,
+2021-09-01 to 2026-08-05. Much simpler pull than Nifty/Bank Nifty's
+options: Dhan's /charts/historical, queried against the CURRENTLY
+listed contract's own security id with exchangeSegment=MCX_COMM,
+already returns a genuine continuous/rolled series -- confirmed by
+sampling the price trajectory (Gold Rs 47,068 -> Rs 145,234/10g,
+Silver Rs 63,573 -> Rs 227,584/kg, both smooth multi-year rallies, no
+periodic rollover-shaped jumps). No ATM-offset reconstruction needed.
+
+NOT perfectly clean, though: 23 duplicate calendar dates in Gold's
+series, 4 in Silver's (out of 1200+ bars, ~1-2%). Some duplicates are
+byte-identical repeats (harmless). Others are NOT -- e.g. Gold
+2023-05-05 has two different OHLC sets for the same date
+(O=62054/H=62056/L=60663/C=61074 vs O=61566/H=61629/L=60250/C=60628),
+clustered right around early May 2023 across several consecutive
+dates for both metals. Most likely a contract-rollover seam: Dhan's
+stitched continuous series briefly carrying both the expiring and the
+newly-front contract's price for the same calendar date. NOT
+deduplicated yet -- picking one of two genuinely different price sets
+without understanding which is "real" would just substitute one
+assumption for another. Any backtest against this data should either
+exclude these ~27 dates or treat them explicitly, not silently take
+whichever bar happens to load first.
+
 ## Bank Nifty price-action backtest: first run not trustworthy, contamination far more pervasive than the near-ATM measurement suggested (added 2026-08-06)
 
 First real backtest of the price-action strategy against Bank Nifty data

@@ -15,6 +15,7 @@ trade_journal.jsonl
 # back it up somewhere, just not in git.
 logs/snapshots/
 logs/snapshots_banknifty/
+logs/commodities/
 # Recorded live order-book spread samples (~1-2 MB/day gzipped).
 # Same reasoning as snapshots: valuable measurement data, but runtime
 # output rather than source -- back it up outside git.
