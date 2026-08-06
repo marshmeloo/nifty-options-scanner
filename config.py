@@ -49,6 +49,47 @@ MOMENTUM_ONLY_ALIGNED_SCORE = 6.0
 MOMENTUM_ONLY_AGAINST_SCORE = 0.0
 MOMENTUM_ONLY_NEUTRAL_SCORE = 3.0   # no ROC signal this cycle -- stays below the bar
 
+# --- Tie-break among candidates with IDENTICAL scores ---
+#
+# WHY THIS EXISTS AS AN EXPLICIT SETTING
+# --------------------------------------
+# Momentum ROC is a CHAIN-WIDE read: every strike on the same side gets
+# the same alignment verdict, so under SCORING_MODE="momentum_only"
+# every qualifying strike scores exactly MOMENTUM_ONLY_ALIGNED_SCORE.
+# Measured live 2026-08-05 11:51: 14 PE strikes all tied at 6.0,
+# including near-ATM ones whose OI buildup (+343%, +203%) and IV
+# (6th/3rd percentile -- cheap) were far stronger than the strike that
+# actually got picked (+111%, 78th percentile -- rich).
+#
+# With every score tied, Python's stable sort left the winner decided by
+# CHAIN ORDER (ascending strike), which is not a trading judgement at
+# all. Worse, it resolves ASYMMETRICALLY by side: ascending strike means
+# "cheapest, deepest OTM" for a PE but "most expensive still under
+# PREMIUM_MAX, i.e. near-ATM/ITM" for a CE. Confirmed in the live
+# journal -- PE entries cluster at the PREMIUM_MIN floor (11.30, 13.80,
+# 15.90, 19.25) while CE entries cluster at the PREMIUM_MAX cap (103.10,
+# 107.30, 119.45, 141.20). Nobody chose that.
+#
+# Modes:
+#   "chain_order"       -- the historical accidental behaviour, kept as
+#                          the default because the 493-day study that
+#                          adopted momentum_only ran WITH it, so it is
+#                          baked into that validated result. Changing the
+#                          default without re-backtesting would silently
+#                          move the strategy off its own evidence.
+#   "nearest_atm"       -- prefer the strike closest to spot. The momentum
+#                          thesis is "the index moves in direction X"; a
+#                          near-ATM option has the delta to actually
+#                          capture that move, where a deep-OTM one needs
+#                          a far larger move to pay.
+#   "highest_oi_change" -- prefer the strongest OI buildup, i.e. let the
+#                          positioning signal break the tie that momentum
+#                          alone cannot.
+#
+# Adopt a non-default only on backtest evidence, same rule as every other
+# tuning decision in this project.
+TIEBREAK_MODE = "chain_order"
+
 # --- Scanner thresholds ---
 IV_PERCENTILE_HIGH = 75         # flag as "IV rich" above this percentile
 IV_PERCENTILE_LOW = 25          # flag as "IV cheap" below this percentile

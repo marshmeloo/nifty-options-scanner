@@ -118,6 +118,34 @@ def _score_levels(nearby, option_type: str) -> tuple:
     return round(capped, 2), reasons
 
 
+def _tiebreak_value(quote, snapshot, chain_index: int) -> float:
+    """
+    Secondary sort key for candidates whose SCORES ARE EQUAL. Lower sorts
+    first (i.e. gets picked). See config.TIEBREAK_MODE for why this is an
+    explicit setting rather than whatever chain order happens to produce.
+
+    Never affects ranking between candidates with different scores --
+    it's strictly a tie-break, so a genuinely stronger signal always
+    still wins on score alone.
+    """
+    mode = getattr(config, "TIEBREAK_MODE", "chain_order")
+
+    if mode == "nearest_atm":
+        return abs(quote.strike - snapshot.spot)
+
+    if mode == "highest_oi_change":
+        # Negated so the LARGEST buildup sorts first. Uses the intraday
+        # figure when available for the same reason scanner scoring does
+        # (the daily one only grows through the session and saturates);
+        # falls back to the daily figure in the opening minutes.
+        oi_change = quote.oi_change_pct_intraday
+        if oi_change is None:
+            oi_change = quote.oi_change_pct
+        return -abs(oi_change or 0.0)
+
+    return chain_index
+
+
 def scan(snapshot, price_levels=None, context=None) -> list:
     """
     price_levels: optional list of PriceLevel from price_action.analyze(),
@@ -128,8 +156,11 @@ def scan(snapshot, price_levels=None, context=None) -> list:
     reads, not strike-specific.
     """
     setups = []
+    # (tiebreak_value) parallel to `setups`, so the sort below can break
+    # score ties deliberately instead of leaving it to chain order.
+    tiebreaks = []
 
-    for q in snapshot.chain:
+    for chain_index, q in enumerate(snapshot.chain):
         # Premium filter lives HERE, not in the data-source chain builder:
         # this only gates whether a strike is worth flagging as a NEW
         # candidate. It must not remove strikes from the snapshot itself,
@@ -316,10 +347,12 @@ def scan(snapshot, price_levels=None, context=None) -> list:
                     score=round(final_score, 2),
                 )
             )
+            tiebreaks.append(_tiebreak_value(q, snapshot, chain_index))
 
-    # Strongest signals first
-    setups.sort(key=lambda s: s.score, reverse=True)
-    return setups
+    # Strongest signals first; ties broken by config.TIEBREAK_MODE rather
+    # than by whatever order the chain happened to arrive in.
+    order = sorted(range(len(setups)), key=lambda i: (-setups[i].score, tiebreaks[i]))
+    return [setups[i] for i in order]
 
 
 def compute_market_bias(snapshot, context=None) -> tuple:
