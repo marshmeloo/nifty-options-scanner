@@ -56,12 +56,34 @@ from atomic_state import atomic_write_json
 DHAN_BASE_URL = "https://api.dhan.co/v2"
 NIFTY_UNDERLYING_SCRIP = 13       # Dhan's security ID for the Nifty 50 index
 NIFTY_UNDERLYING_SEG = "IDX_I"
+# Bank Nifty: same IDX_I segment as Nifty, different scrip id -- confirmed
+# 2026-08-06 via direct API probe and Dhan's own instrument-master CSV
+# (see historical_source.py's BANKNIFTY_SECURITY_ID for the same finding
+# on the historical-data side).
+BANKNIFTY_UNDERLYING_SCRIP = 25
+BANKNIFTY_UNDERLYING_SEG = "IDX_I"
 
 STATE_DIR = Path(__file__).parent / "state"
 STATE_DIR.mkdir(exist_ok=True)
 IV_HISTORY_PATH = STATE_DIR / "iv_history.json"
 LIVE_STATE_PATH = STATE_DIR / "live_state.json"
 IV_HISTORY_WINDOW = 252
+
+
+def _symbol_path(base_path: Path, symbol: str) -> Path:
+    """
+    `base_path` unchanged for NIFTY (every existing caller's file stays
+    exactly where it is); a second underlying gets its own suffixed file.
+    Every state file this module writes (IV history, OI history, price
+    baseline, VWAP proxy) has no symbol in its NIFTY-era name -- calling
+    get_nifty_snapshot(symbol="BANKNIFTY") without this would silently
+    read/write NIFTY's own live state, corrupting the momentum scanner
+    that's actively trading off it. Same collision this project already
+    fixed once for snapshot_recorder.py's historical files.
+    """
+    if symbol == "NIFTY":
+        return base_path
+    return base_path.with_name(f"{base_path.stem}_{symbol.lower()}{base_path.suffix}")
 
 
 def _headers():
@@ -78,37 +100,43 @@ def _headers():
     }
 
 
-def get_expiry_list() -> list:
+def get_expiry_list(underlying_scrip: int = NIFTY_UNDERLYING_SCRIP,
+                    underlying_seg: str = NIFTY_UNDERLYING_SEG) -> list:
     """
-    Full sorted list of active Nifty expiries (nearest first), not just
+    Full sorted list of active expiries (nearest first), not just
     the nearest one. Needed by strategies that may need to look PAST the
     nearest expiry -- e.g. the condor rolling to next week's expiry when
     run on expiry day itself, when the "nearest" expiry has ~0 days left.
+
+    `underlying_scrip`/`underlying_seg` default to Nifty's -- pass
+    BANKNIFTY_UNDERLYING_SCRIP/BANKNIFTY_UNDERLYING_SEG for Bank Nifty.
     """
     dhan_rate_limiter.wait_for_slot()
     resp = requests.post(
         f"{DHAN_BASE_URL}/optionchain/expirylist",
         headers=_headers(),
-        json={"UnderlyingScrip": NIFTY_UNDERLYING_SCRIP, "UnderlyingSeg": NIFTY_UNDERLYING_SEG},
+        json={"UnderlyingScrip": underlying_scrip, "UnderlyingSeg": underlying_seg},
         timeout=10,
     )
     resp.raise_for_status()
     return resp.json()["data"]
 
 
-def get_nearest_expiry() -> str:
-    """Fetch the list of active Nifty expiries and return the nearest one."""
-    return get_expiry_list()[0]
+def get_nearest_expiry(underlying_scrip: int = NIFTY_UNDERLYING_SCRIP,
+                       underlying_seg: str = NIFTY_UNDERLYING_SEG) -> str:
+    """Fetch the list of active expiries and return the nearest one."""
+    return get_expiry_list(underlying_scrip, underlying_seg)[0]
 
 
-def _fetch_raw_chain(expiry: str) -> dict:
+def _fetch_raw_chain(expiry: str, underlying_scrip: int = NIFTY_UNDERLYING_SCRIP,
+                     underlying_seg: str = NIFTY_UNDERLYING_SEG) -> dict:
     dhan_rate_limiter.wait_for_slot()
     resp = requests.post(
         f"{DHAN_BASE_URL}/optionchain",
         headers=_headers(),
         json={
-            "UnderlyingScrip": NIFTY_UNDERLYING_SCRIP,
-            "UnderlyingSeg": NIFTY_UNDERLYING_SEG,
+            "UnderlyingScrip": underlying_scrip,
+            "UnderlyingSeg": underlying_seg,
             "Expiry": expiry,
         },
         timeout=10,
@@ -142,7 +170,7 @@ def _first_present(side: dict, keys):
     return None
 
 
-def _load_price_baseline() -> dict:
+def _load_price_baseline(symbol: str = "NIFTY") -> dict:
     """
     Per-strike premium baseline, reset daily, used to classify OI buildup
     as long buildup / short buildup / short covering / long unwinding —
@@ -156,30 +184,32 @@ def _load_price_baseline() -> dict:
     is a reasonable proxy but not identical to "previous day's close" —
     worth knowing if you're cross-checking against a terminal.
     """
-    if PRICE_BASELINE_PATH.exists():
-        data = json.loads(PRICE_BASELINE_PATH.read_text())
+    path = _symbol_path(PRICE_BASELINE_PATH, symbol)
+    if path.exists():
+        data = json.loads(path.read_text())
         if data.get("date") == date.today().isoformat():
             return data
     return {"date": date.today().isoformat(), "prices": {}}
 
 
-def _save_price_baseline(state: dict):
-    atomic_write_json(PRICE_BASELINE_PATH, state)
+def _save_price_baseline(state: dict, symbol: str = "NIFTY"):
+    atomic_write_json(_symbol_path(PRICE_BASELINE_PATH, symbol), state)
 
 
 OI_HISTORY_PATH = STATE_DIR / "oi_history.json"
 
 
-def _load_oi_history() -> dict:
+def _load_oi_history(symbol: str = "NIFTY") -> dict:
     """
     Short rolling per-contract history of (timestamp, oi, ltp), reset
     daily. Exists so buildup can be classified on what OI did in the last
     few MINUTES rather than versus yesterday's close -- see the
     OI_INTRADAY_* block in config.py for the incident that motivated it.
     """
-    if OI_HISTORY_PATH.exists():
+    path = _symbol_path(OI_HISTORY_PATH, symbol)
+    if path.exists():
         try:
-            data = json.loads(OI_HISTORY_PATH.read_text())
+            data = json.loads(path.read_text())
             if data.get("date") == date.today().isoformat():
                 return data
         except (json.JSONDecodeError, OSError):
@@ -187,8 +217,8 @@ def _load_oi_history() -> dict:
     return {"date": date.today().isoformat(), "samples": {}}
 
 
-def _save_oi_history(history: dict):
-    atomic_write_json(OI_HISTORY_PATH, history)
+def _save_oi_history(history: dict, symbol: str = "NIFTY"):
+    atomic_write_json(_symbol_path(OI_HISTORY_PATH, symbol), history)
 
 
 def _intraday_change(samples: list, now_ts: float, oi: float, ltp: float):
@@ -246,45 +276,51 @@ def _classify_buildup(oi_change_pct: float, price_change_pct, oi_threshold: floa
     return "long_unwinding"
 
 
-def _load_iv_history() -> list:
-    if IV_HISTORY_PATH.exists():
-        return json.loads(IV_HISTORY_PATH.read_text())
+def _load_iv_history(symbol: str = "NIFTY") -> list:
+    path = _symbol_path(IV_HISTORY_PATH, symbol)
+    if path.exists():
+        return json.loads(path.read_text())
     return []
 
 
-def _save_iv_history(history: list):
-    atomic_write_json(IV_HISTORY_PATH, history[-IV_HISTORY_WINDOW:])
+def _save_iv_history(history: list, symbol: str = "NIFTY"):
+    atomic_write_json(_symbol_path(IV_HISTORY_PATH, symbol), history[-IV_HISTORY_WINDOW:])
 
 
-def _load_vwap_proxy_state() -> dict:
-    if LIVE_STATE_PATH.exists():
-        return json.loads(LIVE_STATE_PATH.read_text())
+def _load_vwap_proxy_state(symbol: str = "NIFTY") -> dict:
+    path = _symbol_path(LIVE_STATE_PATH, symbol)
+    if path.exists():
+        return json.loads(path.read_text())
     return {"date": None, "samples": []}
 
 
-def _save_vwap_proxy_state(state: dict):
-    atomic_write_json(LIVE_STATE_PATH, state)
+def _save_vwap_proxy_state(state: dict, symbol: str = "NIFTY"):
+    atomic_write_json(_symbol_path(LIVE_STATE_PATH, symbol), state)
 
 
-def _update_vwap_proxy(spot: float) -> float:
+def _update_vwap_proxy(spot: float, symbol: str = "NIFTY") -> float:
     """Simple session moving average of spot, reset each trading day."""
-    state = _load_vwap_proxy_state()
+    state = _load_vwap_proxy_state(symbol)
     today = date.today().isoformat()
     if state.get("date") != today:
         state = {"date": today, "samples": []}
     state["samples"].append(spot)
-    _save_vwap_proxy_state(state)
+    _save_vwap_proxy_state(state, symbol)
     return round(statistics.mean(state["samples"]), 2)
 
 
-def get_nifty_intraday_candles(interval: str = None, from_date: str = None, to_date: str = None) -> list:
+def get_nifty_intraday_candles(interval: str = None, from_date: str = None, to_date: str = None,
+                               security_id: int = NIFTY_UNDERLYING_SCRIP,
+                               exchange_seg: str = NIFTY_UNDERLYING_SEG) -> list:
     """
-    Fetch intraday OHLC candles for the Nifty index, for use with
+    Fetch intraday OHLC candles for an index, for use with
     price_action.analyze(). Defaults to today's session so far.
 
     interval: "1","5","15","25","60" (minutes)
     from_date/to_date: "YYYY-MM-DD HH:MM:SS" strings. Defaults to
     today 09:15:00 through now.
+    security_id/exchange_seg default to Nifty's -- pass
+    BANKNIFTY_UNDERLYING_SCRIP/_SEG for Bank Nifty.
     """
     import config as cfg
 
@@ -299,8 +335,8 @@ def get_nifty_intraday_candles(interval: str = None, from_date: str = None, to_d
         f"{DHAN_BASE_URL}/charts/intraday",
         headers=_headers(),
         json={
-            "securityId": str(NIFTY_UNDERLYING_SCRIP),
-            "exchangeSegment": NIFTY_UNDERLYING_SEG,
+            "securityId": str(security_id),
+            "exchangeSegment": exchange_seg,
             "instrument": "INDEX",
             "interval": interval,
             "oi": False,
@@ -328,16 +364,19 @@ def get_nifty_intraday_candles(interval: str = None, from_date: str = None, to_d
     return candles
 
 
-def get_nifty_daily_candles(days_back: int = 180) -> list:
+def get_nifty_daily_candles(days_back: int = 180, security_id: int = NIFTY_UNDERLYING_SCRIP,
+                            exchange_seg: str = NIFTY_UNDERLYING_SEG) -> list:
     """
-    DAILY OHLC candles for the Nifty index, going `days_back` calendar
+    DAILY OHLC candles for an index, going `days_back` calendar
     days into the past. Used by market_regime.py to build the reference
     distribution of "what a normal day's range looks like" -- the
     intraday endpoint above can't answer that, since it only covers the
     current session.
 
     Note this is /v2/charts/historical (daily), a different endpoint
-    from /v2/charts/intraday used above.
+    from /v2/charts/intraday used above. security_id/exchange_seg
+    default to Nifty's -- pass BANKNIFTY_UNDERLYING_SCRIP/_SEG for Bank
+    Nifty.
     """
     from datetime import timedelta
 
@@ -346,8 +385,8 @@ def get_nifty_daily_candles(days_back: int = 180) -> list:
         f"{DHAN_BASE_URL}/charts/historical",
         headers=_headers(),
         json={
-            "securityId": str(NIFTY_UNDERLYING_SCRIP),
-            "exchangeSegment": NIFTY_UNDERLYING_SEG,
+            "securityId": str(security_id),
+            "exchangeSegment": exchange_seg,
             "instrument": "INDEX",
             "fromDate": (date.today() - timedelta(days=days_back)).isoformat(),
             "toDate": date.today().isoformat(),
@@ -372,10 +411,18 @@ def get_nifty_daily_candles(days_back: int = 180) -> list:
     return candles
 
 
-def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None) -> MarketSnapshot:
+def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None,
+                       symbol: str = "NIFTY",
+                       underlying_scrip: int = NIFTY_UNDERLYING_SCRIP,
+                       underlying_seg: str = NIFTY_UNDERLYING_SEG) -> MarketSnapshot:
     """
-    Fetch a live Nifty option chain snapshot from Dhan and return it in the
+    Fetch a live option chain snapshot from Dhan and return it in the
     same MarketSnapshot shape the rest of the pipeline already consumes.
+    Defaults reproduce the exact original Nifty behaviour -- pass
+    symbol="BANKNIFTY" with BANKNIFTY_UNDERLYING_SCRIP/_SEG for Bank
+    Nifty; every state file this reads/writes (IV history, OI history,
+    price baseline, VWAP proxy) is symbol-suffixed via _symbol_path so a
+    Bank Nifty caller can never read or corrupt Nifty's live state.
 
     `must_include_strikes`: strikes that must survive the
     STRIKE_RANGE_POINTS filter below regardless of distance from spot.
@@ -402,11 +449,11 @@ def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None) -> 
     their own tracked strikes through this parameter.
     """
     if expiry is None:
-        expiry = get_nearest_expiry()
+        expiry = get_nearest_expiry(underlying_scrip, underlying_seg)
 
-    raw = _fetch_raw_chain(expiry)
+    raw = _fetch_raw_chain(expiry, underlying_scrip, underlying_seg)
     spot = raw["last_price"]
-    vwap_proxy = _update_vwap_proxy(spot)
+    vwap_proxy = _update_vwap_proxy(spot, symbol)
 
     protected = must_include_strikes or set()
     raw_chain = raw["oc"]
@@ -416,13 +463,13 @@ def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None) -> 
             if abs(float(k) - spot) <= cfg.STRIKE_RANGE_POINTS or float(k) in protected
         }
 
-    iv_history = _load_iv_history()
+    iv_history = _load_iv_history(symbol)
     atm_strike = min(raw["oc"].keys(), key=lambda k: abs(float(k) - spot))
     atm_ce_iv = raw["oc"][atm_strike]["ce"]["implied_volatility"]
     atm_pe_iv = raw["oc"][atm_strike]["pe"]["implied_volatility"]
     atm_straddle_iv = (atm_ce_iv + atm_pe_iv) / 2
     iv_history.append(atm_straddle_iv)
-    _save_iv_history(iv_history)
+    _save_iv_history(iv_history, symbol)
 
     # First pass: build raw quotes without percentile (need the full CE/PE
     # IV lists first to rank each option against its own side of the chain)
@@ -462,10 +509,10 @@ def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None) -> 
         return round((below / len(sorted_ivs)) * 100, 1)
 
     chain = []
-    price_baseline = _load_price_baseline()
+    price_baseline = _load_price_baseline(symbol)
     baseline_prices = price_baseline["prices"]
 
-    oi_history = _load_oi_history()
+    oi_history = _load_oi_history(symbol)
     history_samples = oi_history["samples"]
     now_ts = time.time()
     # The fast position check re-fetches the chain every few seconds; only
@@ -517,7 +564,7 @@ def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None) -> 
 
         chain.append(
             OptionQuote(
-                symbol="NIFTY",
+                symbol=symbol,
                 expiry=expiry,
                 strike=strike,
                 option_type=opt_type,
@@ -542,10 +589,10 @@ def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None) -> 
             )
         )
 
-    _save_price_baseline(price_baseline)
+    _save_price_baseline(price_baseline, symbol)
     if record_sample:
         oi_history["last_sample_t"] = now_ts
-        _save_oi_history(oi_history)
+        _save_oi_history(oi_history, symbol)
 
     # PCR reflects the whole chain's OI sentiment, computed BEFORE the
     # premium filter narrows things down to the strikes we actually score.
@@ -559,7 +606,7 @@ def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None) -> 
     oi_analysis = oi_analytics.analyze(chain, spot)
 
     return MarketSnapshot(
-        symbol="NIFTY",
+        symbol=symbol,
         spot=spot,
         vwap=vwap_proxy,
         pcr=pcr,

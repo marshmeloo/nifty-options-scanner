@@ -104,14 +104,14 @@ def test_dhan_get_nifty_snapshot_accepts_and_uses_the_parameter(monkeypatch):
                              "volume": 10, "greeks": {}}},
         },
     }
-    monkeypatch.setattr(dhan_source, "_fetch_raw_chain", lambda expiry: fake_raw)
-    monkeypatch.setattr(dhan_source, "_update_vwap_proxy", lambda spot: spot)
-    monkeypatch.setattr(dhan_source, "_load_iv_history", lambda: [])
-    monkeypatch.setattr(dhan_source, "_save_iv_history", lambda h: None)
-    monkeypatch.setattr(dhan_source, "_load_price_baseline", lambda: {"date": None, "prices": {}})
-    monkeypatch.setattr(dhan_source, "_save_price_baseline", lambda s: None)
-    monkeypatch.setattr(dhan_source, "_load_oi_history", lambda: {"date": None, "samples": {}})
-    monkeypatch.setattr(dhan_source, "_save_oi_history", lambda h: None)
+    monkeypatch.setattr(dhan_source, "_fetch_raw_chain", lambda expiry, *a, **kw: fake_raw)
+    monkeypatch.setattr(dhan_source, "_update_vwap_proxy", lambda spot, *a, **kw: spot)
+    monkeypatch.setattr(dhan_source, "_load_iv_history", lambda *a, **kw: [])
+    monkeypatch.setattr(dhan_source, "_save_iv_history", lambda h, *a, **kw: None)
+    monkeypatch.setattr(dhan_source, "_load_price_baseline", lambda *a, **kw: {"date": None, "prices": {}})
+    monkeypatch.setattr(dhan_source, "_save_price_baseline", lambda s, *a, **kw: None)
+    monkeypatch.setattr(dhan_source, "_load_oi_history", lambda *a, **kw: {"date": None, "samples": {}})
+    monkeypatch.setattr(dhan_source, "_save_oi_history", lambda h, *a, **kw: None)
 
     without = dhan_source.get_nifty_snapshot(expiry="2026-08-04")
     with_protection = dhan_source.get_nifty_snapshot(expiry="2026-08-04", must_include_strikes={23550.0})
