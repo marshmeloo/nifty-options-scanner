@@ -83,6 +83,27 @@ def sma_series(candles: list, period: int) -> list:
     return out
 
 
+def ema_series(candles: list, period: int) -> list:
+    """
+    Standard exponential moving average, seeded with an SMA of the
+    first `period` closes (the conventional way to start an EMA without
+    an arbitrary earlier seed). Weights recent closes more heavily than
+    SMA does, so it reacts to a new trend faster and doesn't jump when
+    an old price ages out of a fixed window the way SMA can.
+    """
+    out = [None] * len(candles)
+    if len(candles) < period:
+        return out
+    seed = sum(c.close for c in candles[:period]) / period
+    out[period - 1] = seed
+    k = 2 / (period + 1)
+    prev = seed
+    for i in range(period, len(candles)):
+        prev = candles[i].close * k + prev * (1 - k)
+        out[i] = prev
+    return out
+
+
 def rsi_series(candles: list, period: int = 14) -> list:
     """Wilder's RSI. Exposed for the optional filter use-case described
     in the module docstring -- not used by either backtest below unless
@@ -211,17 +232,24 @@ def backtest_supertrend(symbol: str, period: int = 10, multiplier: float = 3.0) 
     return trades
 
 
-def backtest_ma_crossover(symbol: str, fast: int = 20, slow: int = 50, atr_period: int = 14) -> list:
+def backtest_ma_crossover(symbol: str, fast: int = 20, slow: int = 50, atr_period: int = 14,
+                          ma_type: str = "sma") -> list:
     """
     Same always-in-the-market shape as Supertrend, for a fair
     comparison. MA crossover has no natural stop-line the way
     Supertrend does, so the initial risk reference for R-normalisation
     is 1x ATR at entry -- a conventional, not fitted, choice.
+
+    ma_type: "sma" (default, unchanged from the original backtest) or
+    "ema" -- EMA weights recent closes more heavily and doesn't jump
+    when an old price drops out of a fixed window the way SMA can, so
+    it can flip a few days earlier/later than SMA on the same data.
     """
     candles = clean_daily_candles(symbol)
     lot_size = LOT_SIZE[symbol]
-    fast_ma = sma_series(candles, fast)
-    slow_ma = sma_series(candles, slow)
+    ma_fn = ema_series if ma_type == "ema" else sma_series
+    fast_ma = ma_fn(candles, fast)
+    slow_ma = ma_fn(candles, slow)
     atr = atr_series(candles, atr_period)
 
     trades = []

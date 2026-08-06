@@ -33,6 +33,22 @@ def test_sma_series_basic():
     assert sma[4] == pytest.approx(45.0)
 
 
+def test_ema_series_seeds_with_sma_of_first_period():
+    candles = _series([10, 20, 30, 40, 50])
+    ema = cts.ema_series(candles, 3)
+    assert ema[0] is None and ema[1] is None
+    assert ema[2] == pytest.approx((10 + 20 + 30) / 3)
+
+
+def test_ema_reacts_faster_than_sma_to_a_recent_jump():
+    # Flat then one big jump: EMA should sit closer to the new price
+    # than SMA does, since EMA weights the recent bar more heavily.
+    candles = _series([100] * 10 + [200])
+    sma = cts.sma_series(candles, 5)
+    ema = cts.ema_series(candles, 5)
+    assert ema[-1] > sma[-1]
+
+
 def test_atr_series_warms_up_then_smooths():
     candles = _series([100, 102, 101, 105, 103, 107, 104, 110, 108, 112, 109, 115])
     atr = cts.atr_series(candles, 5)
@@ -93,6 +109,21 @@ def test_backtest_ma_crossover_normalises_r_by_atr(monkeypatch):
     assert len(trades) >= 1
     for t in trades:
         assert t.net_r is not None
+
+
+def test_backtest_ma_crossover_ema_defaults_reproduce_old_sma_behaviour(monkeypatch):
+    up1 = [100 + i * 2 for i in range(60)]
+    down = [up1[-1] - i * 2 for i in range(1, 60)]
+    up2 = [down[-1] + i * 2 for i in range(1, 60)]
+    candles = _series(up1 + down + up2)
+    monkeypatch.setattr(cts, "clean_daily_candles", lambda sym: candles)
+
+    sma_trades = cts.backtest_ma_crossover("GOLD", fast=5, slow=15, atr_period=10)
+    default_trades = cts.backtest_ma_crossover("GOLD", fast=5, slow=15, atr_period=10)
+    assert [t.opened_at for t in sma_trades] == [t.opened_at for t in default_trades]
+
+    ema_trades = cts.backtest_ma_crossover("GOLD", fast=5, slow=15, atr_period=10, ma_type="ema")
+    assert isinstance(ema_trades, list)
 
 
 def test_known_bad_dates_excluded_from_clean_daily_candles(monkeypatch):

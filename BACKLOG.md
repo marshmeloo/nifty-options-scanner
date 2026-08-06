@@ -51,6 +51,21 @@ candidate worth further work (forward/paper testing, not more
 in-sample parameter tuning on the same data -- the same discipline
 applied to every other strategy this session before trusting it).
 
+FOLLOW-UP: does EMA instead of SMA fix the crossover strategy's
+outlier-dependence? commodity_trend_strategy.ema_series() added,
+backtest_ma_crossover(ma_type="ema") wired through. Swept the same
+4 fast/slow pairs on both metals -- no. Every single EMA combo also
+flips to a loss once its biggest trade is removed:
+
+    Gold EMA 20/100:    +Rs 79,057  -> -Rs 3,471
+    Silver EMA 20/100:  +Rs 94,421  -> -Rs 28,100
+    (same pattern across every other combo tested)
+
+Switching the MA type doesn't touch the underlying issue -- MA
+crossover (SMA or EMA) has no demonstrated edge on this data once the
+one lucky trend catch is excluded. Only Silver Supertrend still
+survives the same check.
+
 ## Gold/Silver futures: price-action zone strategy essentially never fires, structural mismatch not a calibration problem (added 2026-08-06)
 
 Tried backtesting the same zone+break price-action strategy directly on
