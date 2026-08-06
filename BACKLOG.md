@@ -3,6 +3,66 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Bank Nifty price-action backtest: first run not trustworthy, contamination far more pervasive than the near-ATM measurement suggested (added 2026-08-06)
+
+First real backtest of the price-action strategy against Bank Nifty data
+(5 years, 2021-08-04 to 2026-08-04, 1 lot, lot size 30, premium band
+Rs 300-800 calibrated to Bank Nifty's real prices -- NIFTY's tuned
+40-200 band would find zero Bank Nifty candidates ever, checked directly
+before running).
+
+RAW RESULT:
+
+    pair            n    win%    expectancy    total P&L
+    intraday        67   52.2%   +0.75R        +Rs 85,131
+    daily_hourly    59   32.2%   -0.53R        -Rs 90,830
+
+NOT ADOPTED AS A VERDICT. The entry below this one measured Bank Nifty's
+near-ATM (within 300pts) contamination rate at 0.246% of readings --
+small. But checking the DAYS actually used by these trades (not just
+near-ATM readings in general) found something much worse: the
+consistency checker (`historical_consistency.check_day`) flags 49 of 66
+trading days used by the intraday pair (74%) and 35 of 42 days used by
+daily_hourly (83%), frequently with corruption within 100-300pts of
+spot -- squarely inside the range these strikes trade in. Confirmed one
+used day (2023-12-11) had an outright implausible reconstructed spot
+(~10,011 against a real level of ~47,200).
+
+Checked precisely whether this actually touches the number: for the top
+5 P&L-driving trades in each pair, none had their OWN exact strike
+directly hit by a flagged issue on their entry day -- the biggest
+winners/losers aren't provably fabricated. But with the majority of days
+flagged, that's reassurance about 10 specific trades out of 126, not
+about the aggregate. Unlike the NIFTY and near-ATM Bank Nifty entries
+below (both "not fixed, low enough to proceed"), this rate is too high
+to treat +Rs85K / -Rs90K as a signal on the strategy -- it's evidence
+the mechanics run end-to-end, nothing more yet.
+
+NEXT STEP -- DONE: re-ran excluding trades whose entry day has a flagged
+issue within 300pts of spot (the same inner band the near-ATM
+contamination rate below was measured over).
+
+    pair            subset      n     win%    expectancy    total P&L
+    intraday        all         67    52.2%   +0.75R        +Rs 85,131
+    intraday        clean       38    55.3%   +1.38R        +Rs 102,106
+    intraday        cut(dirty)  29    48.3%   -0.09R        -Rs 16,975
+    daily_hourly    all         59    32.2%   -0.53R        -Rs 90,830
+    daily_hourly    clean       52    34.6%   -0.23R        -Rs 41,845
+    daily_hourly    cut(dirty)  7     14.3%   -2.74R        -Rs 48,985
+
+READ: the intraday pair's positive result is NOT a contamination
+artifact -- the clean subset is stronger (+1.38R over 38 trades), and
+the days near flagged corruption were roughly breakeven, not the
+source of the gain. The daily_hourly pair's badness WAS partly
+contamination -- 7 dirty-day trades average -2.74R and account for over
+half its total loss -- but it's still net negative on the clean 52
+trades alone, so this pair genuinely doesn't work here, not just a data
+artifact.
+
+Still a first-pass premium band (Rs 300-800), not swept/optimized --
+treat the intraday clean-subset number as promising evidence to
+calibrate further, not a final verdict.
+
 ## Bank Nifty historical data: same corruption mechanism as NIFTY, more frequent (added 2026-08-06)
 
 Investigated why Bank Nifty's near-ATM contamination (0.246% within
