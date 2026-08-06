@@ -120,8 +120,9 @@ def _intrinsic(option_type: str, strike: float, spot: float) -> float:
     return max(strike - spot, 0.0)
 
 
-def _finalise(trade: ShadowPATrade, ts, exit_px, outcome, peak, trough, lots) -> ShadowPATrade:
-    lot_size = pcfg.NIFTY_LOT_SIZE
+def _finalise(trade: ShadowPATrade, ts, exit_px, outcome, peak, trough, lots,
+              lot_size: int = None) -> ShadowPATrade:
+    lot_size = lot_size or pcfg.NIFTY_LOT_SIZE
     risk_unit = trade.entry - trade.stop
 
     trade.closed_at = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
@@ -143,7 +144,8 @@ def _finalise(trade: ShadowPATrade, ts, exit_px, outcome, peak, trough, lots) ->
 
 
 def _walk_forward(day_cache: dict, window_days: list, entry_day: str, entry_idx: int,
-                  strike: float, option_type: str, trade: ShadowPATrade, lots: int) -> ShadowPATrade:
+                  strike: float, option_type: str, trade: ShadowPATrade, lots: int,
+                  snapshot_dir=None, symbol: str = "NIFTY", lot_size: int = None) -> ShadowPATrade:
     """
     Advance the position through every later recorded cycle inside its
     own expiry window until target or stop is hit at a recorded LTP, or
@@ -154,7 +156,7 @@ def _walk_forward(day_cache: dict, window_days: list, entry_day: str, entry_idx:
     last_snapshot = None
 
     for day in window_days:
-        cycles = _load_cached(day_cache, day)
+        cycles = _load_cached(day_cache, day, snapshot_dir=snapshot_dir, symbol=symbol)
         start = entry_idx + 1 if day == entry_day else 0
         for snapshot, _candles, _meta in cycles[start:]:
             last_snapshot = snapshot
@@ -170,7 +172,7 @@ def _walk_forward(day_cache: dict, window_days: list, entry_day: str, entry_idx:
             elif px <= trade.stop:
                 outcome = "LOSS"
             if outcome:
-                return _finalise(trade, snapshot.timestamp, px, outcome, peak, trough, lots)
+                return _finalise(trade, snapshot.timestamp, px, outcome, peak, trough, lots, lot_size=lot_size)
 
     if last_snapshot is None:
         return trade  # no recorded data at all inside this position's window
@@ -178,11 +180,12 @@ def _walk_forward(day_cache: dict, window_days: list, entry_day: str, entry_idx:
     q = _find_quote(last_snapshot.chain, strike, option_type)
     px = q.ltp if q is not None else _intrinsic(option_type, strike, last_snapshot.spot)
     return _finalise(trade, last_snapshot.timestamp, px, "EXPIRY_CLOSE",
-                     max(peak, px), min(trough, px), lots)
+                     max(peak, px), min(trough, px), lots, lot_size=lot_size)
 
 
 def run_pair(pair_name: str, days: list, target_rr: float = None,
-            one_lot: bool = True, verbose: bool = False) -> list:
+            one_lot: bool = True, verbose: bool = False,
+            snapshot_dir=None, symbol: str = "NIFTY", lot_size: int = None) -> list:
     """
     Replay every recorded day under one timeframe pair, opening at most
     one position at a time (a new signal is ignored while a position
@@ -200,6 +203,17 @@ def run_pair(pair_name: str, days: list, target_rr: float = None,
     lot regardless of build_plan's own risk-budget arithmetic -- the
     question being asked here is "how does this R:R perform," not
     "would the risk budget have allowed it."
+
+    snapshot_dir/symbol/lot_size: override to backtest a second
+    underlying (e.g. Bank Nifty) whose recordings live in their own
+    directory and whose lot size differs from NIFTY's. Candidate
+    selection/plan sizing (pas.scan/pag.build_plan) still read
+    config_price_action's own PREMIUM_MIN/MAX -- those are NOT
+    parameterized here, since Bank Nifty's real premium levels are far
+    higher than NIFTY's tuned band (confirmed by direct inspection:
+    even the outermost reachable strike prices in the hundreds, not
+    tens, of rupees) and need their own calibrated values, not silently
+    inherited from NIFTY's.
     """
     tf = pcfg.TIMEFRAME_PAIRS[pair_name]
     day_cache = {}
@@ -220,7 +234,7 @@ def run_pair(pair_name: str, days: list, target_rr: float = None,
     open_until = None   # (day, timestamp) cursor
 
     for day in days:
-        cycles = _load_cached(day_cache, day)
+        cycles = _load_cached(day_cache, day, snapshot_dir=snapshot_dir, symbol=symbol)
         if not cycles:
             continue
 
@@ -277,7 +291,7 @@ def run_pair(pair_name: str, days: list, target_rr: float = None,
                 reasons=list(setup.reasons)[:4],
             )
             trade = _walk_forward(day_cache, window, day, idx, setup.strike, setup.option_type,
-                                  trade, lots)
+                                  trade, lots, snapshot_dir=snapshot_dir, symbol=symbol, lot_size=lot_size)
             trades.append(trade)
             if trade.closed_at:
                 open_until = (day, datetime.fromisoformat(trade.closed_at))

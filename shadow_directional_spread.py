@@ -280,9 +280,18 @@ def _walk_spread_forward(remaining_cycles: list, plan_dict: dict,
     return _settle_at_expiry(last_snapshot, plan_dict, spread, peak, trough, held)
 
 
-def _load_cached(day_cache: dict, day: str) -> list:
+def _load_cached(day_cache: dict, day: str, snapshot_dir=None, symbol: str = "NIFTY") -> list:
+    """
+    `snapshot_dir`/`symbol` default to NIFTY's existing behaviour --
+    override both together to backtest a second underlying (e.g. Bank
+    Nifty) whose recordings live in their own directory. See
+    historical_source.py's own snapshot_dir parameterization for why
+    "override the directory" is not optional once a second underlying
+    is involved: snapshot_recorder writes one file per calendar date
+    with no symbol in the filename.
+    """
     if day not in day_cache:
-        day_cache[day] = list(snapshot_recorder.load_day(day))
+        day_cache[day] = list(snapshot_recorder.load_day(day, snapshot_dir=snapshot_dir, symbol=symbol))
     return day_cache[day]
 
 

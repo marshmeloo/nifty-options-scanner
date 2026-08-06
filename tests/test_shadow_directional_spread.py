@@ -71,7 +71,7 @@ def _mock_single_day(monkeypatch, cycles, day="2026-06-01"):
     the nominal expiry window -- not a hypothetical, this is exactly what
     broke here the first time the multi-day walk was added.
     """
-    monkeypatch.setattr(sds.snapshot_recorder, "load_day", lambda d: cycles if d == day else [])
+    monkeypatch.setattr(sds.snapshot_recorder, "load_day", lambda d, **kw: cycles if d == day else [])
     monkeypatch.setattr(sds.snapshot_recorder, "available_days", lambda: [day])
 
 
@@ -251,7 +251,7 @@ def test_position_walks_forward_across_a_day_boundary(monkeypatch):
     day2 = _cycles(n=5, start="2026-06-02T09:15:00")   # Tuesday (nominal expiry)
 
     monkeypatch.setattr(sds.snapshot_recorder, "load_day",
-                        lambda d: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
+                        lambda d, **kw: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
     monkeypatch.setattr(sds.snapshot_recorder, "available_days",
                         lambda: ["2026-06-01", "2026-06-02"])
     monkeypatch.setattr(sds, "compute_market_bias", lambda snap, ctx: ("bullish", 3.0, []))
@@ -278,7 +278,7 @@ def test_walk_never_reads_a_cycle_beyond_the_positions_own_expiry(monkeypatch):
 
     seen_day3 = []
 
-    def fake_load(d):
+    def fake_load(d, **kw):
         if d == "2026-06-03":
             seen_day3.append(d)
         return {"2026-06-01": day1, "2026-06-02": day2, "2026-06-03": day3}.get(d, [])
@@ -305,7 +305,7 @@ def test_unresolved_position_when_history_ends_inside_its_expiry_week(monkeypatc
     day1 = _cycles(n=1, start="2026-06-01T09:15:00")  # entry cycle, then nothing
 
     monkeypatch.setattr(sds.snapshot_recorder, "load_day",
-                        lambda d: day1 if d == "2026-06-01" else [])
+                        lambda d, **kw: day1 if d == "2026-06-01" else [])
     monkeypatch.setattr(sds.snapshot_recorder, "available_days", lambda: ["2026-06-01"])
     monkeypatch.setattr(sds, "compute_market_bias", lambda snap, ctx: ("bullish", 3.0, []))
     monkeypatch.setattr(sds, "check_managed_exit", lambda mtm, plan: None)
@@ -342,7 +342,7 @@ def test_run_all_enforces_one_at_a_time_across_a_day_boundary(monkeypatch):
     day2 = _cycles(n=3, start="2026-06-02T09:15:00")   # Tuesday -- position still open here
 
     monkeypatch.setattr(sds.snapshot_recorder, "load_day",
-                        lambda d: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
+                        lambda d, **kw: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
     monkeypatch.setattr(sds.snapshot_recorder, "available_days",
                         lambda: ["2026-06-01", "2026-06-02"])
     monkeypatch.setattr(sds, "compute_market_bias", lambda snap, ctx: ("bullish", 3.0, []))
@@ -365,7 +365,7 @@ def test_run_all_matches_a_manually_chained_scan_day_sequence(monkeypatch):
     day1 = _cycles(n=3, start="2026-06-01T09:15:00")
     day2 = _cycles(n=3, start="2026-06-02T09:15:00")
     monkeypatch.setattr(sds.snapshot_recorder, "load_day",
-                        lambda d: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
+                        lambda d, **kw: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
     monkeypatch.setattr(sds.snapshot_recorder, "available_days",
                         lambda: ["2026-06-01", "2026-06-02"])
     monkeypatch.setattr(sds, "compute_market_bias", lambda snap, ctx: ("bullish", 3.0, []))
@@ -390,7 +390,7 @@ def test_expiry_settlement_falls_back_to_intrinsic_for_a_missing_leg(monkeypatch
     day2[-1][0].chain.clear()   # both legs unpriced on the very last cycle
 
     monkeypatch.setattr(sds.snapshot_recorder, "load_day",
-                        lambda d: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
+                        lambda d, **kw: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
     monkeypatch.setattr(sds.snapshot_recorder, "available_days",
                         lambda: ["2026-06-01", "2026-06-02"])
     monkeypatch.setattr(sds, "compute_market_bias", lambda snap, ctx: ("bullish", 3.0, []))

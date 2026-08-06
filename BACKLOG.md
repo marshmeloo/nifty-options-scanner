@@ -3,6 +3,48 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Bank Nifty historical data: same corruption mechanism as NIFTY, more frequent (added 2026-08-06)
+
+Investigated why Bank Nifty's near-ATM contamination (0.246% within
+300pts / 3 strikes) is non-zero, unlike NIFTY's clean 0.000% in the
+equivalent inner band -- see the NIFTY corruption entry below for the
+original finding this follows up on.
+
+ROOT CAUSE, same bug as NIFTY, confirmed by direct inspection: Dhan's
+`ATM+N` offset labelling doesn't cleanly track which real strike each
+offset points to as spot crosses a strike boundary. NIFTY showed this as
+two adjacent strikes sharing identical OI at the SAME instant. Bank
+Nifty showed a second variant on top of that -- a value MIGRATING to the
+adjacent strike ACROSS TIME:
+
+    10:10  47600CE OI=12075   47700CE OI=12075   (same instant, adjacent strikes)
+    10:15  47500CE OI=11445
+    10:20  47600CE OI=11445                       (same value, one strike up, 5 min later)
+
+This second instance lines up exactly with spot jumping 47650->47786
+(136pts) in that one 5-minute bar -- a rapid crossing of the 47700
+strike line, which is the trigger condition for the offset->strike
+mapping to misfire.
+
+WHY MORE FREQUENT FOR BANK NIFTY: its absolute price level is roughly
+2x NIFTY's over this period (~47,000-58,000 vs ~24,000-25,000), so its
+typical point move per 5-min bar is proportionally larger even at
+similar underlying volatility -- meaning it crosses its (wider, 100pt)
+strike boundaries more often per unit time than NIFTY crosses its
+(narrower, 50pt) ones. More boundary crossings -> more chances for the
+mapping to misfire.
+
+NATURE OF THE ERROR: the OI values themselves are real numbers that
+existed at some point -- they are momentarily mis-attributed to the
+wrong strike for one bar, not fabricated. LTP stayed correct in every
+case checked.
+
+NOT FIXED, same reasoning as the NIFTY entry: still low overall
+(~1 in 400 near-ATM readings), concentrated in single-bar blips, and
+does not change which strategies are exposed -- see that entry's
+per-strategy distance table; Bank Nifty's own future strategy legs would
+need the same distance check once one exists.
+
 ## Score tie-break: made explicit, measured, NOT changed (added 2026-08-06)
 
 Found analysing the 2026-08-05 session: all four momentum trades opened

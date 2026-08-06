@@ -68,7 +68,7 @@ def _cycles(n=20, spot=24000.0, start="2026-06-01T09:20:00"):
 
 
 def _mock_single_day(monkeypatch, cycles, day="2026-06-01"):
-    monkeypatch.setattr(sc.snapshot_recorder, "load_day", lambda d: cycles if d == day else [])
+    monkeypatch.setattr(sc.snapshot_recorder, "load_day", lambda d, **kw: cycles if d == day else [])
     monkeypatch.setattr(sc.snapshot_recorder, "available_days", lambda: [day])
 
 
@@ -91,7 +91,7 @@ def test_min_days_to_expiry_gate_skips_entries_too_close_to_expiry(monkeypatch):
     """
     cycles = _cycles(start="2026-06-02T09:20:00")
     monkeypatch.setattr(sc.snapshot_recorder, "load_day",
-                        lambda d: cycles if d == "2026-06-02" else [])
+                        lambda d, **kw: cycles if d == "2026-06-02" else [])
     monkeypatch.setattr(sc.snapshot_recorder, "available_days", lambda: ["2026-06-02"])
 
     condors, skips = sc.run_policy("2026-06-02")
@@ -124,7 +124,7 @@ def test_coverage_gap_is_distinguished_from_no_candidate(monkeypatch):
                       [], {}))
 
     monkeypatch.setattr(sc.snapshot_recorder, "load_day",
-                        lambda d: narrow if d == "2026-06-01" else [])
+                        lambda d, **kw: narrow if d == "2026-06-01" else [])
     monkeypatch.setattr(sc.snapshot_recorder, "available_days", lambda: ["2026-06-01"])
 
     condors, skips = sc.run_policy("2026-06-01")
@@ -143,7 +143,7 @@ def test_no_early_exit_exists_only_expiry_settlement(monkeypatch):
     day1 = _cycles(n=3, start="2026-06-01T09:15:00")
     day2 = _cycles(n=3, start="2026-06-02T09:15:00")
     monkeypatch.setattr(sc.snapshot_recorder, "load_day",
-                        lambda d: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
+                        lambda d, **kw: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
     monkeypatch.setattr(sc.snapshot_recorder, "available_days",
                         lambda: ["2026-06-01", "2026-06-02"])
 
@@ -164,7 +164,7 @@ def test_run_all_enforces_one_at_a_time_across_a_day_boundary(monkeypatch):
     day1 = _cycles(n=3, start="2026-06-01T09:15:00")
     day2 = _cycles(n=3, start="2026-06-02T09:15:00")
     monkeypatch.setattr(sc.snapshot_recorder, "load_day",
-                        lambda d: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
+                        lambda d, **kw: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
     monkeypatch.setattr(sc.snapshot_recorder, "available_days",
                         lambda: ["2026-06-01", "2026-06-02"])
 
@@ -195,7 +195,7 @@ def test_run_policy_touches_no_state_file_or_journal(monkeypatch, tmp_path):
 def test_unresolved_condor_when_history_ends_inside_its_expiry_week(monkeypatch):
     day1 = _cycles(n=1, start="2026-06-01T09:15:00")
     monkeypatch.setattr(sc.snapshot_recorder, "load_day",
-                        lambda d: day1 if d == "2026-06-01" else [])
+                        lambda d, **kw: day1 if d == "2026-06-01" else [])
     monkeypatch.setattr(sc.snapshot_recorder, "available_days", lambda: ["2026-06-01"])
 
     condors, _skips = sc.run_policy("2026-06-01", day_cache={}, all_days=["2026-06-01"])
@@ -210,7 +210,7 @@ def test_expiry_settlement_falls_back_to_intrinsic_for_a_missing_leg(monkeypatch
     day2[-1][0].chain.clear()
 
     monkeypatch.setattr(sc.snapshot_recorder, "load_day",
-                        lambda d: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
+                        lambda d, **kw: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
     monkeypatch.setattr(sc.snapshot_recorder, "available_days",
                         lambda: ["2026-06-01", "2026-06-02"])
 
@@ -236,7 +236,7 @@ def test_breach_days_are_counted_but_never_cause_an_exit(monkeypatch):
             q.strike = 24900.0 - 400 + (q.strike - 24000.0)
 
     monkeypatch.setattr(sc.snapshot_recorder, "load_day",
-                        lambda d: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
+                        lambda d, **kw: {"2026-06-01": day1, "2026-06-02": day2}.get(d, []))
     monkeypatch.setattr(sc.snapshot_recorder, "available_days",
                         lambda: ["2026-06-01", "2026-06-02"])
 

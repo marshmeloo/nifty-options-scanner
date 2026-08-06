@@ -179,7 +179,7 @@ def test_daily_hourly_ltf_accumulates_across_days_not_reset_per_day(monkeypatch)
     # remainder dropped) -- enough to accumulate past the 6-bar LTF gate
     # over several days, but far short of it from any single day alone.
     day_cache = {d: _day_cycles(d, n_candles=30) for d in days}
-    monkeypatch.setattr(spa, "_load_cached", lambda cache, d: day_cache[d])
+    monkeypatch.setattr(spa, "_load_cached", lambda cache, d, **kw: day_cache[d])
 
     seen_ltf_lengths = []
 
@@ -196,3 +196,49 @@ def test_daily_hourly_ltf_accumulates_across_days_not_reset_per_day(monkeypatch)
     # proof prior days' completed hourly bars carried forward instead of
     # being reset each day.
     assert max(seen_ltf_lengths) > 2
+
+
+# --- snapshot_dir/symbol/lot_size parameterization (Bank Nifty support) ----
+
+def test_run_pair_passes_snapshot_dir_and_symbol_to_load_cached(monkeypatch):
+    """
+    Pins the exact collision this exists to prevent: backtesting a
+    second underlying without threading snapshot_dir/symbol through
+    would silently replay NIFTY's own recordings instead.
+    """
+    seen = []
+    def fake_load_cached(cache, d, snapshot_dir=None, symbol="NIFTY"):
+        seen.append((snapshot_dir, symbol))
+        return []
+    monkeypatch.setattr(spa, "_load_cached", fake_load_cached)
+
+    spa.run_pair("intraday", ["2026-06-01"], snapshot_dir="/fake/banknifty", symbol="BANKNIFTY")
+    assert seen == [("/fake/banknifty", "BANKNIFTY")]
+
+
+def test_run_pair_defaults_reproduce_old_nifty_behaviour(monkeypatch):
+    seen = []
+    def fake_load_cached(cache, d, snapshot_dir=None, symbol="NIFTY"):
+        seen.append((snapshot_dir, symbol))
+        return []
+    monkeypatch.setattr(spa, "_load_cached", fake_load_cached)
+
+    spa.run_pair("intraday", ["2026-06-01"])
+    assert seen == [(None, "NIFTY")]
+
+
+def test_finalise_uses_the_given_lot_size_not_niftys():
+    trade = spa.ShadowPATrade(pair="intraday", strike=48000, option_type="CE",
+                              opened_at="2026-06-01T09:20:00", entry=500.0, stop=450.0, target=650.0)
+    out = spa._finalise(trade, datetime(2026, 6, 1, 10, 0), 650.0, "WIN",
+                        peak=650.0, trough=500.0, lots=1, lot_size=30)
+    # gross = (650-500) * 30 (Bank Nifty lot size, not NIFTY's 65)
+    assert out.gross_inr == pytest.approx(4500.0)
+
+
+def test_finalise_defaults_to_nifty_lot_size_when_omitted():
+    trade = spa.ShadowPATrade(pair="intraday", strike=24000, option_type="CE",
+                              opened_at="2026-06-01T09:20:00", entry=100.0, stop=80.0, target=140.0)
+    out = spa._finalise(trade, datetime(2026, 6, 1, 10, 0), 140.0, "WIN",
+                        peak=140.0, trough=100.0, lots=1)
+    assert out.gross_inr == pytest.approx((140.0 - 100.0) * pcfg.NIFTY_LOT_SIZE)
