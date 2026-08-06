@@ -3,6 +3,67 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Score tie-break: made explicit, measured, NOT changed (added 2026-08-06)
+
+Found analysing the 2026-08-05 session: all four momentum trades opened
+deep-OTM PEs hugging the premium floor (11.30, 13.80, 15.90, 19.25).
+
+MECHANISM (confirmed, reproduced against the recorded snapshot): momentum
+ROC is a CHAIN-WIDE read, so under SCORING_MODE="momentum_only" every
+qualifying strike on a side scores identically -- 14 PE strikes all tied
+at exactly 6.0 that cycle. Near-ATM 24550/24600 had far stronger OI
+buildup (+343%, +203% vs the winner's +111%) and cheap rather than rich
+IV (6th/3rd vs 78th percentile), and none of it could break the tie
+because none of it feeds the score. The winner fell to Python's stable
+sort preserving CHAIN ORDER, which resolves ASYMMETRICALLY by side:
+ascending strike = "cheapest, deepest OTM" for a PE but "most expensive
+under PREMIUM_MAX" for a CE.
+
+The asymmetry is REAL and PERSISTENT, not a one-day artifact -- over the
+full 6 years, chain_order's median entry is Rs 82.2 for CEs but Rs 30.8
+for PEs (2.7x).
+
+MEASURED, 1,491 days / ~10,800 trades per mode:
+
+    mode                gross R    spread R    net R    med entry
+    chain_order         +0.1227     0.0118    +0.1108      51.0
+    nearest_atm         +0.1171     0.0105    +0.1067      67.4
+    highest_oi_change   +0.1079     0.0110    +0.0969      61.8
+
+  Significance vs chain_order: nearest_atm z=-0.26, highest_oi_change
+  z=-0.70. NEITHER is significant (bar is 1.96). All three modes are
+  statistically indistinguishable.
+
+A spread-cost hypothesis was tested and REJECTED. The 6-year backtest
+fills at LTP with no bid/ask, and costs.round_trip deliberately omits
+spread (it assumes bid/ask fills already carry it), so spread is charged
+nowhere. Real spread measured from a live session (2026-08-05, 37,888
+quotes with a live book) is >2x wider on deep-OTM than near-ATM:
+
+    under Rs 20  0.60%     Rs 40-70   0.28%     Rs 120+  0.27%
+    Rs 20-40     0.34%     Rs 70-120  0.24%
+
+The expectation was that charging this would penalise chain_order's
+deep-OTM bias and flip the ordering. It did not: chain_order's aggregate
+median entry is Rs 51, not Rs 11, because the CE/PE asymmetry partly
+CANCELS (deep-OTM PEs pay wide spreads, near-ATM CEs pay tight ones).
+The between-mode spread difference (0.0013R) is smaller than the
+already-insignificant gross difference (0.0056R).
+
+DECISION: default stays "chain_order". There is no evidence to justify
+changing it, and the 493-day study that adopted momentum_only ran with
+this behaviour. What changed is that the tie-break is now EXPLICIT,
+configurable and tested rather than an accident of list order -- and we
+now know it does not measurably affect P&L.
+
+OPEN HYPOTHESIS, deliberately NOT adopted: per-side tie-breaks looked
+better in both directions (nearest_atm on CEs +0.1401R vs +0.1210R;
+chain_order on PEs +0.1242R vs +0.0975R). Both gaps are within noise at
+n~5,000, and picking the best of a 2x2 grid on the same data it was
+measured on is exactly the in-sample overfitting this project's own
+condor entry warns about. Would need out-of-sample or live confirmation
+before being taken seriously.
+
 ## Historical data corruption is real but confined to far-OTM strikes (added 2026-08-04)
 
 Root-caused after the consistency checker was fixed to flag only
