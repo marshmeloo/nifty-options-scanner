@@ -7,6 +7,7 @@ trading off that state in production.
 
 Run: python -m pytest tests/test_dhan_source_second_underlying.py -q
 """
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -35,9 +36,13 @@ def test_iv_history_round_trips_per_symbol(tmp_path, monkeypatch):
 
 
 def test_oi_history_round_trips_per_symbol(tmp_path, monkeypatch):
+    # _load_oi_history resets on any date other than today (by design --
+    # it's a daily-reset cache), so the sample's own "date" must be
+    # today's, not a hardcoded string that goes stale at midnight.
+    today = date.today().isoformat()
     monkeypatch.setattr(ds, "OI_HISTORY_PATH", tmp_path / "oi_history.json")
-    ds._save_oi_history({"date": "2026-08-06", "samples": {"a": 1}}, symbol="NIFTY")
-    ds._save_oi_history({"date": "2026-08-06", "samples": {"b": 2}}, symbol="BANKNIFTY")
+    ds._save_oi_history({"date": today, "samples": {"a": 1}}, symbol="NIFTY")
+    ds._save_oi_history({"date": today, "samples": {"b": 2}}, symbol="BANKNIFTY")
     assert ds._load_oi_history(symbol="NIFTY")["samples"] == {"a": 1}
     assert ds._load_oi_history(symbol="BANKNIFTY")["samples"] == {"b": 2}
 
