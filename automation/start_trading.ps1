@@ -54,8 +54,17 @@ if (-not $env:DHAN_ACCESS_TOKEN -or -not $env:DHAN_CLIENT_ID) {
     exit 1
 }
 
-# --- Idempotency: clean up anything already tracked from an earlier run ---
+# --- Idempotency: clean up anything already tracked from an earlier run.
+#     ABORT if stop_trading.ps1 couldn't stop everything (e.g. a
+#     process stuck at a different privilege level) -- launching fresh
+#     copies on top of ones still alive means two processes writing
+#     the same state file at once, a real corruption risk, not just
+#     redundant. ---
 & (Join-Path $PSScriptRoot "stop_trading.ps1") | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Log "ABORT: stop_trading.ps1 could not stop everything from a previous run (see the lines above in this log). Resolve the stuck process manually (Task Manager, or re-run stop_trading.ps1 'as Administrator'), then retry."
+    exit 1
+}
 
 # --- One-shot pre-market brief. Blocks until it finishes (it's meant
 #     to be read before the session starts, not run continuously),

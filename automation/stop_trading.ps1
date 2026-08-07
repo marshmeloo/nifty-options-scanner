@@ -14,6 +14,18 @@
   run when some tracked processes already exited on their own --
   start_trading.ps1 calls this itself first on every run, purely to
   clean up before starting fresh.
+
+  A single process that can't be stopped (e.g. "Access is denied" --
+  usually means it was started at a DIFFERENT privilege level than
+  this script is running at now, most commonly because start_trading
+  was once run "as Administrator") does NOT abort the rest of this
+  loop; every other tracked process still gets stopped. Any process
+  that couldn't be stopped stays in the pid file (with everything else
+  removed from it) and this script exits non-zero, so
+  start_trading.ps1 knows to ABORT rather than launch a second copy of
+  that strategy on top of one that's still alive -- two processes
+  writing the same state file at once is a real corruption risk, not
+  just redundant.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -37,17 +49,34 @@ if (-not (Test-Path $pidFile)) {
 }
 
 $tracked = Get-Content $pidFile -Raw | ConvertFrom-Json
+$stillRunning = @{}
+
 foreach ($prop in $tracked.PSObject.Properties) {
     $script = $prop.Name
     $procId = $prop.Value
     $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
-    if ($proc) {
-        Stop-Process -Id $procId -Force
-        Log "Stopped $script (PID $procId)"
-    } else {
+    if (-not $proc) {
         Log "$script (PID $procId) already not running"
+        continue
+    }
+    try {
+        Stop-Process -Id $procId -Force -ErrorAction Stop
+        Log "Stopped $script (PID $procId)"
+    } catch {
+        $stillRunning[$script] = $procId
+        Log ("COULD NOT STOP $script (PID $procId): $($_.Exception.Message) -- " +
+             "likely a privilege mismatch (started elevated?). Fix: close it manually " +
+             "(Task Manager, or an elevated PowerShell: Stop-Process -Id $procId -Force), " +
+             "or re-run this script 'as Administrator'.")
     }
 }
 
-Remove-Item $pidFile -Force
-Log "stop_trading: done, pid file cleared."
+if ($stillRunning.Count -gt 0) {
+    $stillRunning | ConvertTo-Json | Set-Content -Path $pidFile
+    Log "stop_trading: $($stillRunning.Count) process(es) still running -- see above. Pid file kept for those only."
+    exit 1
+} else {
+    Remove-Item $pidFile -Force
+    Log "stop_trading: done, pid file cleared."
+    exit 0
+}
