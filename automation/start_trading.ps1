@@ -80,26 +80,31 @@ if ($premarketExit -eq 0) {
 # block on it being alive -- see that script's own docstring), but
 # giving its WebSocket connection a head start before anything reads
 # from it is harmless and slightly better than not.
+#
+# orderflow_feed.py's --strike-range 300 matches what was actually
+# being run manually before this automation existed -- narrower than
+# its own default (config.STRIKE_RANGE_POINTS, 800pts) if omitted.
 $scripts = @(
-    "orderflow_feed.py",
-    "main_live.py",
-    "main_condor.py",
-    "main_directional_spread.py",
-    "main_price_action.py",
-    "main_price_action_banknifty.py",
-    "dashboard_server.py"
+    @{ file = "orderflow_feed.py"; args = @("--strike-range", "300") },
+    @{ file = "main_live.py"; args = @() },
+    @{ file = "main_condor.py"; args = @() },
+    @{ file = "main_directional_spread.py"; args = @() },
+    @{ file = "main_price_action.py"; args = @() },
+    @{ file = "main_price_action_banknifty.py"; args = @() },
+    @{ file = "dashboard_server.py"; args = @() }
 )
 
 $tracked = @{}
-foreach ($script in $scripts) {
+foreach ($entry in $scripts) {
+    $script = $entry.file
     $name = $script -replace '\.py$', ''
     $stdout = Join-Path $logsDir "$($name)_stdout.log"
     $stderr = Join-Path $logsDir "$($name)_stderr.log"
-    $proc = Start-Process -FilePath "python" -ArgumentList $script -WorkingDirectory $root `
+    $proc = Start-Process -FilePath "python" -ArgumentList (@($script) + $entry.args) -WorkingDirectory $root `
         -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $tracked[$script] = $proc.Id
-    Log "Started $script (PID $($proc.Id))"
+    Log "Started $script $($entry.args -join ' ') (PID $($proc.Id))"
 }
 
 $tracked | ConvertTo-Json | Set-Content -Path $pidFile
