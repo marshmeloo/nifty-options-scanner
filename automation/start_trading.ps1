@@ -1,13 +1,15 @@
 <#
 .SYNOPSIS
-  Runs the pre-market brief, then starts all five live/paper strategy
-  loops in parallel, hidden (no visible console windows).
+  Runs the pre-market brief, then starts the order-flow feed, all five
+  live/paper strategy loops, and the read-only dashboard in parallel,
+  hidden (no visible console windows).
 
 .NOTES
   NOTHING launched here places a real broker order -- every strategy in
   this project is analytics/paper-tracking only (see each script's own
-  docstring). This just automates what you'd otherwise do by opening
-  five terminals by hand each morning.
+  docstring), and dashboard_server.py is read-only (never writes state,
+  never talks to Dhan/NSE itself). This just automates what you'd
+  otherwise do by opening seven terminals by hand each morning.
 
   REQUIRES DHAN_ACCESS_TOKEN / DHAN_CLIENT_ID to already be set as
   PERSISTENT Windows USER environment variables (via `setx`, run in
@@ -74,12 +76,18 @@ if ($premarketExit -eq 0) {
 }
 
 # --- Long-running strategy loops, launched in parallel, hidden windows ---
+# orderflow_feed.py first: strategies only READ its state file (never
+# block on it being alive -- see that script's own docstring), but
+# giving its WebSocket connection a head start before anything reads
+# from it is harmless and slightly better than not.
 $scripts = @(
+    "orderflow_feed.py",
     "main_live.py",
     "main_condor.py",
     "main_directional_spread.py",
     "main_price_action.py",
-    "main_price_action_banknifty.py"
+    "main_price_action_banknifty.py",
+    "dashboard_server.py"
 )
 
 $tracked = @{}
