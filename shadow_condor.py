@@ -121,6 +121,17 @@ class ShadowCondor:
     trough_pnl_inr: Optional[float] = None
     breach_days: int = 0    # cycles where spot was within BREACH_WARNING_BUFFER_POINTS of a short
     cycles_held: int = 0
+    # Per-leg entry premiums, so real costs can be charged after the
+    # fact (see spread_cost_study.py). net_credit alone cannot give
+    # these back, and they matter MORE here than for the 2-leg
+    # directional spread: the condor's hedges sit 300pts further OTM
+    # and price in single digits, a premium band whose measured
+    # percentage spread is several times worse than its shorts'.
+    # pnl_inr stays GROSS -- this module has never applied a cost model.
+    short_ce_premium: Optional[float] = None
+    short_pe_premium: Optional[float] = None
+    hedge_ce_premium: Optional[float] = None
+    hedge_pe_premium: Optional[float] = None
 
 
 def _intrinsic(strike: float, option_type: str, spot: float) -> float:
@@ -259,6 +270,10 @@ def _scan_day(day: str, policy: CondorPolicy, cycles: list, day_cache: dict,
             opened_at=ts.isoformat(), net_credit=plan.net_credit,
             max_profit_inr=plan.max_profit_inr, max_loss_inr=plan.max_loss_inr,
             nominal_expiry=nominal_expiry.isoformat(),
+            short_ce_premium=plan.short_ce_premium,
+            short_pe_premium=plan.short_pe_premium,
+            hedge_ce_premium=plan.hedge_ce_premium,
+            hedge_pe_premium=plan.hedge_pe_premium,
         )
 
         window = _window_days(all_days, day, nominal_expiry)

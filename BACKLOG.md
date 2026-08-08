@@ -3,6 +3,56 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Iron condor: FAILS both tests the directional spread passed -- running live on negative evidence (added 2026-08-07)
+
+Ran the condor through the identical two tests. It fails both, clearly.
+
+TEST 1 -- REAL COSTS, current live config (23-30 band / 300pt hedge),
+full 493-day period. Gross was already -Rs 18,941; costs make it worse:
+
+    scenario    n    win%     GROSS        NET      taxes   spread
+    median     87   70.1%   -18,941    -29,034      8,677    1,416
+    p75        87   70.1%   -18,941    -30,811      8,677    3,193
+    p90        87   70.1%   -18,941    -32,217      8,677    4,599
+
+TEST 2 -- WALK-FORWARD (fit 2024-08..2025-12, test on 2026), NET @ p90:
+
+    combo         IS net     OOS net    OOS RoR
+    15-25/200    -52,556     -21,180     -8.24%
+    15-25/300    -34,218     +12,066      4.39%
+    15-25/400    +26,553     -15,501    -11.12%
+    23-30/200     -8,274     -21,370     -7.97%
+    23-30/300    -35,482      +3,265      1.04%
+    23-30/400    +36,025      -8,407      -4.13%   <- IS winner
+    30-45/200    -21,613     -15,774     -6.15%
+    30-45/300    -26,183     -34,698     -9.82%
+    30-45/400    -61,615     +12,184      4.10%
+    40-60/200    -35,049      -8,268     -3.39%
+    40-60/300     -9,747     -28,021     -7.62%
+    40-60/400    -64,125     -17,873     -4.33%
+
+  - only 3 of 12 combos profitable out-of-sample (spread: 12 of 12)
+  - the in-sample winner (23-30/400, +Rs 36,025 IS) went NEGATIVE
+    out-of-sample (-Rs 8,407) -- the textbook overfitting signature
+  - ZERO combos positive in BOTH periods. Not one. Every combo that
+    looked good in one period lost in the other, i.e. the sign itself
+    is noise.
+
+WHY THE COST MODEL HAD TO BE BAND-AWARE FOR THIS: the condor's hedges
+sit 300pts OTM and price in single digits (verified against a real live
+position: hedges at Rs 5.65 / Rs 8.40) where measured spread is 0.823%
+median / 5.714% p90, vs its shorts' ~0.30%. spread_cost_study gained
+MEASURED_SPREAD_BY_BAND + multi_leg_costs() so each leg is costed at
+its own real band; a flat rate would have understated this materially.
+Note the condor is HELPED by never auto-closing (condor_tracker only
+stages breach warnings) -- every position settles at expiry, so it
+pays 4 leg-crossings, not 8. Even with that advantage it loses.
+
+STATUS: main_condor.py is still in the daily automation with an open
+paper position. This is now the only strategy here running live
+against measured negative evidence at every config tested. Flagged for
+a decision -- not silently disabled, since that is the user's call.
+
 ## Directional spread: PASSES walk-forward validation -- edge is real, config choice was noise (added 2026-08-07)
 
 Follow-up to the cost study below. That entry's caveat was that the

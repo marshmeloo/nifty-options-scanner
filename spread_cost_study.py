@@ -58,6 +58,86 @@ import config_directional_spread as dcfg
 # band -- see this module's docstring. NOT assumed.
 MEASURED_SPREAD_PCT = {"median": 0.259, "p75": 0.311, "p90": 0.340}
 
+# Spread BY PREMIUM LEVEL, same 5-day recorded-book measurement
+# (spread_study.py, regular session only). A flat figure is fine for the
+# directional spread, whose two legs both sit in the Rs 40-70 range, but
+# NOT for the iron condor: its shorts price around Rs 23-30 while its
+# hedges (300pts further OTM) price under Rs 10, where percentage
+# spreads are dramatically worse. Verified on a real live condor:
+# hedges at Rs 5.65 / Rs 8.40, i.e. squarely in the "under 20" bucket
+# below. Costing those at the shorts' spread would understate the real
+# cost several-fold.
+MEASURED_SPREAD_BY_BAND = {
+    #  (premium_low, premium_high): {scenario: spread % of mid}
+    (0, 20):     {"median": 0.823, "p75": 3.636, "p90": 5.714},
+    (20, 50):    {"median": 0.301, "p75": 0.343, "p90": 0.404},
+    (50, 100):   {"median": 0.249, "p75": 0.279, "p90": 0.309},
+    (100, 200):  {"median": 0.226, "p75": 0.251, "p90": 0.270},
+    (200, 1e9):  {"median": 0.249, "p75": 0.271, "p90": 0.291},
+}
+
+
+def spread_pct_for_premium(premium: float, scenario: str = "median") -> float:
+    """
+    Measured spread % for a leg at this premium level. Deep-OTM legs
+    (the condor's hedges) get their own, far worse, real figure rather
+    than inheriting a near-ATM leg's.
+    """
+    for (lo, hi), row in MEASURED_SPREAD_BY_BAND.items():
+        if lo <= premium < hi:
+            return row[scenario]
+    return MEASURED_SPREAD_BY_BAND[(200, 1e9)][scenario]
+
+
+def multi_leg_costs(leg_premiums: list, scenario: str = "median",
+                    lots: int = 1, lot_size: int = None,
+                    expiry_settled: bool = False,
+                    sold_legs: list = None) -> dict:
+    """
+    Statutory + spread cost for an arbitrary multi-leg structure, each
+    leg costed at the spread measured for ITS OWN premium level.
+
+    `sold_legs` is a parallel list of bools (True = this leg is SOLD at
+    open, so STT applies to it). Defaults to all-sold, which is wrong
+    for a hedge -- callers should pass it explicitly.
+
+    Returns {"taxes", "spread", "total"} in rupees.
+    """
+    import config
+
+    lot_size = lot_size or getattr(config, "NIFTY_LOT_SIZE", 65)
+    qty = lots * lot_size
+    sold_legs = sold_legs if sold_legs is not None else [True] * len(leg_premiums)
+
+    def _rate(name, default):
+        return getattr(config, name, default)
+
+    n_legs = len(leg_premiums)
+    n_orders = n_legs if expiry_settled else n_legs * 2
+    brokerage = _rate("BROKERAGE_PER_ORDER", 20.0) * n_orders
+
+    sell_turnover = sum(p * qty for p, sold in zip(leg_premiums, sold_legs) if sold)
+    buy_turnover = sum(p * qty for p, sold in zip(leg_premiums, sold_legs) if not sold)
+    if not expiry_settled:
+        # Closing reverses every leg. Entry premiums are the honest
+        # available proxy for exit turnover (see _brokerage_and_taxes).
+        sell_turnover += buy_turnover
+        buy_turnover += sum(p * qty for p, sold in zip(leg_premiums, sold_legs) if sold)
+
+    stt = _rate("STT_RATE_SELL", 0.001) * sell_turnover
+    exch = _rate("EXCHANGE_TXN_RATE", 0.00035) * (buy_turnover + sell_turnover)
+    sebi = _rate("SEBI_TURNOVER_RATE", 0.000001) * (buy_turnover + sell_turnover)
+    stamp = _rate("STAMP_DUTY_RATE_BUY", 0.00003) * buy_turnover
+    gst = _rate("GST_RATE", 0.18) * (brokerage + exch + sebi)
+    taxes = brokerage + stt + exch + sebi + stamp + gst
+
+    crossings = 1 if expiry_settled else 2
+    spread = sum(
+        p * (spread_pct_for_premium(p, scenario) / 100.0) * qty * crossings
+        for p in leg_premiums
+    )
+    return {"taxes": taxes, "spread": spread, "total": taxes + spread}
+
 # Exit reasons that settle at expiry rather than being traded out, so
 # no closing spread is crossed. Matched against shadow_directional_
 # spread.py's own exit_reason values.
