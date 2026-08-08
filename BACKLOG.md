@@ -3,6 +3,59 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Directional spread: SURVIVES real costs -- the first strategy here that does (added 2026-08-07)
+
+shadow_directional_spread.py applies NO cost model -- its pnl_inr is
+fully gross (no brokerage, STT, exchange/GST, and no bid-ask crossing,
+since historical reconstruction prices every leg at LTP). So its
+headline +Rs 78,006 was an upper bound, not a result. Now measured
+properly.
+
+SPREAD COST IS MEASURED, NOT ASSUMED. spread_study.py against 5 days of
+real recorded order books (2026-08-03..07, 3,849 sampled cycles) inside
+this strategy's own Rs 40-70 short-premium band:
+median 0.259%, p75 0.311%, p90 0.340% -- notably TIGHTER than the
+0.2-0.6% the older momentum cost-sensitivity analysis had assumed.
+
+spread_cost_study.py charges both statutory/broker costs and the
+measured spread, per leg on GROSS premium (not net credit -- both legs
+cross their own book; charging the net would understate ~2.4x at these
+leg prices), 4 leg-crossings when traded out and 2 when settled at
+expiry (decided per trade by its own exit_reason, not assumed):
+
+    scenario   spread%     n    win%     NET total   net ex-biggest
+    gross          --    125   85.6%      +78,006             --
+    median      0.259    125   85.6%      +62,380        +60,161
+    p75         0.311    125   85.6%      +61,719        +59,502
+    p90         0.340    125   85.6%      +61,351        +59,135
+
+Even at the p90 spread it stays clearly positive, and it still survives
+removal of its own biggest winner (+Rs 59,135) -- the check that killed
+every commodity result and every MA-crossover variant.
+
+NET (p90) robustness detail:
+  - positive in all three calendar years: 2024 +3,200 / 2025 +44,028 /
+    2026 +14,123
+  - max drawdown only -Rs 5,589 against +Rs 61,351 final
+  - 113 of 125 trades sit in the POST-SEBI-lot-change regime
+    (+Rs 56,917), so this is not an artifact of a dead market structure
+  - avg win +Rs 973 vs avg loss -Rs 2,378 at an 85.6% win rate --
+    the classic credit-spread shape, with the win rate high enough to
+    carry it
+
+WORTH KNOWING: taxes/brokerage (Rs 12,336) dominate spread cost
+(Rs 3,291-4,320) by roughly 3x. The bid-ask crossing everyone worries
+about is NOT the main cost drag here; statutory + brokerage is. Total
+cost drag is ~21% of gross.
+
+STILL NOT VALIDATED, and the reason this isn't "adopt it": the
+strike-selection config was SWEPT on this same data (commit dbb4904,
+"Adopt sweep winner for directional spread strike selection 40-70/100"),
+so some in-sample optimism is baked in and this result cannot separate
+real edge from sweep-fitting. NEXT STEP: walk-forward validation -- fit
+on 2024-25, test untouched on 2026 -- before any sizing discussion.
+Live paper-trading so far is a much smaller sample than this backtest.
+
 ## Order flow: wired for reliability, book_imbalance recorded but NOT gated on (added 2026-08-07)
 
 orderflow_feed.py has been running live for a while but nothing ever

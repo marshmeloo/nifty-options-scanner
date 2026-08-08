@@ -145,6 +145,15 @@ class ShadowSpread:
     peak_pnl_inr: Optional[float] = None
     trough_pnl_inr: Optional[float] = None
     cycles_held: int = 0
+    # Per-leg entry premiums. Recorded so transaction/spread costs can be
+    # computed after the fact: net_credit alone (short - hedge) cannot
+    # give them back, but spread cost is charged on the GROSS premium of
+    # each leg crossed, not the net. pnl_inr here remains GROSS -- this
+    # module has never applied a cost model (see spread_cost_study.py,
+    # which does, rather than silently changing what pnl_inr has always
+    # meant in already-saved result files).
+    short_premium: Optional[float] = None
+    hedge_premium: Optional[float] = None
 
 
 def _parse_hhmm(s: str) -> dtime:
@@ -372,6 +381,8 @@ def _scan_day(day: str, policy: SpreadPolicy, cycles: list, day_cache: dict,
             max_loss_inr=plan.max_loss_inr,
             bias_label=bias_label,
             bias_score=round(bias_score, 2),
+            short_premium=plan.short_premium,
+            hedge_premium=plan.hedge_premium,
         )
 
         nominal_expiry = _nominal_expiry_date(ts.date())
