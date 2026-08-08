@@ -129,6 +129,30 @@ def best_bid_ask(strike: float, option_type: str, state: dict = None,
     return (bid, ask)
 
 
+def top_of_book(strike: float, option_type: str, state: dict = None,
+                now: float = None) -> dict:
+    """
+    {bid, ask, bid_qty, ask_qty} in one call -- for a caller (like
+    dhan_source.py's live snapshot builder) that wants all four instead
+    of calling best_bid_ask() separately, avoiding a second state load.
+    All four are None (never a guessed default) if the feed is stale,
+    the contract isn't subscribed, or the book's top level is empty.
+    """
+    contract = book_for(strike, option_type, state, now)
+    if not contract:
+        return {"bid": None, "ask": None, "bid_qty": None, "ask_qty": None}
+    depth = contract.get("depth") or []
+    if not depth:
+        return {"bid": None, "ask": None, "bid_qty": None, "ask_qty": None}
+    top = depth[0]
+    return {
+        "bid": top.get("bid_price") or None,
+        "ask": top.get("ask_price") or None,
+        "bid_qty": top.get("bid_qty") or None,
+        "ask_qty": top.get("ask_qty") or None,
+    }
+
+
 def spread_pct(strike: float, option_type: str, state: dict = None,
                now: float = None) -> float:
     """

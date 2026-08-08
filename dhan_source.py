@@ -50,6 +50,7 @@ import requests
 import config as cfg
 import oi_analytics
 import dhan_rate_limiter
+import orderflow
 from models import OptionQuote, MarketSnapshot, Candle
 from atomic_state import atomic_write_json
 
@@ -562,6 +563,21 @@ def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None,
         else:
             buildup_type = _classify_buildup(oi_change_pct, price_change_pct, cfg.OI_BUILDUP_PCT)
 
+        # orderflow_feed.py's WebSocket book is a purpose-built feed
+        # (correct field mapping by construction) and lower-latency than
+        # the REST chain's own best-effort field-name guessing (see
+        # _BID_KEYS/_ASK_KEYS above) -- prefer it per-field when its own
+        # staleness/subscription checks say it's actually available,
+        # falling back to the existing REST-guessed values otherwise
+        # (unchanged behaviour when orderflow_feed.py isn't running, or
+        # for a symbol/strike it was never subscribed to -- e.g. Bank
+        # Nifty, which it doesn't cover yet).
+        of_top = orderflow.top_of_book(strike, opt_type)
+        bid = of_top["bid"] if of_top["bid"] is not None else _first_present(side, _BID_KEYS)
+        ask = of_top["ask"] if of_top["ask"] is not None else _first_present(side, _ASK_KEYS)
+        bid_qty = of_top["bid_qty"] if of_top["bid_qty"] is not None else _first_present(side, _BID_QTY_KEYS)
+        ask_qty = of_top["ask_qty"] if of_top["ask_qty"] is not None else _first_present(side, _ASK_QTY_KEYS)
+
         chain.append(
             OptionQuote(
                 symbol=symbol,
@@ -582,10 +598,10 @@ def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None,
                 oi_change_pct_intraday=oi_intraday,
                 price_change_pct_intraday=price_intraday,
                 buildup_window_minutes=window_minutes,
-                bid=_first_present(side, _BID_KEYS),
-                ask=_first_present(side, _ASK_KEYS),
-                bid_qty=_first_present(side, _BID_QTY_KEYS),
-                ask_qty=_first_present(side, _ASK_QTY_KEYS),
+                bid=bid,
+                ask=ask,
+                bid_qty=bid_qty,
+                ask_qty=ask_qty,
             )
         )
 

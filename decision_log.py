@@ -23,6 +23,7 @@ import config
 import trade_tracker as tt
 import scanner
 import logic_version
+import orderflow
 
 LOG_PATH = Path(__file__).parent / "logs" / "decision_log.jsonl"
 LOG_PATH.parent.mkdir(exist_ok=True)
@@ -88,6 +89,18 @@ def _candidate_record(setup, plan, verdict, state: dict, opened_trade: dict,
         "learned_adjustment_notes": learn_notes,
         "risk_decision": verdict.decision,
         "risk_reasons": verdict.reasons,
+        # Recorded for future measurement ONLY -- does not affect
+        # final_decision anywhere in this function. orderflow_feed.py
+        # is a separate process; both are None whenever it isn't
+        # running, hasn't subscribed to this strike, or its book is
+        # stale (see orderflow.py's own docstring on why "unavailable"
+        # never gets a guessed default). The plan is to accumulate real
+        # readings alongside real outcomes and only ever gate on this
+        # if a proper study (matching this project's own bar for every
+        # other signal it's adopted) finds it actually predicts
+        # something -- see BACKLOG.md.
+        "book_imbalance": orderflow.book_imbalance(setup.strike, setup.option_type),
+        "total_quantity_imbalance": orderflow.total_quantity_imbalance(setup.strike, setup.option_type),
         "plan": {
             "entry": plan.entry, "target": plan.target, "stop": plan.stop,
             "lots": plan.lots, "stop_basis": getattr(plan, "stop_basis", ""),

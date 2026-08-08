@@ -3,6 +3,33 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Order flow: wired for reliability, book_imbalance recorded but NOT gated on (added 2026-08-07)
+
+orderflow_feed.py has been running live for a while but nothing ever
+read its output -- confirmed by grepping the whole codebase, only
+orderflow_recorder.py's session-spread logging (used by spread_study.py,
+an offline analysis tool) actually consumed it. Two changes:
+
+1. dhan_source.py's live snapshot builder now prefers orderflow.py's
+   real WebSocket book (bid/ask/bid_qty/ask_qty) over the REST chain's
+   own best-effort field-name guessing (_BID_KEYS/_ASK_KEYS), per
+   field, falling back to the REST-guessed value whenever orderflow
+   has nothing for that exact contract. This improves the RELIABILITY
+   of things already in use (fills via OptionQuote.buy_price/
+   sell_price, config.MAX_SPREAD_PCT's liquidity screen via
+   spread_pct) -- not a new trading rule, no adopt-after-evidence bar
+   to clear.
+
+2. decision_log.py now records orderflow.book_imbalance() and
+   total_quantity_imbalance() on every logged candidate (opened or
+   not), alongside everything else already logged there. Deliberately
+   NOT gating anything on it yet -- consistent with every other signal
+   this project has adopted (SCORING_MODE=momentum_only after a
+   493-day study, tie-break measured and left unchanged, etc.), this
+   needs to accumulate real readings against real outcomes before
+   there's any evidence it predicts something. Revisit once enough
+   history exists in decision_log.jsonl to actually measure it.
+
 ## Condor "reverse the trade" idea: tested properly, makes it WORSE not better (added 2026-08-06)
 
 Live dashboard question: the condor's own backtest (87 trades,
