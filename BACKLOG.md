@@ -3,6 +3,67 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Directional spread: PASSES walk-forward validation -- edge is real, config choice was noise (added 2026-08-07)
+
+Follow-up to the cost study below. That entry's caveat was that the
+live strike config (40-70/100) had been swept over the FULL history, so
+its result couldn't separate real edge from sweep-fitting. Tested
+properly: re-ran the whole 12-combo sweep on 2024-08..2025-12 ONLY,
+then measured every combo on 2026 -- data the selection never saw. All
+figures NET (real costs, p90 measured spread).
+
+    combo          IS net      OOS net        OOS return-on-risk
+    30-60/100     +31,117      +12,145              6.35%
+    30-60/150     +36,091      +15,632              5.81%
+    30-60/200     +35,367      +19,158              6.08%
+    40-70/100     +47,228      +14,123              7.87%   <- currently live
+    40-70/150     +67,038      +17,996              6.46%
+    40-70/200     +79,157      +14,548              4.22%
+    50-85/100     +40,813      +15,653              8.72%
+    50-85/150     +75,127      +22,301              7.83%
+    50-85/200     +91,138      +17,211              4.94%   <- IS winner
+    65-100/100    +45,271      +20,826             12.00%
+    65-100/150    +73,180      +27,643             10.27%
+    65-100/200    +87,065      +29,142              7.82%
+
+FINDING 1 -- THE EDGE IS REAL. All 12 combos profitable out-of-sample,
+net of real costs. Overfitting collapses out-of-sample; this doesn't.
+First strategy in this project to clear that bar (compare: every
+commodity result and every MA-crossover variant died on a far weaker
+check).
+
+FINDING 2 -- THE CONFIG CHOICE WAS NOISE. The in-sample winner
+(50-85/200) ranked 7th of 12 out-of-sample. Picking the best config
+in-sample gave a middling one going forward. Harmlessly so, since
+everything worked, but it confirms config selection here is not
+signal.
+
+FINDING 3 -- RAW RUPEES MISLEAD, BECAUSE THE COMBOS DON'T RISK THE SAME
+AMOUNT. A 200pt hedge is a 200pt wing, i.e. roughly double the max loss
+per trade of a 100pt one. The raw-rupee OOS "winner" (65-100/200,
++Rs 29,142) risked Rs 372,762 to earn it -- 7.82% return on risk,
+6th of 12 -- while 65-100/100 earned Rs 20,826 on Rs 173,570 risked
+(12.00%, best). Any future comparison across hedge distances must be
+risk-adjusted or it is measuring position size, not edge.
+
+WHAT REPLICATES ACROSS BOTH PERIODS (and what doesn't):
+  - PREMIUM BAND: replicates cleanly. The 30-60 band is the WORST in
+    both periods (IS avg ~6.3% RoR, OOS ~6.1%); 65-100 the best or
+    near-best in both (IS ~12.3%, OOS ~10.0%). Trustworthy.
+  - HEDGE DISTANCE: does NOT cleanly replicate. Narrower is better in
+    3 of 4 bands OOS but only 2 of 4 IS, and the periods disagree on
+    which bands. Weak evidence -- do not act on it.
+
+NOT CHANGING THE LIVE CONFIG on this. 40-70/100 sits mid-pack and is
+positive in both periods (11.60% RoR in-sample, 7.87% out). Switching
+to whatever topped the OOS table would repeat the exact error Finding 2
+just diagnosed, on a sample now looked at repeatedly. Also unmeasured
+here: a higher premium band means a short strike closer to ATM, which
+gets TESTED more often -- return-on-risk against max_loss says nothing
+about that path risk. The one defensible read is that the lowest band
+(30-60) is consistently worst, and the config already moved off it on
+2026-08-02.
+
 ## Directional spread: SURVIVES real costs -- the first strategy here that does (added 2026-08-07)
 
 shadow_directional_spread.py applies NO cost model -- its pnl_inr is
