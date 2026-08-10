@@ -564,3 +564,26 @@ STRONG_TAG_WIN_RATE = 0.65
 # Only a LOSS arms this -- a WIN or EOD_CLOSE isn't evidence the setup
 # was wrong. State resets daily along with the rest of open_trades.json.
 REENTRY_PRICE_TOLERANCE_PCT = 3.0
+
+# Direction-scoped chase cooldown -- a DIFFERENT pathology from the
+# price-tolerance gate above, which is keyed by (strike, option_type)
+# and therefore blind to a losing read repeated across DIFFERENT
+# strikes. Seen on 2026-08-10: 8 CE trades, 8 different strikes
+# (24550 through 24900), one after another as each got stopped out --
+# no two shared a strike, so REENTRY_PRICE_TOLERANCE_PCT never fired
+# once. Rs -5,153 for the day.
+#
+# Measured against the full live trade journal (44 trades, 2026-07-21
+# through 2026-08-10) before adding this: 93% of trades (41/44)
+# belonged to a same-day, same-direction cluster opened within this
+# many minutes of the prior same-direction trade's close. Actual
+# cluster P&L: Rs -12,476. Blocking continuation ONLY after a loss
+# (matching REENTRY_PRICE_TOLERANCE_PCT's own "only a LOSS arms this"
+# rule -- a win isn't evidence the read was wrong) would have kept
+# Rs +518 instead. Still true with 2026-08-10 excluded entirely
+# (Rs -7,324 actual vs Rs +1,735 with the rule), so this isn't just
+# today's outlier.
+#
+# 30 minutes matches the gap used in that measurement, not a separately
+# tuned value -- revisit if live data suggests a different window.
+DIRECTION_CHASE_COOLDOWN_MINUTES = 30

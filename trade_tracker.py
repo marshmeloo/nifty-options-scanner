@@ -69,12 +69,15 @@ def load_open_trades() -> dict:
         data = json.loads(OPEN_TRADES_PATH.read_text())
         if data.get("date") == date.today().isoformat():
             data.setdefault("stop_cooldowns", {})
+            data.setdefault("direction_cooldowns", {})
             return data
         if data.get("trades"):
             data["_stale_from_previous_session"] = True
             data.setdefault("stop_cooldowns", {})
+            data.setdefault("direction_cooldowns", {})
             return data
-    return {"date": date.today().isoformat(), "trades": [], "opened_today": 0, "stop_cooldowns": {}}
+    return {"date": date.today().isoformat(), "trades": [], "opened_today": 0,
+            "stop_cooldowns": {}, "direction_cooldowns": {}}
 
 
 def settle_stale_trades(state: dict, snapshot=None) -> list:
@@ -705,6 +708,7 @@ def update_open_trades(state: dict, snapshot) -> list:
             _append_journal(trade)
             if outcome == "LOSS":
                 _record_stop_cooldown(state, trade)
+                _record_direction_cooldown(state, trade)
             closed_this_cycle.append(trade)
         else:
             trade["current_ltp"] = current_ltp
@@ -866,14 +870,53 @@ def _record_stop_cooldown(state: dict, trade: dict):
     )
 
 
+def is_direction_chase(state: dict, option_type: str, now: datetime) -> bool:
+    """
+    True if a trade in the SAME DIRECTION (option_type) stopped out
+    within the last config.DIRECTION_CHASE_COOLDOWN_MINUTES -- checked
+    regardless of strike.
+
+    A different pathology from is_repeat_of_stopped_plan's per-strike
+    price check, which is blind to the same losing read repeated across
+    DIFFERENT strikes as each attempt stops out and the option chain
+    shifts underneath it -- see config.py's own comment on
+    DIRECTION_CHASE_COOLDOWN_MINUTES for the 2026-08-10 incident (8 CE
+    trades, 8 different strikes, one after another, Rs -5,153) that
+    prompted this and the measurement behind the design.
+
+    Loss-gated only, matching REENTRY_PRICE_TOLERANCE_PCT's own stated
+    philosophy: a WIN isn't evidence the directional read was wrong,
+    only a LOSS is -- a working read is allowed to continue.
+    """
+    entries = state.get("direction_cooldowns", {}).get(option_type, [])
+    for e in entries:
+        closed_at = e.get("closed_at")
+        if not closed_at:
+            continue
+        gap_minutes = (now - datetime.fromisoformat(closed_at)).total_seconds() / 60
+        if 0 <= gap_minutes <= config.DIRECTION_CHASE_COOLDOWN_MINUTES:
+            return True
+    return False
+
+
+def _record_direction_cooldown(state: dict, trade: dict):
+    """Arm the direction-chase gate for this option_type at the time it failed."""
+    state.setdefault("direction_cooldowns", {})
+    state["direction_cooldowns"].setdefault(trade["option_type"], []).append(
+        {"closed_at": trade["closed_at"]}
+    )
+
+
 def try_open_new_trade(setups_with_plans, state, snapshot, bias_label=None, bias_score=None):
     """
     setups_with_plans: list of (Setup, TradePlan, RiskVerdict), best-first.
     Opens AT MOST ONE new trade per cycle, only if: daily cap not reached,
     conviction clears the raised bar (after the learned adjustment),
-    there isn't already an open trade on the same strike+type, and it
-    isn't a repeat of a plan that already stopped out today at the same
-    price (see is_repeat_of_stopped_plan).
+    there isn't already an open trade on the same strike+type, it isn't
+    a repeat of a plan that already stopped out today at the same price
+    (see is_repeat_of_stopped_plan), and it isn't chasing the same
+    losing directional read across a different strike (see
+    is_direction_chase).
     Returns the newly opened trade dict, or None.
     """
     if state["opened_today"] >= config.MAX_NEW_TRADES_PER_DAY:
@@ -887,6 +930,8 @@ def try_open_new_trade(setups_with_plans, state, snapshot, bias_label=None, bias
         if (setup.strike, setup.option_type) in open_keys:
             continue
         if is_repeat_of_stopped_plan(state, setup.strike, setup.option_type, plan.entry):
+            continue
+        if is_direction_chase(state, setup.option_type, snapshot.timestamp):
             continue
 
         conviction_bar, blocked = expiry_day_rules(setup.expiry, snapshot.timestamp)

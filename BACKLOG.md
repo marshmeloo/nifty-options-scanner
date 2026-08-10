@@ -3,6 +3,46 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Direction-chase cooldown: shipped, measured before adopting (added 2026-08-10)
+
+2026-08-10: momentum opened 8 CE trades, 8 different strikes (24550
+through 24900), one after another as each got stopped out and the
+chain shifted -- Rs -5,153 for the day. The existing re-entry gate
+(REENTRY_PRICE_TOLERANCE_PCT, trade_tracker.is_repeat_of_stopped_plan)
+never fired once: it's keyed by (strike, option_type), so no two of
+those eight ever collided on its own terms. It was built for a
+DIFFERENT pathology (2026-07-28: re-ran the same failed plan at the
+same strike, same price) and was never meant to catch this one.
+
+Measured against the real trade journal before adding anything (44
+trades, 2026-07-21..2026-08-10): 93% of trades (41/44) belonged to a
+same-day, same-direction cluster (2+ trades, same option_type, each
+opened within 30min of the prior same-direction trade's CLOSE).
+Actual cluster P&L: Rs -12,476, 14.6% win rate. A rule that blocks
+continuation ONLY after a same-direction LOSS (matching
+REENTRY_PRICE_TOLERANCE_PCT's own "only a LOSS arms this" philosophy --
+a WIN isn't evidence the read was wrong) would have kept Rs +518
+instead. Checked it wasn't just 2026-08-10 driving the result: excluding
+that day entirely, actual was Rs -7,324 and the rule would have given
+Rs +1,735 -- same direction, same order of magnitude, so the pattern
+predates today's incident.
+
+SHIPPED: config.DIRECTION_CHASE_COOLDOWN_MINUTES = 30 (matches the
+measured clustering window, not separately tuned).
+trade_tracker.is_direction_chase()/_record_direction_cooldown() --
+direction-scoped (option_type only, any strike), loss-gated only,
+state resets daily alongside the existing per-strike gate. Wired into
+try_open_new_trade (the actual block), decision_log.py
+(REJECTED_DIRECTION_CHASE, so it shows up in the audit trail like every
+other rejection reason), and main_live.py's "no new trade" log
+explanation.
+
+CAVEAT: 44 trades is a thin sample and this is a within-sample
+counterfactual (replaying the same trades, not a fresh backtest) -- it
+shows the pattern has been bad SO FAR, not that the specific 30-minute
+window is proven forward. Watch it the same way every other threshold
+in this project has been watched before being trusted further.
+
 ## Iron condor: FAILS both tests the directional spread passed -- running live on negative evidence (added 2026-08-07)
 
 Ran the condor through the identical two tests. It fails both, clearly.

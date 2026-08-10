@@ -55,6 +55,13 @@ def _candidate_record(setup, plan, verdict, state: dict, opened_trade: dict,
             f"{config.REENTRY_PRICE_TOLERANCE_PCT}% of {plan.entry} -- same entry means the same "
             f"stop and target, i.e. re-running a plan that already failed."
         )
+    elif tt.is_direction_chase(state, setup.option_type, datetime.now()):
+        final_decision = "REJECTED_DIRECTION_CHASE"
+        detail = (
+            f"A {setup.option_type} trade (different strike) stopped out within the last "
+            f"{config.DIRECTION_CHASE_COOLDOWN_MINUTES} minutes -- chasing the same losing "
+            f"directional read across strikes, not a fresh independent signal."
+        )
     elif verdict.decision != "APPROVED":
         final_decision = "REJECTED_RISK"
         detail = "; ".join(verdict.reasons) if verdict.reasons else "Risk check rejected this plan."

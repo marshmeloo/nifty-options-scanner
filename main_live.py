@@ -329,6 +329,8 @@ def run_once(expiry: str, state: dict):
                 reason = expiry_blocked
             elif tt.is_repeat_of_stopped_plan(state, best_setup.strike, best_setup.option_type, best_plan.entry):
                 reason = f"repeat of a plan already stopped out today near entry {best_plan.entry}"
+            elif tt.is_direction_chase(state, best_setup.option_type, snapshot.timestamp):
+                reason = f"chasing {best_setup.option_type} -- a same-direction trade stopped out within the last {config.DIRECTION_CHASE_COOLDOWN_MINUTES}min"
             elif adjusted_score < conviction_bar:
                 reason = f"adjusted score {adjusted_score} < bar {conviction_bar}"
                 if learn_notes:

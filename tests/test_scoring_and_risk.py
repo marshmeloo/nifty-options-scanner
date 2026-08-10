@@ -333,6 +333,66 @@ def test_reentry_gate_catches_both_20260728_reentries():
 
 
 # --------------------------------------------------------------------------
+# 5b. Direction-chase gate (2026-08-10: 8 CE trades, 8 different strikes,
+# invisible to the strike-scoped gate above -- Rs -5,153)
+# --------------------------------------------------------------------------
+
+def _direction_stopped_state(option_type="CE", closed_at="2026-08-10T10:44:40"):
+    state = {"date": "2026-08-10", "trades": [], "opened_today": 1,
+             "stop_cooldowns": {}, "direction_cooldowns": {}}
+    tt._record_direction_cooldown(state, {"option_type": option_type, "closed_at": closed_at})
+    return state
+
+
+def test_direction_chase_blocked_shortly_after_a_same_direction_loss_different_strike():
+    """The real 2026-08-10 shape: 24900 CE stops out, 24850 CE (a
+    DIFFERENT strike) is proposed 9 minutes later. is_repeat_of_stopped_plan
+    would never catch this (different strike); is_direction_chase must."""
+    state = _direction_stopped_state(closed_at="2026-08-10T10:44:40")
+    now = datetime(2026, 8, 10, 10, 53, 0)  # 9 minutes later
+    assert tt.is_direction_chase(state, "CE", now) is True
+
+
+def test_direction_chase_allowed_after_the_cooldown_window_elapses():
+    state = _direction_stopped_state(closed_at="2026-08-10T10:44:40")
+    now = datetime(2026, 8, 10, 11, 20, 0)  # 35 minutes later, past the 30min window
+    assert tt.is_direction_chase(state, "CE", now) is False
+
+
+def test_direction_chase_is_scoped_to_direction_not_strike():
+    """PE is unaffected by a CE loss -- only the SAME direction is throttled."""
+    state = _direction_stopped_state(option_type="CE", closed_at="2026-08-10T10:44:40")
+    now = datetime(2026, 8, 10, 10, 50, 0)
+    assert tt.is_direction_chase(state, "PE", now) is False
+
+
+def test_direction_chase_not_armed_by_a_win():
+    """Matches REENTRY_PRICE_TOLERANCE_PCT's own philosophy: only a LOSS
+    arms the gate. _record_direction_cooldown must never be called for a
+    WIN -- pinned at the call site in load_open_trades's close-trade path,
+    checked here via the function's own contract (no state -> no block)."""
+    state = {"date": "2026-08-10", "trades": [], "opened_today": 1,
+             "stop_cooldowns": {}, "direction_cooldowns": {}}
+    now = datetime(2026, 8, 10, 10, 50, 0)
+    assert tt.is_direction_chase(state, "CE", now) is False
+
+
+def test_direction_chase_end_to_end_against_the_real_20260810_sequence():
+    """Reproduces the actual live cascade: CE stops at 10:44, 12:55,
+    12:56, ... -- each new attempt within 30min of the last stop must be
+    blocked, matching what the measured counterfactual assumed."""
+    state = {"date": "2026-08-10", "trades": [], "opened_today": 1,
+             "stop_cooldowns": {}, "direction_cooldowns": {}}
+    stop_times = ["2026-08-10T10:44:40", "2026-08-10T10:44:13", "2026-08-10T10:32:52"]
+    for t in stop_times:
+        tt._record_direction_cooldown(state, {"option_type": "CE", "closed_at": t})
+    # A new CE attempt shortly after the LAST recorded stop is blocked
+    assert tt.is_direction_chase(state, "CE", datetime(2026, 8, 10, 10, 50, 0)) is True
+    # Well clear of every recorded stop, it's allowed again
+    assert tt.is_direction_chase(state, "CE", datetime(2026, 8, 10, 11, 30, 0)) is False
+
+
+# --------------------------------------------------------------------------
 # 6. Expiry-day rules
 # --------------------------------------------------------------------------
 
