@@ -3,6 +3,52 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Condor combined (profit-target + IV-rank): both periods independently positive -- best evidence yet, still not adopted (added 2026-08-11)
+
+Direct follow-up to the two entries below, which each independently
+raised the same concern: both the profit-target rule and the IV-rank
+gate improved the FULL period, but each left the 2024-25 (IS) half
+still net negative, with 2026 (OOS) carrying the whole improvement --
+raising a real possibility that 2026 was simply a more favourable
+condor regime generally, not that either fix was structural. Tested
+the obvious next thing: run both together.
+
+    period          baseline       PT 50% only    IV rank>=20 only   COMBINED
+    IS (2024-25)    -35,482        -15,786        -10,457            +23,432
+    OOS (2026)       +3,265        +15,090         +19,862           +14,249
+    FULL PERIOD     -32,217           -696          +9,405           +37,681
+
+BOTH periods are independently positive for the first time. That
+directly weakens the regime-luck concern -- the strategy now works in
+the exact period that previously did NOT support "this only works
+because of a favourable 2026." Full period: 55 trades, 81.8% win,
++Rs 37,681 net (real p90 costs) vs baseline's -Rs 32,217.
+
+Checked for the same outlier-concentration failure mode that killed
+every commodity/MA-crossover result earlier this session: monthly
+breakdown across 18 months, top-3-by-magnitude months sum to only 20%
+of the total (Rs 7,567 of Rs 37,681) -- removing them still leaves
++Rs 30,114. 13 of 18 months are individually positive. Not a
+concentration artifact.
+
+REMAINING CAVEATS, stated plainly:
+  - 55 trades over ~2 years is still a thin sample by this project's
+    own standard (the validated directional spread has 137).
+  - This exact combination (PT 50%, IV rank>=20) was hand-picked from
+    each rule's own best individual full-period candidate, not swept
+    across nearby values (PT 40/60%, IV rank 15/25, etc.) the way the
+    directional spread's strike config was. Cannot yet rule out that a
+    slightly different pair of numbers does meaningfully better or
+    worse -- i.e. the SAME overfitting risk already flagged for the
+    condor's strike-config sweep applies to this combination too.
+  - Still backtest-only. Neither rule is wired into the live tracker;
+    condor_tracker.py still has no profit-target exit, no stop-loss,
+    and no IV check. This is the strongest case yet for actually
+    building it live, but that is a real change to a currently-running
+    strategy and needs an explicit decision, not a silent default.
+
+## Condor IV-regime entry gate: strongest single lever found so far -- same "OOS carries it" caveat as the profit-target rule (added 2026-08-11)
+
 ## Condor IV-regime entry gate: strongest single lever found so far -- same "OOS carries it" caveat as the profit-target rule (added 2026-08-11)
 
 Researched why iron condor selling is supposed to work at all in real
