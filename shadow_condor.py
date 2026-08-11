@@ -74,6 +74,7 @@ from typing import Optional
 
 import condor_risk_checker
 import config_condor as ccfg
+import india_vix_source as ivs
 import price_action
 import snapshot_recorder
 from condor_plan_generator import build_condor_plan
@@ -105,6 +106,19 @@ class CondorPolicy:
     # "measure before adopting" bar as the direction-chase gate.
     profit_target_pct: float = None            # close at this % of max_profit_inr
     stop_loss_credit_multiple: float = None    # close at a loss of this many x net_credit_inr
+    # Entry-side volatility-regime filter. condor_scanner.py has NO IV
+    # check at all today -- it sells the same way every week regardless
+    # of whether IV is rich or cheap. Both None (default) preserves
+    # exact prior behaviour. `vix_history` is [(date_iso, close), ...]
+    # from india_vix_source.py -- passed in once, not re-fetched per
+    # cycle. Thresholds here must be FIXED, pre-specified values (a
+    # literature number, or a round one) -- never derived from the
+    # backtest's own sample, which would be look-ahead (a live decision
+    # cannot know "today's rank relative to the eventual median of the
+    # next two years").
+    min_iv_rank: float = None
+    min_iv_percentile: float = None
+    vix_history: list = None
 
     def resolved_min_days_to_expiry(self) -> int:
         if self.min_days_to_expiry is not None:
@@ -257,7 +271,26 @@ def _scan_day(day: str, policy: CondorPolicy, cycles: list, day_cache: dict,
 
     cache = _ContextCache()
     condors = []
-    skips = {"no_candidate": 0, "coverage_gap": 0, "risk_rejected": 0}
+    skips = {"no_candidate": 0, "coverage_gap": 0, "risk_rejected": 0, "iv_regime_too_low": 0}
+
+    # Computed once per DAY, not per cycle -- IV rank/percentile is a
+    # daily figure (see india_vix_source.py), re-deriving it every
+    # 5-min cycle would be wasted work for an identical answer.
+    iv_gate_active = policy.min_iv_rank is not None or policy.min_iv_percentile is not None
+    iv_ok_today = True
+    if iv_gate_active:
+        regime = ivs.iv_rank_and_percentile(policy.vix_history or [], day)
+        rank, pct = regime["iv_rank"], regime["iv_percentile"]
+        # Unknown regime (no VIX data for this date, or not enough
+        # trailing history yet) fails CLOSED -- an entry filter that
+        # can't be evaluated is not evidence the regime is favourable.
+        if rank is None or pct is None:
+            iv_ok_today = False
+        else:
+            if policy.min_iv_rank is not None and rank < policy.min_iv_rank:
+                iv_ok_today = False
+            if policy.min_iv_percentile is not None and pct < policy.min_iv_percentile:
+                iv_ok_today = False
 
     for i, (snapshot, candles, _meta) in enumerate(cycles):
         ts = snapshot.timestamp
@@ -275,6 +308,10 @@ def _scan_day(day: str, policy: CondorPolicy, cycles: list, day_cache: dict,
             # never even looked for one on this cycle (matches
             # choose_expiry_to_open's own gate, which runs before any
             # leg selection).
+            continue
+
+        if iv_gate_active and not iv_ok_today:
+            skips["iv_regime_too_low"] += 1
             continue
 
         legs = find_condor_legs(snapshot.chain)
@@ -405,7 +442,7 @@ def summarise(condors: list, label: str = "") -> str:
 
 def coverage_summary(all_skips: list) -> dict:
     """Aggregate skip_counts dicts from many run_policy() calls."""
-    total = {"no_candidate": 0, "coverage_gap": 0, "risk_rejected": 0}
+    total = {"no_candidate": 0, "coverage_gap": 0, "risk_rejected": 0, "iv_regime_too_low": 0}
     for s in all_skips:
         for k in total:
             total[k] += s.get(k, 0)

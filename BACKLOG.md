@@ -3,6 +3,78 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Condor IV-regime entry gate: strongest single lever found so far -- same "OOS carries it" caveat as the profit-target rule (added 2026-08-11)
+
+Researched why iron condor selling is supposed to work at all in real
+trading (the volatility risk premium -- CBOE's PUT/BXM indices show
+option-writing strategies with lower vol and competitive returns vs
+equities over 32 years). The dominant real-world entry filter for it,
+per published research: iron condors entered when IV rank AND IV
+percentile both exceed 50 measured 56.8% win rate vs 48.2% without any
+filter, on 595 tracked symbols. condor_scanner.py has NO IV check at
+all -- sells the same way every week regardless of volatility level.
+
+Built india_vix_source.py: real India VIX daily history (free Yahoo
+endpoint, same one global_cues.py already uses for the single live
+point, extended to pull 5 years -- 1,229 real bars, 2021-08-11 to
+2026-08-11) plus the two standard measures, IV RANK and IV PERCENTILE,
+each computed only from days STRICTLY BEFORE the one being scored (no
+look-ahead). Confirmed 2026-08-06's computed value (12.16) exactly
+matches that day's own premarket brief.
+
+FIRST PASS (retrospective correlation, NOT used to pick a threshold):
+joined our real 87 condor trades against real VIX history. Above-
+median entry days: n=43, +Rs 17,227 net. Below-median: n=43,
+-Rs 52,166 net. A large, real difference -- but the median (21.2) was
+computed FROM this same sample, which a live decision could never have
+known in advance. Not adopted on this basis alone.
+
+PROPER TEST: added CondorPolicy.min_iv_rank/min_iv_percentile/
+vix_history to shadow_condor.py (fails CLOSED on missing/insufficient
+VIX data -- an unevaluable filter is not evidence of a favourable
+regime), then tested only FIXED, pre-specified thresholds -- literature's
+own number (30/50) and simple round numbers (20, 50) -- never a
+threshold derived from this sample. Full 493-day period, current live
+config, real p90 costs:
+
+    filter                          n     win%    NET
+    baseline (no filter, live)      87    70.1%   -32,217
+    min IV rank >= 20                48    77.1%   +9,405
+    min IV percentile >= 50          40    77.5%   +8,778
+    literature's rank>30 AND pct>50  22    77.3%   -4,389
+
+Simple round-number thresholds work; the literature's precise dual
+threshold does not transfer to NIFTY -- same lesson as everywhere else
+this session: published numbers from a different market don't carry
+over without recalibration.
+
+Walk-forward on rank>=20:
+
+    period          baseline net    rank>=20 net
+    IS (2024-25)       -35,482         -10,457
+    OOS (2026)          +3,265         +19,862
+
+Replicates in both periods independently (+Rs 25k IS, +Rs 17k OOS) --
+real, not a fluke of one window.
+
+CAVEAT, stated directly: this is the SAME shape as the profit-target
+finding below -- helps in both periods, but IS alone stays net
+negative either way, and OOS (2026) is doing the heavy lifting both
+times. Two independent fixes both showing this exact pattern raises a
+real possibility not yet ruled out: 2026 may simply have been a more
+favourable regime for condors generally (lower realized vol, less
+whipsaw), and both "fixes" are partly riding that tailwind rather than
+correcting something structural. NOT distinguished yet from a genuine
+edge. Next test: profit-target + IV-rank filter COMBINED -- likely the
+strongest number yet, and also the one most at risk of compounding the
+same regime-luck explanation rather than ruling it out.
+
+Not wired into the live tracker. Backtest-only, same as the
+profit-target rule -- a real change to a currently-running strategy
+needs an explicit decision, not a silent default.
+
+## Condor profit-target exit: real, consistent improvement -- NOT a full fix (added 2026-08-11)
+
 ## Condor profit-target exit: real, consistent improvement -- NOT a full fix (added 2026-08-11)
 
 Confirmed the live condor has no stop-loss and no profit-target exit at

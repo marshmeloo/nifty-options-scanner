@@ -97,7 +97,7 @@ def test_min_days_to_expiry_gate_skips_entries_too_close_to_expiry(monkeypatch):
     condors, skips = sc.run_policy("2026-06-02")
     assert condors == []
     # Not counted as a rejected candidate -- the strategy never looked.
-    assert skips == {"no_candidate": 0, "coverage_gap": 0, "risk_rejected": 0}
+    assert skips == {"no_candidate": 0, "coverage_gap": 0, "risk_rejected": 0, "iv_regime_too_low": 0}
 
 
 def test_coverage_gap_is_distinguished_from_no_candidate(monkeypatch):
@@ -253,7 +253,7 @@ def test_summarise_handles_no_positions():
 def test_coverage_summary_aggregates_across_days():
     skips = [{"no_candidate": 2, "coverage_gap": 5, "risk_rejected": 1},
             {"no_candidate": 1, "coverage_gap": 0, "risk_rejected": 0}]
-    assert sc.coverage_summary(skips) == {"no_candidate": 3, "coverage_gap": 5, "risk_rejected": 1}
+    assert sc.coverage_summary(skips) == {"no_candidate": 3, "coverage_gap": 5, "risk_rejected": 1, "iv_regime_too_low": 0}
 
 
 def test_risk_gate_rejects_a_condor_that_fails_min_net_credit(monkeypatch):
