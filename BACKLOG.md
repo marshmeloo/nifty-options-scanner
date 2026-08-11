@@ -3,6 +3,50 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## CORRECTION to the entry below: only 2 of the available 4 years were tested. Extended, and the combined-fix story is weaker than reported (added 2026-08-11)
+
+The combined-fix entry below this one only covered 2024-08..2026-07.
+That window was never a deliberate choice -- it was inherited from
+whatever range the original saved bt_condor.json happened to use, and
+carried forward through every subsequent test without checking whether
+more data existed. It did: snapshot_recorder has 1,491 real days,
+2020-08-03..2026-08-05 -- more than half the available history was
+never tested. Caught only because it was asked directly, not found
+proactively -- should have been checked before presenting the
+2-period result as strong.
+
+Extended to all 4 independent stretches the real data supports (VIX
+history starts 2021-08-11, so ~2022-08-17 is the earliest date an IV
+rank is computable):
+
+    period               baseline        combined rule
+    2022-08..2023-12     -17,279         -12,413   (STILL NEGATIVE)
+    2024-01..2024-07     +17,969            -709   (rule made it WORSE)
+    2024-08..2025-12     -35,482         +23,432
+    2026-01..2026-07      +3,265         +14,249
+    TRUE FULL HISTORY    -31,527 (187)   +24,559 (103)
+
+The aggregate across 4 years is still positive, and the combined rule
+beats baseline in every single period. That part holds. But 2 of the 4
+independent periods are STILL NET NEGATIVE with the rule active, and
+one of them (early 2024) the rule actively makes worse than doing
+nothing. "Both tested periods positive" (the prior entry's headline)
+was true only because two of the four real periods were never tested.
+
+REVISED, HONEST READ: there is a real, positive net effect across the
+full available history -- not nothing. But "reliably profitable" or
+"resolves the regime-luck concern" overstated it. The more accurate
+description: helps on average, does not work in every stretch, and
+2022-23 specifically stays a loser even with both fixes active. Same
+overfitting-risk caveat as before (hand-picked PT 50% / rank>=20, not
+swept) still applies, now with less supporting evidence than
+previously stated, not more.
+
+STILL not wired into the live tracker. This finding argues for MORE
+caution before doing so, not less, relative to the prior entry's tone.
+
+## Condor combined (profit-target + IV-rank): both periods independently positive -- best evidence yet, still not adopted (added 2026-08-11)
+
 ## Condor combined (profit-target + IV-rank): both periods independently positive -- best evidence yet, still not adopted (added 2026-08-11)
 
 Direct follow-up to the two entries below, which each independently
