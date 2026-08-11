@@ -96,6 +96,15 @@ class CondorPolicy:
     end_time: str = "15:30"
     one_at_a_time: bool = True   # mirrors MAX_CONCURRENT_POSITIONS = 1
     min_days_to_expiry: int = None   # None -> ccfg.MIN_DAYS_TO_EXPIRY_TO_OPEN
+    # Early-exit rules NOT present in the live strategy (condor_tracker.py
+    # only stages a breach warning for human review, never auto-closes --
+    # see this module's own docstring). None means "hold to expiry",
+    # reproducing exact prior behaviour. Non-None values exist so this
+    # backtest can MEASURE whether adding either rule would have helped,
+    # before any such rule is ever wired into the live tracker -- same
+    # "measure before adopting" bar as the direction-chase gate.
+    profit_target_pct: float = None            # close at this % of max_profit_inr
+    stop_loss_credit_multiple: float = None    # close at a loss of this many x net_credit_inr
 
     def resolved_min_days_to_expiry(self) -> int:
         if self.min_days_to_expiry is not None:
@@ -161,18 +170,48 @@ def _settle_at_expiry(snapshot, plan_dict: dict, condor: ShadowCondor,
     return condor
 
 
+def _close_early(snapshot, plan_dict: dict, condor: ShadowCondor,
+                 peak: float, trough: float, held: int, mtm: float, reason: str) -> ShadowCondor:
+    """
+    Close at the CURRENT mark, not intrinsic value -- unlike
+    _settle_at_expiry this isn't a forced exchange settlement, it's a
+    real order the strategy chose to place while a book still exists.
+    """
+    condor.closed_at = snapshot.timestamp.isoformat()
+    condor.exit_reason = reason
+    condor.pnl_inr = round(mtm, 2)
+    condor.peak_pnl_inr = round(peak, 2)
+    condor.trough_pnl_inr = round(trough, 2)
+    condor.cycles_held = held
+    return condor
+
+
 def _walk_condor_forward(remaining_cycles: list, plan_dict: dict,
-                         condor: ShadowCondor) -> ShadowCondor:
+                         condor: ShadowCondor, policy: "CondorPolicy" = None) -> ShadowCondor:
     """
     Advance an open condor through cycles already bounded to its own
     expiry week (see _window_days) until the window is exhausted, then
-    settle. No early exit exists to check for -- condor_tracker.py only
-    stages breach warnings for human review, it never auto-closes.
+    settle. By default (policy=None or both exit fields None) NO early
+    exit exists to check for -- condor_tracker.py only stages breach
+    warnings for human review, it never auto-closes, and this
+    reproduces that exactly. policy.profit_target_pct /
+    stop_loss_credit_multiple exist to MEASURE whether either rule
+    would help, not because the live tracker has them yet.
     """
+    policy = policy or CondorPolicy()
     peak = trough = 0.0
     held = 0
     breach_days_seen = set()
     last_snapshot = None
+
+    profit_target_inr = (
+        policy.profit_target_pct / 100.0 * plan_dict["max_profit_inr"]
+        if policy.profit_target_pct is not None else None
+    )
+    stop_loss_inr = (
+        -policy.stop_loss_credit_multiple * plan_dict["net_credit_inr"]
+        if policy.stop_loss_credit_multiple is not None else None
+    )
 
     for snapshot, _candles, _meta in remaining_cycles:
         last_snapshot = snapshot
@@ -182,6 +221,11 @@ def _walk_condor_forward(remaining_cycles: list, plan_dict: dict,
             held += 1
             peak = max(peak, mtm)
             trough = min(trough, mtm)
+
+            if profit_target_inr is not None and mtm >= profit_target_inr:
+                return _close_early(snapshot, plan_dict, condor, peak, trough, held, mtm, "profit_target")
+            if stop_loss_inr is not None and mtm <= stop_loss_inr:
+                return _close_early(snapshot, plan_dict, condor, peak, trough, held, mtm, "stop_loss")
 
         if check_breach_warning(snapshot.spot, plan_dict):
             breach_days_seen.add(snapshot.timestamp.date())
@@ -281,7 +325,7 @@ def _scan_day(day: str, policy: CondorPolicy, cycles: list, day_cache: dict,
         for later_day in window[1:]:
             remaining = remaining + _load_cached(day_cache, later_day)
 
-        condor = _walk_condor_forward(remaining, plan_dict, condor)
+        condor = _walk_condor_forward(remaining, plan_dict, condor, policy)
         condors.append(condor)
 
         if condor.closed_at:

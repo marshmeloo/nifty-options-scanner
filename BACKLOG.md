@@ -3,6 +3,69 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Condor profit-target exit: real, consistent improvement -- NOT a full fix (added 2026-08-11)
+
+Confirmed the live condor has no stop-loss and no profit-target exit at
+all -- condor_tracker.py only stages a breach warning for human review,
+held to expiry otherwise (see the entry below). Researched general
+iron-condor practice (tastytrade, thousands of real trades): the two
+standard risk controls are a 50% profit-target close and a ~2x-credit
+stop-loss, justified by gamma accelerating sharply inside the final
+~21 days. Our condor structurally has no 45-DTE alternative (NIFTY is
+weekly-only) -- every position already opens deep inside that danger
+zone (MIN_DAYS_TO_EXPIRY_TO_OPEN=1, real entries ~6 days out) and holds
+straight through it with neither control. Built both as OPTIONAL
+shadow_condor.py backtest parameters (CondorPolicy.profit_target_pct /
+stop_loss_credit_multiple) -- NOT wired into the live tracker -- to
+measure before ever proposing that.
+
+STOP-LOSS: measured inert for the current live config (23-30 band,
+300pt hedge). Checked directly: the worst intraweek mark-to-market dip
+across all 87 real trades was -Rs 2,278, which never even reaches a
+1x-credit stop (-Rs 2,444). For this config, losses come from the move
+AT settlement, not gradual intraweek deterioration -- a stop watching
+the book each cycle structurally cannot catch that. Not the same
+conclusion for every possible config; not re-tested against the wider
+config grid.
+
+PROFIT TARGET: real and replicates, but incomplete. Full 493-day
+period, current live config, real p90 costs:
+
+    rule              n     win%    GROSS         NET
+    baseline (live)   87    70.1%   -18,941      -32,217
+    PT 50%           107    78.5%   +24,732         -696
+    PT 25%           155    85.2%   +11,534      -28,366
+
+25% target has a HIGHER win rate than 50% but a WORSE net result --
+closing too early means more round trips (8 leg-crossings vs. 4 for an
+expiry settlement) against a smaller profit per trade. Higher win rate
+is not the same as better, same lesson as every other result this
+session.
+
+Walk-forward (fit nothing here -- 50% is the researched round number,
+not swept on this data -- but still split IS/OOS to check it
+replicates):
+
+    rule       IS (2024-25) net    OOS (2026) net
+    baseline        -35,482             +3,265
+    PT 50%          -15,786            +15,090
+
+The improvement holds in BOTH periods independently (+Rs ~20k IS,
++Rs ~12k OOS) -- not a fluke of one window. But the older 18 months
+STAY NET NEGATIVE even with the rule; only the recent ~7 months turn
+solidly positive. The full-period "near breakeven" figure is being
+pulled toward zero by that one strong recent stretch, not a uniform
+fix. Read it as: profit-target genuinely helps, meaningfully, but does
+NOT on its own turn this into a strategy with a validated edge across
+the whole tested history -- a materially different, weaker claim than
+the directional spread's 12-of-12 walk-forward result.
+
+NOT wired into the live tracker. That would be a real behavior change
+to a currently-running position and needs an explicit decision, not a
+silent default.
+
+## Iron condor: FAILS both tests the directional spread passed -- running live on negative evidence (added 2026-08-07)
+
 ## Direction-chase cooldown: shipped, measured before adopting (added 2026-08-10)
 
 2026-08-10: momentum opened 8 CE trades, 8 different strikes (24550
