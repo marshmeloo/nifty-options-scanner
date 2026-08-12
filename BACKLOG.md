@@ -3,6 +3,51 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Condor: full 12-cell PT x IV-rank sweep across all 4 real periods -- one combo is 4/4-period positive, still held back (added 2026-08-12)
+
+Direct follow-up to the correction below (only 2/4 periods had been
+tested for the combined fix). Before adopting anything, swept the full
+grid properly: profit_target_pct in {40, 50, 60}, min_iv_rank in
+{15, 20, 25, 30} (12 cells), each across all 4 independent periods,
+real p90 costs throughout.
+
+    PT   IVrank>=   total_n   total_net    periods_positive
+    base    --         187     -31,527           2/4
+    50      15         132     +45,227           4/4  <- only 4/4 combo
+    50      20         103     +24,559           2/4  (prior "best evidence" entry)
+    50      25          75     +32,472           3/4
+    60      15         121     +23,577           3/4
+
+PT=50% + IV rank>=15 is the ONLY cell out of 12 positive in every one
+of the 4 periods, and has the highest total net of the whole grid --
+materially stronger and more consistent than the previously-reported
+PT=50/IVrank>=20 combo. The IV rank>=15 column is doing most of the
+work (2/4, 4/4, 3/4 across the 3 PT values at that threshold); IVrank
+20/25/30 columns are all more mixed (2-3/4). The exact PT level looks
+secondary to the IV-rank gate itself.
+
+Outlier/monthly checks on the winner (n=132, net +Rs 47,490 when run
+as one continuous backtest vs the +45,227 sum-of-4-periods -- small
+boundary-effect difference, not material):
+  - top-3 trades = 19.7% of total, top-5 = 32.1% of total -- borderline
+    on the ~20% top-3 bar used elsewhere this session, getting more
+    concentrated at top-5. Not dominated by a couple of flukes, but
+    worth watching.
+  - 23 of 37 months positive (62%). Two real bad months remain even
+    under this combo: 2025-03 (-Rs 20,368) and 2024-05 (-Rs 12,815).
+  - Worst single trade: -Rs 16,661.
+
+HONEST READ: strongest, most consistent condor evidence found this
+session -- genuinely robust across all 4 real periods, unlike every
+prior candidate fix. But it is still "best cell out of 12 tried" (some
+inherent look-ahead-adjacent risk in picking a grid winner, even though
+neighbouring IVrank>=15 cells are also decent), and real drawdown
+months persist. On average helps a lot; does not remove real risk.
+
+DECISION (explicit, from the user): hold as backtest-only for now, do
+not wire into condor_tracker.py or main_condor.py. Revisit later with
+more data rather than acting on this immediately.
+
 ## CORRECTION to the entry below: only 2 of the available 4 years were tested. Extended, and the combined-fix story is weaker than reported (added 2026-08-11)
 
 The combined-fix entry below this one only covered 2024-08..2026-07.
