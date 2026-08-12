@@ -85,3 +85,84 @@ def test_save_and_load_round_trip(tmp_path):
     ivs.save_history(hist, path)
     loaded = ivs.load_history(path)
     assert loaded == hist
+
+
+# --------------------------------------------------------------------------
+# Live helpers (2026-08-12) -- main_condor.py's IV-rank entry gate uses
+# these against a real-time VIX reading, not a completed day already
+# sitting in history.
+# --------------------------------------------------------------------------
+
+def test_live_iv_rank_ranks_current_reading_against_trailing_window():
+    hist = _history(252)  # values ramp 10.0 -> ~14.0, none of them is "today"
+    # Strictly above the window's own max -- a value tied with the max
+    # would score iv_percentile just under 100 (only STRICTLY-below counts,
+    # same rule as iv_rank_and_percentile's own no-lookahead semantics).
+    current = max(c for _, c in hist) + 1.0
+    result = ivs.live_iv_rank_and_percentile(hist, current_vix=current, lookback_days=252)
+    assert result["vix"] == current
+    assert result["iv_rank"] == 100.0
+    assert result["iv_percentile"] == 100.0
+
+
+def test_live_iv_rank_clamps_beyond_the_trailing_range():
+    hist = _history(252)
+    result = ivs.live_iv_rank_and_percentile(hist, current_vix=999.0, lookback_days=252)
+    assert result["iv_rank"] == 100.0  # clamped, not some >100 raw value
+
+
+def test_live_iv_rank_none_when_not_enough_history():
+    hist = _history(60)
+    result = ivs.live_iv_rank_and_percentile(hist, current_vix=12.0, lookback_days=252)
+    assert result["iv_rank"] is None
+    assert result["iv_percentile"] is None
+    assert result["vix"] == 12.0
+
+
+def test_live_iv_rank_never_includes_todays_reading_in_its_own_window():
+    """The live reading is being ranked, not folded into history -- passing
+    it as current_vix must never mutate or appear inside `hist` itself."""
+    hist = _history(252)
+    hist_copy = list(hist)
+    ivs.live_iv_rank_and_percentile(hist, current_vix=13.5)
+    assert hist == hist_copy
+
+
+def test_load_or_refresh_history_uses_fresh_cache(tmp_path, monkeypatch):
+    from datetime import datetime
+    path = tmp_path / "vix.json"
+    ivs.save_history(_history(10), path)
+
+    def _boom():
+        raise AssertionError("should not re-fetch when the cache is fresh")
+    monkeypatch.setattr(ivs, "fetch_history", _boom)
+
+    result = ivs.load_or_refresh_history(max_age_hours=20.0, path=path)
+    assert len(result) == 10
+
+
+def test_load_or_refresh_history_refetches_when_stale(tmp_path, monkeypatch):
+    import json
+    from datetime import datetime, timedelta
+    path = tmp_path / "vix.json"
+    stale_payload = {
+        "fetched_at": (datetime.now() - timedelta(hours=48)).isoformat(),
+        "count": 10, "history": _history(10),
+    }
+    path.write_text(json.dumps(stale_payload))
+
+    fresh = _history(15)
+    monkeypatch.setattr(ivs, "fetch_history", lambda: fresh)
+
+    result = ivs.load_or_refresh_history(max_age_hours=20.0, path=path)
+    assert len(result) == 15  # got the freshly-fetched history, not the stale cache
+
+
+def test_load_or_refresh_history_fetches_when_no_cache_exists(tmp_path, monkeypatch):
+    path = tmp_path / "does_not_exist.json"
+    fresh = _history(7)
+    monkeypatch.setattr(ivs, "fetch_history", lambda: fresh)
+
+    result = ivs.load_or_refresh_history(max_age_hours=20.0, path=path)
+    assert len(result) == 7
+    assert path.exists()  # save_history was called, so the cache now exists

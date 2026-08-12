@@ -185,8 +185,9 @@ def test_capture_efficiency_reflects_a_real_giveback(state_paths, monkeypatch):
     assert closed["capture_efficiency_pct"] < 100.0
 
 
-def test_profit_milestone_stats_and_summary_mirror_the_spread_strategy(state_paths, monkeypatch):
+def test_profit_milestone_stats_when_target_disabled(state_paths, monkeypatch):
     monkeypatch.setattr(ccfg, "PROFIT_MILESTONES_PCT", [50])
+    monkeypatch.setattr(ccfg, "PROFIT_TARGET_PCT", None)
     entries = [
         {"max_pct_of_max_profit": 80.0, "pnl_pct_of_max_profit": 80.0},
         {"max_pct_of_max_profit": 20.0, "pnl_pct_of_max_profit": -40.0},
@@ -197,11 +198,83 @@ def test_profit_milestone_stats_and_summary_mirror_the_spread_strategy(state_pat
     assert stats["sample"] == 2
     assert stats["milestones"][0]["reached"] == 1
     assert stats["milestones"][0]["hit_rate_pct"] == 50.0
-    # No "current_target_pct" -- the condor has no active target to mark.
     assert "current_target_pct" not in stats
 
     text = ct.summarize_profit_milestones()
     assert "no active target" in text.lower()
+
+
+def test_profit_milestone_stats_when_target_active(state_paths, monkeypatch):
+    monkeypatch.setattr(ccfg, "PROFIT_MILESTONES_PCT", [50])
+    monkeypatch.setattr(ccfg, "PROFIT_TARGET_PCT", 50.0)
+    entries = [{"max_pct_of_max_profit": 80.0, "pnl_pct_of_max_profit": 80.0}]
+    state_paths[1].write_text("\n".join(json.dumps(e) for e in entries))
+
+    stats = ct.profit_milestone_stats()
+    assert stats["current_target_pct"] == 50.0
+
+    text = ct.summarize_profit_milestones()
+    assert "active target 50%" in text.lower()
+    assert "no active target" not in text.lower()
+
+
+# --------------------------------------------------------------------------
+# Profit-target auto-close (2026-08-12) -- adopted after the full PT/IV-rank
+# sweep; see config_condor.py's PROFIT_TARGET_PCT comment and BACKLOG.md.
+# --------------------------------------------------------------------------
+
+def test_profit_target_reached_closes_automatically(state_paths, monkeypatch):
+    monkeypatch.setattr(ccfg, "PROFIT_TARGET_PCT", 50.0)
+    state, plan = _open(state_paths, monkeypatch)  # max_profit = 2210
+    # cost to close = 5, captured = (34-5)*65 = 1885 -> 85.3% of max profit
+    chain = [_quote(24300, "CE", 3), _quote(23700, "PE", 2),
+             _quote(24600, "CE", 0), _quote(23400, "PE", 0)]
+    position = ct.update_position(state, _snapshot(chain))
+    assert position["status"] == "CLOSED"
+    assert position["close_reason"] == "profit_target"
+    assert position["pnl_inr"] == pytest.approx((34 - 5) * 65)
+
+
+def test_below_profit_target_stays_open(state_paths, monkeypatch):
+    monkeypatch.setattr(ccfg, "PROFIT_TARGET_PCT", 50.0)
+    state, plan = _open(state_paths, monkeypatch)
+    # cost to close = 22, captured = (34-22)*65 = 780 -> ~35%, below the 50% target
+    chain = [_quote(24300, "CE", 15), _quote(23700, "PE", 15),
+             _quote(24600, "CE", 4), _quote(23400, "PE", 4)]
+    position = ct.update_position(state, _snapshot(chain))
+    assert position["status"] == "OPEN"
+
+
+def test_profit_target_disabled_holds_to_expiry_as_before(state_paths, monkeypatch):
+    monkeypatch.setattr(ccfg, "PROFIT_TARGET_PCT", None)
+    state, plan = _open(state_paths, monkeypatch)
+    chain = [_quote(24300, "CE", 3), _quote(23700, "PE", 2),
+             _quote(24600, "CE", 0), _quote(23400, "PE", 0)]  # ~85% of max profit
+    position = ct.update_position(state, _snapshot(chain))
+    assert position["status"] == "OPEN"
+
+
+def test_profit_target_close_stages_an_advisory(state_paths, monkeypatch, tmp_path):
+    import trade_staging as staging
+    monkeypatch.setattr(staging, "STAGED_ORDERS_PATH", tmp_path / "staged_orders.json")
+    monkeypatch.setattr(ccfg, "PROFIT_TARGET_PCT", 50.0)
+    state, plan = _open(state_paths, monkeypatch)
+    chain = [_quote(24300, "CE", 3), _quote(23700, "PE", 2),
+             _quote(24600, "CE", 0), _quote(23400, "PE", 0)]
+    ct.update_position(state, _snapshot(chain))
+
+    staged = staging.list_staged()
+    kinds = [r["kind"] for r in staged]
+    assert "condor_profit_target_close" in kinds
+
+
+def test_profit_target_ignored_when_mtm_unavailable(state_paths, monkeypatch):
+    """A missing-leg cycle must never be treated as having reached the target."""
+    monkeypatch.setattr(ccfg, "PROFIT_TARGET_PCT", 50.0)
+    state, plan = _open(state_paths, monkeypatch)
+    chain = [_quote(24300, "CE", 3), _quote(23700, "PE", 2), _quote(24600, "CE", 0)]  # hedge PE missing
+    position = ct.update_position(state, _snapshot(chain))
+    assert position["status"] == "OPEN"
 
 
 def test_profit_milestone_stats_empty_journal():

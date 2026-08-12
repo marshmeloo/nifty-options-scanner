@@ -1069,10 +1069,23 @@ through the hedge width, not equal by construction):
     peak).
   - `profit_milestone_stats()` / `summarize_profit_milestones()` in both
     trackers turn the journal into the same evidence-for-tuning view
-    `rr_milestone_stats()` gives momentum. The condor's version has no
-    `current_target_pct` to mark, since there is no active target to
-    compare against yet -- this is explicitly the dataset for deciding
-    whether to add one.
+    `rr_milestone_stats()` gives momentum. The condor's version had no
+    `current_target_pct` to mark at the time -- there was no active
+    target to compare against, and this was explicitly the dataset for
+    deciding whether to add one. **UPDATE 2026-08-12: it now does.** A
+    full sweep (`profit_target_pct` x `min_iv_rank`, 12 combos, all 4
+    real independent periods available) found PT=50%/IV rank>=15 the
+    only combo positive in every period -- see BACKLOG.md's 2026-08-12
+    entry. `config_condor.py`'s `PROFIT_TARGET_PCT` (50.0) and
+    `MIN_IV_RANK_TO_OPEN` (15.0) are now active by default:
+    `condor_tracker.update_position()` closes a position automatically
+    once it reaches 50% of max profit (staging an advisory too, same as
+    a breach warning, since nothing here calls a broker API), and
+    `main_condor.py` skips opening a new condor when India VIX's live
+    IV rank (`india_vix_source.live_iv_rank_and_percentile`) is below
+    15. Both fail closed (skip/hold, never guess) if VIX data can't be
+    fetched or there isn't enough trailing history yet. Set either
+    config value to `None` to go back to hold-to-expiry / no entry gate.
   - Per-cycle log line in `main_condor.py`/`main_directional_spread.py`
     now shows peak MTM and the highest milestone hit so far, mirroring
     `main_live.py`'s existing R-multiple line. Both trackers' stats are

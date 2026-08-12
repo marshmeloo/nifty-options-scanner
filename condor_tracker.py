@@ -165,6 +165,24 @@ def update_position(state: dict, snapshot) -> dict:
         )
         position["breach_staged_this_week"] = True  # don't re-stage every single poll once flagged
 
+    target_pct = ccfg.PROFIT_TARGET_PCT
+    max_profit = plan_dict.get("max_profit_inr")
+    if target_pct and mtm_pnl is not None and max_profit:
+        pct_of_max_profit = mtm_pnl / max_profit * 100
+        if pct_of_max_profit >= target_pct:
+            detail = (
+                f"Profit target reached: Rs {mtm_pnl:,.0f} is {pct_of_max_profit:.0f}% of "
+                f"max profit (target {target_pct:.0f}%). Tracker closed this position "
+                f"automatically -- close the matching real position at the broker too."
+            )
+            log.info(f"  CONDOR PROFIT TARGET REACHED: {detail}")
+            staging.stage_advisory(
+                kind="condor_profit_target_close",
+                detail=detail,
+                note=f"short CE {plan_dict['short_ce_strike']} / short PE {plan_dict['short_pe_strike']}",
+            )
+            return close_position(state, snapshot, reason="profit_target")
+
     save_position(state)
     return position
 
@@ -287,7 +305,10 @@ def profit_milestone_stats(limit=None) -> dict:
             "simulated_avg_pct_of_max_profit": round(sum(simulated) / len(simulated), 1),
         })
 
-    return {"sample": len(entries), "milestones": milestones}
+    result = {"sample": len(entries), "milestones": milestones}
+    if ccfg.PROFIT_TARGET_PCT:
+        result["current_target_pct"] = ccfg.PROFIT_TARGET_PCT
+    return result
 
 
 def summarize_profit_milestones(limit=None) -> str:
@@ -297,9 +318,13 @@ def summarize_profit_milestones(limit=None) -> str:
         return ("Condor profit-milestone history: none yet (tracking starts with "
                 "positions opened from now on).")
 
+    target_note = (
+        f"active target {ccfg.PROFIT_TARGET_PCT:.0f}% -- closes automatically"
+        if ccfg.PROFIT_TARGET_PCT else
+        "no active target -- held to expiry unless manually closed"
+    )
     lines = [
-        f"Condor profit-milestone history ({stats['sample']} closed positions, "
-        f"no active target -- held to expiry unless manually closed):"
+        f"Condor profit-milestone history ({stats['sample']} closed positions, {target_note}):"
     ]
     best = max(m["simulated_avg_pct_of_max_profit"] for m in stats["milestones"])
     for m in stats["milestones"]:

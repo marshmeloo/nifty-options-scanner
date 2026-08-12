@@ -37,6 +37,7 @@ import condor_plan_generator
 import condor_risk_checker
 import condor_tracker
 import trade_staging as staging
+import india_vix_source as ivs
 
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
@@ -151,6 +152,14 @@ def run_once(state: dict):
 
     if position and position.get("status") == "OPEN":
         position = condor_tracker.update_position(state, snapshot)
+        if position.get("status") != "OPEN":
+            # update_position closed it this cycle (profit target reached)
+            # -- nothing left to mark-to-market or check expiry against.
+            log.info(
+                f"  [CONDOR CLOSED] reason={position.get('close_reason')}  "
+                f"pnl Rs {position['pnl_inr']:,.0f} ({position.get('pnl_pct_of_max_profit')}% of max profit)"
+            )
+            return
         mtm = position.get("current_mtm_pnl_inr")
         log.info(
             f"  Open condor: short CE {position['plan']['short_ce_strike']} / "
@@ -180,6 +189,24 @@ def run_once(state: dict):
         log.info(f"  Nearest expiry {nearest_expiry} is too close (< {ccfg.MIN_DAYS_TO_EXPIRY_TO_OPEN}d) -- "
                  f"rolling to {expiry} instead.")
         snapshot = get_nifty_snapshot(expiry=expiry)
+
+    if ccfg.MIN_IV_RANK_TO_OPEN is not None:
+        try:
+            vix_history = ivs.load_or_refresh_history()
+            current_vix = ivs.fetch_live_vix()
+            iv_info = ivs.live_iv_rank_and_percentile(vix_history, current_vix)
+        except Exception as e:
+            log.info(f"  Could not fetch India VIX for the IV-rank gate this cycle ({e}) -- skipping open.")
+            return
+        iv_rank = iv_info["iv_rank"]
+        if iv_rank is None:
+            log.info("  IV rank not computable yet (insufficient VIX history) -- skipping open this cycle.")
+            return
+        if iv_rank < ccfg.MIN_IV_RANK_TO_OPEN:
+            log.info(f"  IV rank {iv_rank:.1f} is below the entry threshold ({ccfg.MIN_IV_RANK_TO_OPEN:.0f}) "
+                      f"-- skipping open this cycle (VIX {iv_info['vix']}).")
+            return
+        log.info(f"  IV rank {iv_rank:.1f} clears the entry threshold ({ccfg.MIN_IV_RANK_TO_OPEN:.0f}, VIX {iv_info['vix']}).")
 
     legs = condor_scanner.find_condor_legs(snapshot.chain)
     plan = condor_plan_generator.build_condor_plan(legs, expiry)

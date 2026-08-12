@@ -118,6 +118,62 @@ def iv_rank_and_percentile(history: list, as_of_date: str, lookback_days: int = 
     return {"vix": today_vix, "iv_rank": iv_rank, "iv_percentile": iv_percentile}
 
 
+def fetch_live_vix() -> float:
+    """
+    Current intraday India VIX reading (Yahoo chart `meta.regularMarketPrice`),
+    for live entry gating -- cheaper than pulling the full daily-close
+    history for a single-point read. Raises on failure, same
+    don't-fabricate-a-fallback discipline as fetch_history().
+    """
+    resp = requests.get(YAHOO_CHART_URL, params={"range": "1d", "interval": "1d"},
+                        headers=_HEADERS, timeout=10)
+    resp.raise_for_status()
+    meta = resp.json()["chart"]["result"][0]["meta"]
+    price = meta.get("regularMarketPrice")
+    if price is None:
+        raise ValueError("Missing regularMarketPrice in India VIX response")
+    return round(price, 2)
+
+
+def live_iv_rank_and_percentile(history: list, current_vix: float, lookback_days: int = LOOKBACK_DAYS) -> dict:
+    """
+    Same measures as iv_rank_and_percentile(), but for a LIVE intraday
+    reading rather than a completed day already sitting in `history`:
+    ranks `current_vix` against the most recent `lookback_days` closes in
+    `history` (all real, completed prior days -- today's live reading is
+    never added to the window it's being ranked against, same
+    no-lookahead principle as the backtest version). Returns
+    {"vix", "iv_rank", "iv_percentile"}, iv_rank/iv_percentile None if
+    there isn't enough trailing history yet.
+    """
+    if len(history) < lookback_days:
+        return {"vix": current_vix, "iv_rank": None, "iv_percentile": None}
+    window_closes = [c for _, c in history[-lookback_days:]]
+    lo, hi = min(window_closes), max(window_closes)
+    iv_rank = round(max(0.0, min(100.0, (current_vix - lo) / (hi - lo) * 100)), 1) if hi > lo else None
+    below = sum(1 for c in window_closes if c < current_vix)
+    iv_percentile = round(below / len(window_closes) * 100, 1)
+    return {"vix": current_vix, "iv_rank": iv_rank, "iv_percentile": iv_percentile}
+
+
+def load_or_refresh_history(max_age_hours: float = 20.0, path: Path = None) -> list:
+    """
+    Loads the cached history, refreshing it from Yahoo first if the cache
+    is missing or older than max_age_hours. Called every main_condor.py
+    poll cycle but only actually hits the network roughly once a day --
+    no reason to re-pull 5 years of daily closes every 5-minute cycle.
+    """
+    path = path or CACHE_PATH
+    if path.exists():
+        data = json.loads(path.read_text())
+        fetched_at = datetime.fromisoformat(data["fetched_at"])
+        if (datetime.now() - fetched_at).total_seconds() < max_age_hours * 3600:
+            return [tuple(p) for p in data["history"]]
+    history = fetch_history()
+    save_history(history, path)
+    return history
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     history = fetch_history()

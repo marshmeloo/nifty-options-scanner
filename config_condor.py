@@ -74,16 +74,37 @@ AUTO_APPROVE_NEW_POSITIONS = True
 # call in the moment is the right tradeoff here, not either extreme.
 BREACH_WARNING_BUFFER_POINTS = 50
 
-# Milestones tracked on EVERY position, purely for analysis -- the condor
-# currently has NO active profit-target exit (held to expiry unless
-# manually closed on a breach warning, see above), so nothing here gates
-# a live decision yet. This exists to build the evidence for whether it
-# should: "reached 70% of max profit by Tuesday, then gave it back to a
-# Thursday breach" is exactly the kind of pattern that argues for an
-# early-exit rule, and there is currently no data trail to see it in.
+# Milestones tracked on EVERY position, purely for analysis. See
+# PROFIT_TARGET_PCT below for the one that actually gates a live decision.
 # Same % of max_profit_inr framing as config_directional_spread.py's
 # PROFIT_MILESTONES_PCT, for the same reason (no symmetric "R" here).
 PROFIT_MILESTONES_PCT = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
+# --- Profit-target exit and IV-rank entry gate ---
+# Adopted 2026-08-12 after a full 12-cell sweep (profit_target_pct in
+# {40,50,60} x min_iv_rank in {15,20,25,30}) across all 4 real
+# independent periods the historical snapshot data supports
+# (2022-08..2023-12, 2024-01..2024-07, 2024-08..2025-12, 2026-01..2026-07).
+# PT=50%/IVrank>=15 was the ONLY one of the 12 combos positive in every
+# single period (baseline: -Rs 31,527 over 187 trades; this combo:
+# +Rs 45,227 over 132 trades) -- see BACKLOG.md's 2026-08-12 entry for
+# the full grid, outlier-concentration check, and the honest caveats
+# (still the best cell out of 12 tried, two genuine drawdown months
+# remain even under this combo -- a real improvement, not a free lunch).
+#
+# PROFIT_TARGET_PCT: once a position's mark-to-market P&L reaches this %
+# of its max theoretical profit, condor_tracker.update_position() closes
+# it automatically (same "no broker API, just this strategy's own
+# tracked state" scope as AUTO_APPROVE_NEW_POSITIONS above). Set to None
+# to go back to hold-to-expiry-or-manual-breach-close only.
+PROFIT_TARGET_PCT = 50.0
+
+# MIN_IV_RANK_TO_OPEN: main_condor.py skips opening a new condor when
+# India VIX's IV rank (see india_vix_source.py) is below this threshold,
+# using only completed prior days -- never today's own still-forming
+# reading -- for the trailing window, so this can never leak information
+# a live decision couldn't actually have had. Set to None to disable.
+MIN_IV_RANK_TO_OPEN = 15.0
 
 # --- Timing ---
 # main_condor.py polls this often during market hours -- much coarser
