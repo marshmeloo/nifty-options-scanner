@@ -3,6 +3,73 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Bank Nifty: plumbing built for all three strategies, NOT validated, NOT in automation yet (added 2026-08-12)
+
+Direct follow-up to the 2026-08-04 "Run every strategy on Bank Nifty"
+entry below. `historical_source.py` turned out to already be fully
+Bank-Nifty-parameterized (BANKNIFTY_SECURITY_ID, BANKNIFTY_EXPIRY_FLAG,
+BANKNIFTY_DATA_START -- all confirmed by direct probe back on
+2026-08-04, found while starting this work rather than rebuilt).
+
+CRITICAL FACT VERIFIED LIVE 2026-08-12 (not assumed): Bank Nifty has
+been MONTHLY-expiry-only since SEBI's Nov 2024 rules capped weekly
+expiries to one benchmark index per exchange -- NSE kept NIFTY weekly,
+moved Bank Nifty to monthly.
+
+    NIFTY:     2026-08-18, 08-25, 09-01, 09-08, ...  (weekly)
+    BANKNIFTY: 2026-08-25, 09-29, 10-27, 12-29, ...  (monthly)
+
+This matters enormously differently per strategy: momentum is same-day
+only, so cadence barely matters -- closest to a direct port. Condor and
+directional spread are NIFTY's weekly theta-decay strategies; a
+monthly-only Bank Nifty version is not a re-tuned copy, it is
+structurally different (~12 cycles/year instead of ~52, much wider
+expected move per cycle). Also confirmed fresh (not assumed): lot size
+still 30, strike spacing 100pt near the money.
+
+Built, following the existing main_price_action_banknifty.py precedent
+(separate process, separate state/journal/log, calls dhan_source
+directly with BANKNIFTY_UNDERLYING_SCRIP/_SEG since resilient_source.py
+is hardcoded to NIFTY with no Bank Nifty path at all -- Dhan-only, no
+NSE/TradingView fallback):
+
+  - `main_live_banknifty.py` -- momentum. Drops the NIFTY-vs-Bank-Nifty
+    divergence signal entirely (doesn't apply to a Bank Nifty variant of
+    itself). PREMIUM_MIN/MAX=300/800 and LOT_SIZE=30 carried over from
+    price_action_banknifty's own real 2026-08-06 sweep; STRIKE_RANGE_POINTS
+    proportionally scaled (2000, vs Nifty's 800/24000 spot). NOT
+    independently swept for momentum specifically.
+  - `main_condor_banknifty.py` -- condor. SHORT_PREMIUM_MIN/MAX=150/250,
+    HEDGE_DISTANCE_POINTS=1000 are proportionally-reasoned PLACEHOLDERS,
+    not swept. MIN_IV_RANK_TO_OPEN explicitly left None: India VIX
+    measures NIFTY's own IV specifically, not Bank Nifty's -- reusing it
+    here would gate on the wrong instrument's volatility. Would need a
+    Bank-Nifty-specific IV-rank measure built from its own ATM IV
+    history, not borrowed.
+  - `main_directional_spread_banknifty.py` -- directional spread.
+    SHORT_PREMIUM_MIN/MAX=250/450, HEDGE_DISTANCE_POINTS=350, same
+    placeholder status.
+  - All three verified import-clean and correctly path-isolated (own
+    state/journal/log/snapshot files, never touching Nifty's); full
+    568-test suite still passes with no cross-contamination. No
+    dedicated unit tests for these entry-point files themselves, same
+    precedent as main_live.py/main_condor.py/main_price_action_banknifty.py
+    -- config is patched at MODULE IMPORT TIME (safe only because each
+    runs as its own OS process), which would corrupt shared config for
+    any other test running in the same process if one were ever added.
+
+Bank Nifty historical backfill (2021-08-04 onward, ~5 years, monthly
+rolling series) was launched in the background the same session --
+long-running (~2.5 hours estimated from a 30-day-chunk timing probe),
+still in progress as of this entry.
+
+NONE OF THIS IS IN start_trading.ps1 AND NONE OF IT SHOULD BE YET. Every
+placeholder number above needs a real sweep against Bank Nifty's own
+backfilled history -- same bar as everything else in this file: real
+p90 costs, walk-forward, outlier-concentration check -- before any of
+these three processes is trusted even as a backtest verdict, let alone
+run live.
+
 ## Condor: full 12-cell PT x IV-rank sweep across all 4 real periods -- one combo is 4/4-period positive, still held back (added 2026-08-12)
 
 Direct follow-up to the correction below (only 2/4 periods had been
