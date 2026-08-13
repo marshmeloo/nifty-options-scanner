@@ -3,6 +3,56 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Bank Nifty condor: net negative even with the profit-target exit that fixed NIFTY's -- closed, not adopted (added 2026-08-13)
+
+The placeholder calibration from the 2026-08-12 plumbing entry
+(SHORT_PREMIUM_MIN/MAX=150/250, HEDGE_DISTANCE_POINTS=1000) turned out
+badly miscalibrated, not just imprecise: a direct chain inspection
+showed the EDGE of the reconstructed data's own ATM+/-10-offset window
+(the hard Dhan API cap, ~+/-1000pts at Bank Nifty's 100pt spacing) still
+carries Rs 2-640+ of premium depending on where in the monthly cycle you
+look -- nowhere near the 150-250 band, so it found almost no candidates
+(2 opens in a 90-day probe).
+
+Grid-probed real combinations against actual chain data and found a
+workable one: SHORT_PREMIUM_MIN/MAX=100/400, HEDGE_DISTANCE_POINTS=400.
+Ran the full 5-year baseline (real p90 costs, MIN_IV_RANK_TO_OPEN=None
+since India VIX measures NIFTY's own IV, not Bank Nifty's):
+
+    policy      n     win%   net Rs        months_neg
+    baseline    149   42.3%  -133,835      38/60
+    PT=40%      180   52.8%  -118,479      34/60
+    PT=50%      170   50.0%   -86,094      36/60
+    PT=60%      165   47.3%  -109,800      38/60
+
+PT=50% is the best cell (same direction as NIFTY's own finding -- higher
+win rate, smaller loss) but never flips the sign. For NIFTY, the
+profit-target ALONE didn't fix it either -- it needed pairing with the
+IV-rank entry gate to go net positive, and there is no valid IV-rank
+equivalent here (India VIX doesn't measure Bank Nifty's own volatility;
+a real fix would need a Bank-Nifty-specific ATM-IV-rank measure built
+from scratch, not borrowed).
+
+ALSO a real structural headwind unique to Bank Nifty, not present for
+NIFTY's condor: severe hedge-coverage gap (22,291 coverage_gap skips vs
+only 149 real opens in the baseline) -- the reconstructed data's hard
+ATM+/-10 offset cap bites much harder here because Bank Nifty's monthly
+options carry meaningful premium far more points from spot than NIFTY's
+weekly ones do, so a real day's tradeable condor frequently has a hedge
+the data source simply cannot see. This likely also constrains what the
+LIVE process (main_condor_banknifty.py) can actually trade, not just
+the backtest.
+
+CLOSED, not left open-ended, same reasoning as the original NIFTY condor
+sweep-config closure: this isn't a case for more parameter tuning, the
+missing piece is a genuinely new build (Bank-Nifty ATM-IV regime filter)
+with uncertain payoff, not a config sweep. Not adopted, not pushed to
+prod, main_condor_banknifty.py's placeholder config updated to the
+workable-but-still-losing 100-400/400 calibration so future work starts
+from a real number instead of the original unreachable one. Revisit only
+with a genuinely new idea (the ATM-IV filter, or a wider-coverage data
+source), not another config grid.
+
 ## Bank Nifty momentum: validated across 5 independent years, added to start_trading.ps1 (added 2026-08-13)
 
 Follow-up to the entry below, now that the 5-year backfill and OI-buildup

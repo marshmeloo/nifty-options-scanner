@@ -5,7 +5,10 @@ guarantee as main_condor.py. Own process, own state/journal/log, same
 "one process per Bank Nifty variant" pattern as
 main_price_action_banknifty.py and main_live_banknifty.py.
 
-DO NOT ADD TO start_trading.ps1 YET -- see CALIBRATION STATUS below.
+DO NOT ADD TO start_trading.ps1 -- see CALIBRATION STATUS below. This
+strategy was tested and found NET NEGATIVE even with the profit-target
+exit that fixed NIFTY's condor; see BACKLOG.md's 2026-08-13 "closed, not
+adopted" entry before spending more time tuning this file's numbers.
 
 STRUCTURAL DIFFERENCE FROM THE NIFTY CONDOR (read this first)
 ---------------------------------------------------------------
@@ -23,18 +26,32 @@ asks the expiry list for "the first one with enough days left", and
 Bank Nifty's list happens to be monthly), but the strike-selection
 numbers a weekly condor was tuned around do NOT transfer.
 
-CALIBRATION STATUS -- READ BEFORE TRUSTING ANY RESULT FROM THIS FILE
+CALIBRATION STATUS -- TESTED 2026-08-13, NET NEGATIVE, CLOSED
 ------------------------------------------------------------------------
-SHORT_PREMIUM_MIN/MAX, HEDGE_DISTANCE_POINTS below are PLACEHOLDERS,
-proportionally reasoned (spot level ~57,000 vs NIFTY's ~24,000, and a
-monthly cycle's larger time value) so the plumbing can be exercised
-end-to-end, NOT independently swept the way sweep_condor_config.py did
-for NIFTY (36 configs, 3 rounds, real measured cost model). A real sweep
-against Bank Nifty's own historical data (historical_source.py,
-BANKNIFTY_SECURITY_ID, monthly rolling series, backfilling as of
-2026-08-12) must run and pass the same bar -- real p90 costs,
-walk-forward, outlier-concentration check -- before this is trusted even
-as a backtest verdict, let alone considered for live use.
+The ORIGINAL placeholder here (SHORT_PREMIUM_MIN/MAX=150/250,
+HEDGE_DISTANCE_POINTS=1000) was badly miscalibrated, not just imprecise
+-- a direct chain inspection showed the reconstructed data's own
+ATM+/-10-offset window edge still carries Rs 2-640+ of premium
+depending on the point in the monthly cycle, nowhere near 150-250, so
+it found almost no candidates (2 opens in a 90-day probe).
+
+Grid-probed real chain data and found a workable calibration --
+SHORT_PREMIUM_MIN/MAX=100/400, HEDGE_DISTANCE_POINTS=400 (the values
+now set below) -- then ran the full 5-year baseline with real p90
+costs. Result: NET NEGATIVE at every profit-target level tried
+(baseline -Rs 133,835; PT=40% -Rs 118,479; PT=50% -Rs 86,094, the best
+cell but still a loss; PT=60% -Rs 109,800). The exact fix that flipped
+NIFTY's condor positive (profit-target + IV-rank gate together) only
+has half its ingredient here -- there is no valid IV-rank equivalent
+for Bank Nifty (see below) -- and a severe hedge-coverage gap (22,291
+skips vs 149 real opens) is a real structural headwind NIFTY's condor
+never faced. Full numbers in BACKLOG.md's 2026-08-13 entry.
+
+CLOSED, not left open for more parameter tuning: the missing piece is a
+genuinely new build (a Bank-Nifty-specific ATM-IV regime filter), not a
+config sweep. The values below are kept at the real, workable-but-
+losing calibration (not the original unreachable placeholder) so any
+future work starts from an honest number.
 
 MIN_IV_RANK_TO_OPEN is NOT carried over from the NIFTY condor's
 validated IV-rank gate: India VIX (^INDIAVIX) measures NIFTY's OWN
@@ -73,9 +90,9 @@ BANKNIFTY_SEG = dhan_source.BANKNIFTY_UNDERLYING_SEG
 # Nifty's files -- the exact hazard main_price_action_banknifty.py's
 # docstring documents for its own tracker module.
 ccfg.NIFTY_LOT_SIZE = 30
-ccfg.SHORT_PREMIUM_MIN = 150.0
-ccfg.SHORT_PREMIUM_MAX = 250.0
-ccfg.HEDGE_DISTANCE_POINTS = 1000
+ccfg.SHORT_PREMIUM_MIN = 100.0
+ccfg.SHORT_PREMIUM_MAX = 400.0
+ccfg.HEDGE_DISTANCE_POINTS = 400
 ccfg.MIN_IV_RANK_TO_OPEN = None   # see module docstring -- no valid Bank Nifty IV-rank measure yet
 ccfg.STATE_PATH = "state/condor_position_banknifty.json"
 ccfg.JOURNAL_PATH = "logs/condor_journal_banknifty.jsonl"
