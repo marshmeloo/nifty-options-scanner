@@ -129,9 +129,25 @@
   .activity-detail { color: var(--muted); font-size: 12px; margin-top: 3px; }
 
   .footer-note { color: var(--muted); font-size: 11px; text-align: center; margin-top: 10px; }
+
+  /* ---- Top-level index section divider: NIFTY and Bank Nifty are two
+     completely separate blocks, never merged into the same table. ---- */
+  .section-header {
+    display: flex; align-items: center; gap: 14px;
+    margin: 30px 0 16px;
+  }
+  .section-header:first-of-type { margin-top: 0; }
+  .section-header h1 {
+    font-size: 15px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--text); margin: 0; font-weight: 700;
+  }
+  .section-header .rule { flex: 1; height: 1px; background: var(--border); }
+  .section-header.bn h1 { color: var(--blue); }
 </style>
 </head>
 <body>
+
+<div class="section-header"><h1>NIFTY</h1><div class="rule"></div></div>
 
 <div class="ticker" id="ticker">
   <div class="spot-block">
@@ -196,7 +212,54 @@
   <div id="activity-container"><div class="empty-state">No activity yet.</div></div>
 </div>
 
-<div class="footer-note">Read-only local view of main_live.py's state &amp; logs. Refreshes every 8s. Nothing on this page can place, modify, or cancel anything.</div>
+<div class="section-header bn"><h1>Bank Nifty</h1><div class="rule"></div></div>
+
+<div class="ticker" id="ticker-bn">
+  <div class="spot-block">
+    <span class="spot-label">BANKNIFTY</span>
+    <span class="spot-value" id="spot-value-bn">—</span>
+  </div>
+  <div class="metric">VWAP<b id="vwap-value-bn">—</b></div>
+  <div class="metric">PCR<b id="pcr-value-bn">—</b></div>
+  <div class="metric">SOURCE<b id="source-value-bn">—</b></div>
+  <div class="metric">TODAY'S P&amp;L<b id="total-pnl-value-bn">—</b></div>
+  <div class="live-dot-wrap">
+    <div class="live-dot" id="live-dot-bn"></div>
+    <span id="live-text-bn">connecting…</span>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Open Trades (Momentum Scanner)</h2>
+  <div id="open-trades-container-bn"><div class="empty-state">No open trades.</div></div>
+</div>
+
+<div class="panel" id="closed-today-panel-bn" style="display:none;">
+  <h2>Closed Today</h2>
+  <div id="closed-today-container-bn"></div>
+</div>
+
+<div class="panel" id="condor-panel-bn" style="display:none;">
+  <h2>Iron Condor Position</h2>
+  <div id="condor-container-bn"></div>
+</div>
+
+<div class="panel" id="spread-panel-bn" style="display:none;">
+  <h2>Directional Spread Position</h2>
+  <div id="spread-container-bn"></div>
+</div>
+
+<div class="panel" id="price-action-panel-bn" style="display:none;">
+  <h2>Price Action Strategy <span style="font-weight:400; color:var(--muted); font-size:12px;">— structure-only signal, evaluation phase</span></h2>
+  <div id="price-action-container-bn"></div>
+</div>
+
+<div class="panel">
+  <h2>Recent Decision Activity</h2>
+  <div id="activity-container-bn"><div class="empty-state">No activity yet.</div></div>
+</div>
+
+<div class="footer-note">Read-only local view of main_live.py / main_live_banknifty.py's state &amp; logs. Refreshes every 8s. Nothing on this page can place, modify, or cancel anything.</div>
 
 <script>
 const REFRESH_MS = 8000;
@@ -396,8 +459,9 @@ function renderRBar(t) {
     </div>`;
 }
 
-function renderOpenTrades(trades, totals) {
-  const container = document.getElementById("open-trades-container");
+function renderOpenTrades(trades, totals, suffix) {
+  suffix = suffix || "";
+  const container = document.getElementById("open-trades-container" + suffix);
   if (!trades || !trades.length) {
     container.innerHTML = '<div class="empty-state">No open trades.</div>';
     return;
@@ -484,9 +548,10 @@ function renderRRStats(rr) {
     </div>`;
 }
 
-function renderClosedToday(trades) {
-  const panel = document.getElementById("closed-today-panel");
-  const container = document.getElementById("closed-today-container");
+function renderClosedToday(trades, suffix) {
+  suffix = suffix || "";
+  const panel = document.getElementById("closed-today-panel" + suffix);
+  const container = document.getElementById("closed-today-container" + suffix);
   if (!trades || !trades.length) { panel.style.display = "none"; return; }
   panel.style.display = "block";
   container.innerHTML = `
@@ -509,9 +574,10 @@ function renderClosedToday(trades) {
     </table>`;
 }
 
-function renderPriceAction(trades, closedToday, logAgeSeconds, pollIntervalSeconds) {
-  const panel = document.getElementById("price-action-panel");
-  const container = document.getElementById("price-action-container");
+function renderPriceAction(trades, closedToday, logAgeSeconds, pollIntervalSeconds, suffix) {
+  suffix = suffix || "";
+  const panel = document.getElementById("price-action-panel" + suffix);
+  const container = document.getElementById("price-action-container" + suffix);
   const hasOpen = trades && trades.length;
   const hasClosed = closedToday && closedToday.length;
   if (!hasOpen && !hasClosed) {
@@ -600,9 +666,10 @@ function legRow(label, entryStrike, entryPremium, currentPremium, favorableWhenL
   return `<div class="row"><span class="k">${label} ${entryStrike}</span><span class="v">sold ${entryPremium} → now ${cur}${move}</span></div>`;
 }
 
-function renderCondor(position, ageSeconds, pollIntervalSeconds) {
-  const panel = document.getElementById("condor-panel");
-  const container = document.getElementById("condor-container");
+function renderCondor(position, ageSeconds, pollIntervalSeconds, suffix) {
+  suffix = suffix || "";
+  const panel = document.getElementById("condor-panel" + suffix);
+  const container = document.getElementById("condor-container" + suffix);
   if (!position || position.status !== "OPEN") { panel.style.display = "none"; return; }
   panel.style.display = "block";
   const plan = position.plan || {};
@@ -630,9 +697,10 @@ function renderCondor(position, ageSeconds, pollIntervalSeconds) {
     </div>`;
 }
 
-function renderDirectionalSpread(position, ageSeconds, pollIntervalSeconds) {
-  const panel = document.getElementById("spread-panel");
-  const container = document.getElementById("spread-container");
+function renderDirectionalSpread(position, ageSeconds, pollIntervalSeconds, suffix) {
+  suffix = suffix || "";
+  const panel = document.getElementById("spread-panel" + suffix);
+  const container = document.getElementById("spread-container" + suffix);
   if (!position || position.status !== "OPEN") { panel.style.display = "none"; return; }
   panel.style.display = "block";
   const plan = position.plan || {};
@@ -683,8 +751,9 @@ function renderApprovals(pending) {
   `).join("");
 }
 
-function renderActivity(cycles) {
-  const container = document.getElementById("activity-container");
+function renderActivity(cycles, suffix) {
+  suffix = suffix || "";
+  const container = document.getElementById("activity-container" + suffix);
   if (!cycles || !cycles.length) { container.innerHTML = '<div class="empty-state">No activity yet.</div>'; return; }
   const rows = [];
   [...cycles].reverse().forEach(cycle => {
@@ -754,6 +823,44 @@ async function refresh() {
     renderPriceAction(data.price_action_trades, data.price_action_closed_today, data.price_action_log_age_seconds, data.price_action_poll_interval_seconds);
     renderApprovals(data.pending_approvals);
     renderActivity(data.recent_cycles);
+
+    // --- Bank Nifty: entirely separate data (data.banknifty), rendered
+    // into the "-bn" suffixed panels below the NIFTY section -- never
+    // merged into the NIFTY calls above.
+    const bn = data.banknifty || {};
+    const bnCycle = bn.latest_cycle;
+    document.getElementById("spot-value-bn").textContent = bnCycle ? bnCycle.spot : "—";
+    document.getElementById("vwap-value-bn").textContent = bnCycle ? bnCycle.vwap : "—";
+    document.getElementById("pcr-value-bn").textContent = bnCycle ? bnCycle.pcr : "—";
+    document.getElementById("source-value-bn").textContent = bnCycle ? bnCycle.source : "—";
+
+    const bnTotals = bn.totals;
+    const bnPnlEl = document.getElementById("total-pnl-value-bn");
+    if (bnTotals) {
+      bnPnlEl.textContent = fmtInr(bnTotals.total_pnl_today_inr);
+      bnPnlEl.className = pnlClass(bnTotals.total_pnl_today_inr);
+    }
+
+    const bnAge = bn.main_log_age_seconds;
+    const bnDot = document.getElementById("live-dot-bn");
+    const bnText = document.getElementById("live-text-bn");
+    if (bnAge === null || bnAge === undefined) {
+      bnDot.classList.add("stale");
+      bnText.textContent = "no log found";
+    } else if (bnAge > STALE_SECONDS) {
+      bnDot.classList.add("stale");
+      bnText.textContent = `stale (${Math.round(bnAge)}s since last update)`;
+    } else {
+      bnDot.classList.remove("stale");
+      bnText.textContent = `updated ${Math.round(bnAge)}s ago`;
+    }
+
+    renderOpenTrades(bn.open_trades, bn.totals, "-bn");
+    renderClosedToday(bn.closed_today, "-bn");
+    renderCondor(bn.condor_position, bn.condor_position_age_seconds, bn.condor_poll_interval_seconds, "-bn");
+    renderDirectionalSpread(bn.directional_spread_position, bn.directional_spread_position_age_seconds, bn.directional_spread_poll_interval_seconds, "-bn");
+    renderPriceAction(bn.price_action_trades, bn.price_action_closed_today, bn.price_action_log_age_seconds, bn.price_action_poll_interval_seconds, "-bn");
+    renderActivity(bn.recent_cycles, "-bn");
   } catch (e) {
     document.getElementById("live-text").textContent = "connection error";
     document.getElementById("live-dot").classList.add("stale");

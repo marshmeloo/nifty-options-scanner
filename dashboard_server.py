@@ -40,6 +40,21 @@ TRADE_JOURNAL_PATH = LOGS_DIR / "trade_journal.jsonl"
 
 DECISION_LOG_TAIL_LINES = 5   # how many recent cycles to show in the "recent activity" panel
 
+# --- Bank Nifty: separate state/journal/log files, one per strategy,
+# same naming convention each main_*_banknifty.py process itself uses
+# (see e.g. main_live_banknifty.py's own path overrides). Added
+# 2026-08-13 -- these processes were already running and producing real
+# candidate/decision data with ZERO dashboard visibility: every
+# strike/score/reason was only ever readable from raw log files.
+BANKNIFTY_LOT_SIZE = 30
+BN_TRADE_JOURNAL_PATH = LOGS_DIR / "trade_journal_banknifty.jsonl"
+BN_OPEN_TRADES_PATH = STATE_DIR / "open_trades_banknifty.json"
+BN_DECISION_LOG_PATH = LOGS_DIR / "decision_log_banknifty.jsonl"
+BN_CONDOR_STATE_PATH = STATE_DIR / "condor_position_banknifty.json"
+BN_SPREAD_STATE_PATH = STATE_DIR / "directional_spread_position_banknifty.json"
+BN_PRICE_ACTION_STATE_PATH = STATE_DIR / "price_action_position_banknifty.json"
+BN_PRICE_ACTION_JOURNAL_PATH = LOGS_DIR / "price_action_journal_banknifty.jsonl"
+
 
 def _read_todays_closed_trades() -> list:
     """
@@ -133,6 +148,54 @@ def _enrich_price_action_trades(trades: list) -> list:
     return enriched
 
 
+def _read_closed_today(journal_path: Path) -> list:
+    """
+    Generic version of _read_todays_closed_trades / _read_price_action_closed_today
+    -- same logic, parameterized by journal path, so the same helper covers
+    any strategy's journal (including a Bank Nifty variant's own) without
+    duplicating the read/filter loop a third and fourth time.
+    """
+    if not journal_path.exists():
+        return []
+    today_str = date.today().isoformat()
+    closed_today = []
+    try:
+        with open(journal_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (entry.get("closed_at") or "").startswith(today_str):
+                    closed_today.append(entry)
+    except Exception:
+        return []
+    return closed_today
+
+
+def _enrich_trades(trades: list, lot_size: int, r_multiple_fn, target_rr) -> list:
+    """
+    Generic version of _enrich_open_trades / _enrich_price_action_trades --
+    same computed fields (capital deployed, live R-multiple), parameterized
+    by lot size and which tracker's r_multiple() to use, so Bank Nifty's
+    own lot size (30, not 65) and trackers can reuse this without a
+    NIFTY-specific value baked in.
+    """
+    enriched = []
+    for t in trades:
+        t = dict(t)
+        t["capital_deployed"] = round(t.get("entry", 0) * lot_size * t.get("lots", 1), 2)
+        t["current_r"] = r_multiple_fn(t, t.get("current_ltp"))
+        t["target_r"] = target_rr
+        hit = sorted(float(m) for m in (t.get("rr_milestones_hit") or {}))
+        t["best_milestone_hit"] = hit[-1] if hit else None
+        enriched.append(t)
+    return enriched
+
+
 def _read_json(path: Path, default=None):
     try:
         return json.loads(path.read_text())
@@ -174,6 +237,14 @@ def todays_main_log_path() -> Path:
 
 def todays_price_action_log_path() -> Path:
     return LOGS_DIR / f"price_action_{datetime.now().strftime('%Y%m%d')}.log"
+
+
+def todays_banknifty_main_log_path() -> Path:
+    return LOGS_DIR / f"banknifty_scan_{datetime.now().strftime('%Y%m%d')}.log"
+
+
+def todays_banknifty_price_action_log_path() -> Path:
+    return LOGS_DIR / f"price_action_banknifty_{datetime.now().strftime('%Y%m%d')}.log"
 
 
 def build_state() -> dict:
@@ -271,6 +342,75 @@ def build_state() -> dict:
     condor_position = (condor_state or {}).get("position")
     spread_position = (spread_state or {}).get("position")
 
+    # --- Bank Nifty: own section entirely, never merged into the NIFTY
+    # fields above -- each main_*_banknifty.py process writes its own
+    # state/journal/log files (see the BN_* path constants), so this
+    # mirrors the NIFTY block but reads those instead. Bank Nifty condor
+    # (main_condor_banknifty.py) isn't run live (tested and closed as
+    # net-negative, see BACKLOG.md) -- its state file plausibly won't
+    # exist, which the panel below handles the same as "no position open".
+    bn_decision_cycles = _read_jsonl_tail(BN_DECISION_LOG_PATH, DECISION_LOG_TAIL_LINES)
+    bn_latest_cycle = bn_decision_cycles[-1] if bn_decision_cycles else None
+
+    bn_open_trades_state = _read_json(BN_OPEN_TRADES_PATH, default={})
+    bn_open_trades_raw = bn_open_trades_state.get("trades", []) if bn_open_trades_state else []
+    bn_open_trades = _enrich_trades(bn_open_trades_raw, BANKNIFTY_LOT_SIZE, tt.r_multiple, config.DEFAULT_TARGET_RR)
+    bn_closed_today = _read_closed_today(BN_TRADE_JOURNAL_PATH)
+
+    bn_total_capital_deployed = round(sum(t["capital_deployed"] for t in bn_open_trades), 2)
+    bn_total_open_pnl_inr = round(sum(t.get("running_pnl_inr", 0) or 0 for t in bn_open_trades), 2)
+    bn_total_realized_pnl_inr = round(sum(t.get("pnl_inr", 0) or 0 for t in bn_closed_today), 2)
+    bn_total_pnl_today_inr = round(bn_total_open_pnl_inr + bn_total_realized_pnl_inr, 2)
+
+    bn_condor_state = _read_json(BN_CONDOR_STATE_PATH, default={})
+    bn_spread_state = _read_json(BN_SPREAD_STATE_PATH, default={})
+    bn_price_action_state = _read_json(BN_PRICE_ACTION_STATE_PATH, default={})
+    bn_price_action_trades = _enrich_trades(
+        (bn_price_action_state or {}).get("trades", []) if bn_price_action_state else [],
+        BANKNIFTY_LOT_SIZE, pat.r_multiple, getattr(pacfg, "TARGET_RR", None),
+    )
+    bn_price_action_closed_today = _read_closed_today(BN_PRICE_ACTION_JOURNAL_PATH)
+
+    bn_main_log_path = todays_banknifty_main_log_path()
+    bn_log_age_seconds = None
+    if bn_main_log_path.exists():
+        bn_log_age_seconds = round(datetime.now().timestamp() - bn_main_log_path.stat().st_mtime, 1)
+
+    bn_price_action_log_path = todays_banknifty_price_action_log_path()
+    bn_price_action_log_age_seconds = None
+    if bn_price_action_log_path.exists():
+        bn_price_action_log_age_seconds = round(
+            datetime.now().timestamp() - bn_price_action_log_path.stat().st_mtime, 1
+        )
+
+    bn_condor_position = (bn_condor_state or {}).get("position")
+    bn_spread_position = (bn_spread_state or {}).get("position")
+
+    banknifty = {
+        "latest_cycle": bn_latest_cycle,
+        "recent_cycles": bn_decision_cycles,
+        "open_trades": bn_open_trades,
+        "closed_today": bn_closed_today,
+        "opened_today": bn_open_trades_state.get("opened_today") if bn_open_trades_state else None,
+        "totals": {
+            "capital_deployed": bn_total_capital_deployed,
+            "open_pnl_inr": bn_total_open_pnl_inr,
+            "realized_pnl_inr": bn_total_realized_pnl_inr,
+            "total_pnl_today_inr": bn_total_pnl_today_inr,
+        },
+        "condor_position": bn_condor_position,
+        "condor_position_age_seconds": _position_age_seconds(bn_condor_position),
+        "condor_poll_interval_seconds": ccfg.POLL_INTERVAL_SECONDS,
+        "directional_spread_position": bn_spread_position,
+        "directional_spread_position_age_seconds": _position_age_seconds(bn_spread_position),
+        "directional_spread_poll_interval_seconds": getattr(dcfg, "POLL_INTERVAL_SECONDS", None),
+        "main_log_age_seconds": bn_log_age_seconds,
+        "price_action_trades": bn_price_action_trades,
+        "price_action_closed_today": bn_price_action_closed_today,
+        "price_action_log_age_seconds": bn_price_action_log_age_seconds,
+        "price_action_poll_interval_seconds": getattr(pacfg, "POLL_INTERVAL_SECONDS", None),
+    }
+
     return {
         "server_time": datetime.now().isoformat(timespec="seconds"),
         "latest_cycle": latest_cycle,
@@ -307,6 +447,7 @@ def build_state() -> dict:
         "price_action_closed_today": price_action_closed_today,
         "price_action_poll_interval_seconds": getattr(pacfg, "POLL_INTERVAL_SECONDS", None),
         "price_action_log_age_seconds": price_action_log_age_seconds,
+        "banknifty": banknifty,
     }
 
 
