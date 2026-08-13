@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Runs the pre-market brief, then starts the order-flow feed, all five
+  Runs the pre-market brief, then starts the order-flow feed, all six
   live/paper strategy loops, and the read-only dashboard in parallel,
   hidden (no visible console windows).
 
@@ -9,7 +9,7 @@
   this project is analytics/paper-tracking only (see each script's own
   docstring), and dashboard_server.py is read-only (never writes state,
   never talks to Dhan/NSE itself). This just automates what you'd
-  otherwise do by opening seven terminals by hand each morning.
+  otherwise do by opening eight terminals by hand each morning.
 
   REQUIRES DHAN_ACCESS_TOKEN / DHAN_CLIENT_ID to already be set as
   PERSISTENT Windows USER environment variables (via `setx`, run in
@@ -100,6 +100,7 @@ $scripts = @(
     @{ file = "main_directional_spread.py"; args = @() },
     @{ file = "main_price_action.py"; args = @() },
     @{ file = "main_price_action_banknifty.py"; args = @() },
+    @{ file = "main_live_banknifty.py"; args = @() },
     @{ file = "dashboard_server.py"; args = @() }
 )
 

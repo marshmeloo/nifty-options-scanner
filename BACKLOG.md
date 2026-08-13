@@ -3,6 +3,60 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Bank Nifty momentum: validated across 5 independent years, added to start_trading.ps1 (added 2026-08-13)
+
+Follow-up to the entry below, now that the 5-year backfill and OI-buildup
+repair finished. Swept 10 PREMIUM_MIN/MAX bands against the full 1,244-day
+history (real costs via costs.py, config.NIFTY_LOT_SIZE=30 throughout):
+
+    band                    n      win%   net Rs
+    NIFTY band (control)    3,369  24.3%  +575,844
+    current placeholder     8,483   8.3%  +3,090,771   (300-800)
+    200-600/800/1000        9,461   9.3%  +3,278,667   (best)
+    400-600/800/1000        7,032   7.5%  +2,812,955
+
+Every Bank-Nifty-calibrated band beat the NIFTY band by 5-6x. But a
+first walk-forward split (IS 2021-08..2025-07, OOS 2025-08..2026-08)
+revealed a real problem before adopting anything: 98% of the ENTIRE
+13-month OOS profit came from just the most recent 8 months
+(2026-01..2026-08, +Rs 7,82,580) -- the genuinely fresh first 5 months of
+OOS (2025-08..2025-12) were flat (+Rs 14,138). Same "was this just a
+favourable regime" trap the condor's own OOS hit earlier this session,
+here more extreme.
+
+Re-tested properly: split into 5 INDEPENDENT ~1-year periods instead of
+one IS/OOS split.
+
+    period                    net Rs (300-800)   net Rs (200-800)
+    Y1 2021-08..2022-07       +492,826           +598,141
+    Y2 2022-08..2023-07       +464,788           +476,408
+    Y3 2023-08..2024-07       +748,201           +796,718
+    Y4 2024-08..2025-07       +588,238           +604,373
+    Y5 2025-08..2026-08       +796,718           +803,026
+
+5/5 periods positive for both bands, magnitudes within a ~1.7x range of
+each other (not one period dominating) -- Y5 (containing the earlier
+"hot stretch") is not meaningfully ahead of Y3, an entirely different,
+older period. Trade-level concentration also checked and clean: top-3
+trades = 2-8% of total. This is what actually justified adopting it,
+not the earlier single OOS split.
+
+STANDING CAVEATS: the reconstructed historical data has no bid/ask
+(shadow.py falls back to LTP fills -- the same OPTIMISTIC bias every
+backtest against historical_source.py data carries). Only ~8-9% of
+trades hit the exact 2R target; most profit comes from EOD_CLOSE trades
+averaging positive rather than genuine target hits -- a different
+character from NIFTY's own momentum, and one with NO live track record
+yet, since this is the first time this strategy has ever traded Bank
+Nifty at all.
+
+DECISION: kept PREMIUM_MIN/MAX=300/800 (the original placeholder --
+close enough to the swept-best 200-800 that re-tuning wasn't worth the
+extra overfitting risk of picking the literal best cell). Added
+main_live_banknifty.py to automation/start_trading.ps1. Condor and
+directional spread's Bank Nifty variants are still backtest-only,
+unswept -- see the entry below.
+
 ## Bank Nifty: plumbing built for all three strategies, NOT validated, NOT in automation yet (added 2026-08-12)
 
 Direct follow-up to the 2026-08-04 "Run every strategy on Bank Nifty"

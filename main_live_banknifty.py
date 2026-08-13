@@ -33,24 +33,34 @@ market_regime.py each hardcode their own state/journal/baseline paths
 (not config-driven), so those are patched directly as module attributes
 after import instead.
 
-CALIBRATION STATUS -- READ BEFORE TRUSTING THIS LIVE
-------------------------------------------------------
-PREMIUM_MIN/MAX = 300/800 and NIFTY_LOT_SIZE = 30 are NOT independently
-swept for momentum -- they are carried over from
-main_price_action_banknifty.py's own real 2026-08-06 sweep (18 band
-combinations against 5 years of Bank Nifty data), on the reasoning that
-the band mostly reflects what premiums actually exist/are liquid at
-Bank Nifty's price level, a property of the underlying rather than of
-which strategy is trading it. STRIKE_RANGE_POINTS = 2000 is a
-PROPORTIONAL SCALE of NIFTY's 800pt default (800/24000 spot =~ 3.3%;
-2000/57000 spot =~ 3.5%), not independently measured either.
+CALIBRATION STATUS -- VALIDATED 2026-08-13, ADDED TO start_trading.ps1
+------------------------------------------------------------------------
+PREMIUM_MIN/MAX = 300/800 (this file's original placeholder, carried
+over from main_price_action_banknifty.py's own real 2026-08-06 sweep)
+was swept against the full backfilled Bank Nifty history (1,244 days,
+2021-08-04..2026-08-11) alongside several other bands -- see
+BACKLOG.md's 2026-08-13 entry for the full numbers. 300-800 held up
+well (2nd-best of 10 bands tried) and, critically, was tested against 5
+INDEPENDENT ~1-year periods (not just an aggregate or a single in-
+sample/out-of-sample split, which initially looked regime-dependent --
+one OOS split had 98% of its profit concentrated in a single 8-month
+stretch): every one of the 5 years is independently positive
+(Rs 4.6L-8.0L net each), and trade-level concentration is low (top-3
+trades = 2-8% of total). This clears the same walk-forward +
+outlier-concentration bar the NIFTY condor needed before going live,
+and is now part of the daily automation (automation/start_trading.ps1).
 
-Bank Nifty's own historical option-chain data was still being backfilled
-(historical_source.py, ~2021-08 onward, monthly-expiry rolling series)
-as this file was written -- see BACKLOG.md for the sweep that should run
-against it before this process is added to start_trading.ps1. Until
-then this is DELIBERATELY NOT part of the daily automation; run it by
-hand if you want to watch it forward-test.
+Real, standing caveats (do not lose sight of these just because the
+sweep passed): the reconstructed historical data has no bid/ask, so
+shadow.py falls back to LTP fills -- the same OPTIMISTIC bias every
+backtest against historical_source.py data carries, NIFTY's included.
+Only ~8-9% of trades ever hit the exact target; most of the profit
+comes from EOD_CLOSE trades averaging positive rather than genuine
+target hits, a materially different profile from NIFTY's own momentum
+character and one with no live track record yet to compare against --
+this is the first time this strategy has ever actually traded Bank
+Nifty. STRIKE_RANGE_POINTS = 2000 remains an unswept proportional
+scale of NIFTY's 800pt default, not independently measured.
 
 Run:
   set DHAN_CLIENT_ID=...
