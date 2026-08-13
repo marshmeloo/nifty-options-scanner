@@ -3,6 +3,58 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Bank Nifty directional spread: validated (4/5 independent years), added to start_trading.ps1 (added 2026-08-13)
+
+Third of the three Bank Nifty variants tested this session (momentum
+validated and live, condor tested and closed as net-negative -- see
+those entries). Checked the placeholder config (250-450 premium, 350pt
+hedge) against real chain data first: 20/20 sampled days found a valid
+short leg, 65% also found the hedge within the reconstructed data's
+coverage window -- a far less severe version of the condor's coverage
+problem, since this strategy's hedge sits much closer to the short
+strike.
+
+Full 5-year baseline (real p90 costs): n=154, win=57.1%, net
++Rs 132,462, but top-3 trades = 47.3% of total -- flagged before
+trusting it. Split into 5 independent ~1-year periods:
+
+    period                  n    win%   net Rs
+    Y1 2021-08..2022-07     36   52.8%  +1,610
+    Y2 2022-08..2023-07     37   62.2%  +42,489
+    Y3 2023-08..2024-07     30   66.7%  +71,721
+    Y4 2024-08..2025-07     24   41.7%  -5,189
+    Y5 2025-08..2026-08     27   59.3%  +21,831
+
+4/5 periods positive. Dug into the concentration: the single best trade
+in the whole run (2024-05-29, +Rs 36,705, inside Y3) is 28% of the total
+-- removing it entirely still leaves +Rs 95,757 net and 4/5 years
+positive, so the edge does not depend on that one trade, though Y3
+without it is meaningfully less impressive (+35,016 vs +71,721).
+
+Y4's negative result traced to just 4 stop-loss trades (-Rs 15,630) out
+of 24 -- looked like a miscalibrated STOP_LOSS_PCT_OF_MAX_LOSS (50%,
+inherited unchanged from NIFTY). Swept 30/40/50/60/70%/disabled across
+all 5 periods to check:
+
+    SL       total Rs    periods positive
+    30%      +87,320     4/5
+    40%      +129,450    4/5
+    50%      +132,462    4/5   (current, best total)
+    60%      +105,147    3/5
+    70%      +127,355    3/5
+    disabled +118,725    3/5
+
+Y4 stays negative at EVERY setting including disabled -- real period
+variance in that year's directional calls, not a stop-loss calibration
+problem. The inherited 50% was already near-optimal; no change made.
+
+DECISION: kept the placeholder config as-is (already validated), added
+main_directional_spread_banknifty.py to automation/start_trading.ps1.
+Standing caveat: LTP-fallback-fill optimism bias, same as every backtest
+against this reconstructed data. Meaningfully weaker evidence than
+momentum's clean 5/5-period result, but a real, survives-losing-its-
+best-trade edge -- not remotely like the condor's outright failure.
+
 ## Bank Nifty condor: net negative even with the profit-target exit that fixed NIFTY's -- closed, not adopted (added 2026-08-13)
 
 The placeholder calibration from the 2026-08-12 plumbing entry

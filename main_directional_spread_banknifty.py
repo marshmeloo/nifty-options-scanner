@@ -6,7 +6,8 @@ state/journal/log, same "one process per Bank Nifty variant" pattern as
 main_price_action_banknifty.py, main_live_banknifty.py, and
 main_condor_banknifty.py.
 
-DO NOT ADD TO start_trading.ps1 YET -- see CALIBRATION STATUS below.
+Validated 2026-08-13 and added to start_trading.ps1 -- see CALIBRATION
+STATUS below for the numbers and honest caveats.
 
 STRUCTURAL NOTE -- SAME EXPIRY-CYCLE FACT AS THE CONDOR
 -----------------------------------------------------------
@@ -19,16 +20,31 @@ being held to it, so the monthly-vs-weekly underlying cycle mostly
 affects strike/hedge selection and gap-risk sizing, not the fundamental
 shape of the strategy the way it does for the condor.
 
-CALIBRATION STATUS -- READ BEFORE TRUSTING ANY RESULT FROM THIS FILE
+CALIBRATION STATUS -- VALIDATED 2026-08-13
 ------------------------------------------------------------------------
-SHORT_PREMIUM_MIN/MAX, HEDGE_DISTANCE_POINTS below are PLACEHOLDERS,
-proportionally reasoned from the NIFTY spread's own real-swept values
-(sweep_spread_config.py, 493 days, 12 profitable cells) scaled for Bank
-Nifty's spot level and monthly premium, NOT independently swept the same
-way. A real sweep against Bank Nifty's own historical data (same shape
-as sweep_spread_config.py) must run and pass the same bar -- real p90
-costs, walk-forward, outlier-concentration check -- before this is
-trusted even as a backtest verdict, let alone considered for live use.
+SHORT_PREMIUM_MIN/MAX=250/450, HEDGE_DISTANCE_POINTS=350 (proportionally
+reasoned from the NIFTY spread's own swept values, then checked against
+real chain data -- 20/20 samples found a valid short leg, 65% also found
+the hedge within the reconstructed data's coverage window) were tested
+against the full 5-year Bank Nifty history, real p90 costs, split into 5
+INDEPENDENT ~1-year periods (not just an aggregate or a single walk-
+forward split): 4 of 5 years positive (net +Rs 132,462 total). The
+single best trade in the whole run (+Rs 36,705, inside the strongest
+year) accounts for 28% of total profit -- removing it entirely still
+leaves +Rs 95,757 and 4/5 years positive, so the edge does not depend on
+that one trade. The one negative year (Y4, 2024-08..2025-07, -Rs 5,189)
+traces to 4 stop-loss trades, but a full STOP_LOSS_PCT_OF_MAX_LOSS sweep
+(30/40/50/60/70%/disabled) showed Y4 stays negative at EVERY setting,
+including with the stop disabled -- real period variance in that year's
+directional calls, not a miscalibrated stop. The inherited 50% stop
+(unchanged from NIFTY) turned out to already be near-optimal among
+everything tested. Full numbers in BACKLOG.md's 2026-08-13 entry.
+
+Standing caveat, same as every backtest against this reconstructed data:
+LTP-fallback fills (no bid/ask in historical_source.py's data), an
+OPTIMISTIC bias relative to live. This is meaningfully less clean
+evidence than momentum's 5/5-period result, but far stronger than the
+condor's outright failure.
 
 DATA SOURCE: dhan_source directly with BANKNIFTY_UNDERLYING_SCRIP/_SEG
 -- NOT resilient_source.py (hardcoded to NIFTY). Dhan-only, no NSE/
