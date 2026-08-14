@@ -146,6 +146,28 @@ LONG_UNWINDING_SCORE = -0.5     # price down + OI down: longs capitulating, bear
 DEFAULT_STOP_LOSS_PCT = 30.0    # % of premium, used only if no explicit stop is computed
 DEFAULT_TARGET_RR = 2.0         # target expressed as reward:risk multiple of the stop distance
 
+# --- Breakeven-arm exit (added 2026-08-14) ---
+# Once a trade's favorable excursion reaches this many R, arm a breakeven
+# stop: if price later falls back to entry, close it there instead of
+# letting it round-trip into a real loss. Validated across the full
+# 2020-08..2026-08 reconstructed history (10,660 trades): drawdown
+# 44.8%->15.8%, net P&L +Rs16.6L->+Rs39.2L (STT-only) / +Rs14.3L->+Rs36.8L
+# (real spread-inclusive), never made a single one of 73 calendar months
+# worse, and independently confirmed against the real live journal (77
+# trades: -Rs17,923 actual -> -Rs3,486 simulated). See the NIFTY momentum
+# research note for the full backtest. Set to None to disable and hold
+# every trade to its original target/stop/EOD close, as before.
+#
+# A trade that arms and later closes at breakeven is NOT dropped from
+# tracking -- see _seed_breakeven_shadow()/update_breakeven_shadows():
+# the same contract keeps being watched (no real position, no further
+# P&L impact) until it reaches DEFAULT_TARGET_RR, the original stop, or
+# end of day, so there is an ongoing, real answer to "would this trade
+# have gone on to actually hit target after being stopped out early" --
+# exactly the question this rule's own adoption should keep being
+# checked against, not just backtested once and trusted forever.
+BREAKEVEN_ARM_R = 0.5
+
 # --- Market-bias gating (see scanner.compute_market_bias) ---
 # compute_market_bias() produces a top-down bullish/bearish/neutral read
 # from trend, RSI, ROC and PCR. Until this setting existed it was logged

@@ -47,6 +47,11 @@ LOG_DIR.mkdir(exist_ok=True)
 
 OPEN_TRADES_PATH = STATE_DIR / "open_trades.json"
 JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
+# Real trades close here for good once the breakeven-arm rule fires (see
+# config.BREAKEVEN_ARM_R) -- this is a SEPARATE, purely observational
+# journal of what that same contract did AFTERWARD, up to the original
+# target/stop/EOD. Never affects real P&L or state["trades"].
+BREAKEVEN_SHADOW_JOURNAL_PATH = LOG_DIR / "breakeven_shadow_journal.jsonl"
 
 
 def load_open_trades() -> dict:
@@ -70,14 +75,16 @@ def load_open_trades() -> dict:
         if data.get("date") == date.today().isoformat():
             data.setdefault("stop_cooldowns", {})
             data.setdefault("direction_cooldowns", {})
+            data.setdefault("breakeven_shadows", [])
             return data
         if data.get("trades"):
             data["_stale_from_previous_session"] = True
             data.setdefault("stop_cooldowns", {})
             data.setdefault("direction_cooldowns", {})
+            data.setdefault("breakeven_shadows", [])
             return data
     return {"date": date.today().isoformat(), "trades": [], "opened_today": 0,
-            "stop_cooldowns": {}, "direction_cooldowns": {}}
+            "stop_cooldowns": {}, "direction_cooldowns": {}, "breakeven_shadows": []}
 
 
 def settle_stale_trades(state: dict, snapshot=None) -> list:
@@ -186,10 +193,10 @@ def journal_writes_disabled():
         JOURNAL_WRITES_ENABLED = previous
 
 
-def _append_journal(entry: dict):
+def _append_journal(entry: dict, path: Path = None):
     if not JOURNAL_WRITES_ENABLED:
         return
-    with open(JOURNAL_PATH, "a") as f:
+    with open(path or JOURNAL_PATH, "a") as f:
         f.write(json.dumps(entry) + "\n")
 
 
@@ -574,6 +581,12 @@ def _build_lesson(trade: dict, outcome: str) -> str:
         base = f"Hit target ({trade['pnl_pct']:+.1f}%). Contributing signals: {tag_text}."
     elif outcome == "LOSS":
         base = f"Hit stop ({trade['pnl_pct']:+.1f}%). Re-examine reliance on: {tag_text}."
+    elif outcome == "BREAKEVEN_STOP":
+        base = (
+            f"Armed breakeven stop after reaching {trade.get('max_r_seen', 0):+.2f}R, "
+            f"closed back near entry ({trade['pnl_pct']:+.1f}%). Signals: {tag_text}. "
+            f"Now watching this contract to see if it would have hit target anyway."
+        )
     else:  # EOD_CLOSE, RECOVERED_INTERRUPTED_SESSION, etc.
         base = f"Closed at end of day, neither target nor stop hit ({trade['pnl_pct']:+.1f}%). Signals: {tag_text}."
 
@@ -690,9 +703,26 @@ def update_open_trades(state: dict, snapshot) -> list:
         current_ltp = exit_price_for(quote)
         _update_excursion(trade, current_ltp, snapshot.timestamp)
 
+        # Breakeven-arm: once this trade has EVER been up config.BREAKEVEN_ARM_R
+        # (max_r_seen already reflects this cycle, _update_excursion ran just
+        # above), a return to entry price closes it here instead of letting it
+        # keep falling toward the original stop. Checked AFTER target (an
+        # outright win is strictly better and takes priority) and BEFORE the
+        # original stop (which a real winning trade's price must cross entry
+        # to even approach, so this fires first for every armed trade in
+        # practice -- the original stop remains the fallback for trades that
+        # never got going at all). See config.BREAKEVEN_ARM_R's own comment.
+        armed = (
+            getattr(config, "BREAKEVEN_ARM_R", None) is not None
+            and trade.get("max_r_seen") is not None
+            and trade["max_r_seen"] >= config.BREAKEVEN_ARM_R
+        )
+
         outcome = None
         if current_ltp >= trade["target"]:
             outcome = "WIN"
+        elif armed and current_ltp <= trade["entry"]:
+            outcome = "BREAKEVEN_STOP"
         elif current_ltp <= trade["stop"]:
             outcome = "LOSS"
 
@@ -709,6 +739,8 @@ def update_open_trades(state: dict, snapshot) -> list:
             if outcome == "LOSS":
                 _record_stop_cooldown(state, trade)
                 _record_direction_cooldown(state, trade)
+            elif outcome == "BREAKEVEN_STOP":
+                _seed_breakeven_shadow(state, trade, snapshot.timestamp)
             closed_this_cycle.append(trade)
         else:
             trade["current_ltp"] = current_ltp
@@ -761,6 +793,116 @@ def force_close_end_of_day(state: dict, snapshot) -> list:
         _append_journal(trade)
         closed.append(trade)
     state["trades"] = []
+    return closed
+
+
+def _seed_breakeven_shadow(state: dict, trade: dict, timestamp) -> None:
+    """
+    Called the instant a real trade closes via the breakeven-arm rule
+    (see update_open_trades). Starts a lightweight, purely observational
+    record of the SAME contract so there's an ongoing answer to "did this
+    one actually go on to hit target after being stopped out early" --
+    never touches state["trades"], real P&L, or the real journal again.
+    """
+    unit = risk_unit(trade)
+    r_at_close = round((trade["exit_ltp"] - trade["entry"]) / unit, 2) if unit else None
+    shadow = {
+        "id": f"{trade['id']}_shadow",
+        "strike": trade["strike"],
+        "option_type": trade["option_type"],
+        "entry": trade["entry"],
+        "target": trade["target"],
+        "stop": trade["stop"],
+        "lots": trade["lots"],
+        "reason_tags": trade.get("reason_tags", []),
+        "breakeven_closed_at": trade["closed_at"],
+        "breakeven_exit_ltp": trade["exit_ltp"],
+        "breakeven_pnl_inr": trade["pnl_inr"],
+        "status": "WATCHING",
+        "max_ltp_seen_after_breakeven": trade["exit_ltp"],
+        "min_ltp_seen_after_breakeven": trade["exit_ltp"],
+        "max_r_seen_after_breakeven": r_at_close,
+    }
+    state.setdefault("breakeven_shadows", []).append(shadow)
+
+
+def update_breakeven_shadows(state: dict, snapshot) -> list:
+    """
+    Call every cycle, same as update_open_trades. Walks every contract a
+    breakeven-close is still watching forward against its ORIGINAL
+    target/stop (config.DEFAULT_TARGET_RR's 2R, not the breakeven exit) --
+    purely to answer, with real forward data, whether BREAKEVEN_ARM_R is
+    actually the right threshold. Resolved shadows are journaled to
+    BREAKEVEN_SHADOW_JOURNAL_PATH, a file the real P&L/win-rate numbers
+    never read from.
+    """
+    resolved = []
+    still_watching = []
+    quote_lookup = {(q.strike, q.option_type): q for q in snapshot.chain}
+
+    for shadow in state.get("breakeven_shadows", []):
+        quote = quote_lookup.get((shadow["strike"], shadow["option_type"]))
+        if quote is None:
+            still_watching.append(shadow)
+            continue
+
+        current_ltp = exit_price_for(quote)
+        unit = shadow["entry"] - shadow["stop"]
+        current_r = round((current_ltp - shadow["entry"]) / unit, 2) if unit else None
+
+        shadow["max_ltp_seen_after_breakeven"] = max(shadow.get("max_ltp_seen_after_breakeven", current_ltp), current_ltp)
+        shadow["min_ltp_seen_after_breakeven"] = min(shadow.get("min_ltp_seen_after_breakeven", current_ltp), current_ltp)
+        if current_r is not None:
+            prior = shadow.get("max_r_seen_after_breakeven")
+            if prior is None or current_r > prior:
+                shadow["max_r_seen_after_breakeven"] = current_r
+
+        result = None
+        if current_ltp >= shadow["target"]:
+            result = "WOULD_HAVE_HIT_TARGET"
+        elif current_ltp <= shadow["stop"]:
+            result = "WOULD_HAVE_HIT_STOP"
+
+        if result:
+            shadow["resolved_at"] = snapshot.timestamp.isoformat()
+            shadow["resolved_ltp"] = current_ltp
+            shadow["resolution"] = result
+            shadow["status"] = "RESOLVED"
+            _append_journal(shadow, path=BREAKEVEN_SHADOW_JOURNAL_PATH)
+            resolved.append(shadow)
+        else:
+            shadow["current_ltp_after_breakeven"] = current_ltp
+            still_watching.append(shadow)
+
+    state["breakeven_shadows"] = still_watching
+    return resolved
+
+
+def force_close_breakeven_shadows(state: dict, snapshot) -> list:
+    """EOD finalization for any breakeven shadows still being watched when
+    the market closes -- same reasoning as force_close_end_of_day, but
+    resolution is "still open at close", not a real trade outcome."""
+    closed = []
+    quote_lookup = {(q.strike, q.option_type): q for q in snapshot.chain}
+    for shadow in state.get("breakeven_shadows", []):
+        quote = quote_lookup.get((shadow["strike"], shadow["option_type"]))
+        if quote is not None:
+            current_ltp = exit_price_for(quote)
+            unit = shadow["entry"] - shadow["stop"]
+            if unit:
+                current_r = round((current_ltp - shadow["entry"]) / unit, 2)
+                prior = shadow.get("max_r_seen_after_breakeven")
+                if prior is None or current_r > prior:
+                    shadow["max_r_seen_after_breakeven"] = current_r
+            shadow["resolved_ltp"] = current_ltp
+        else:
+            shadow["resolved_ltp"] = None
+        shadow["resolved_at"] = snapshot.timestamp.isoformat()
+        shadow["resolution"] = "EOD_STILL_WATCHING"
+        shadow["status"] = "RESOLVED"
+        _append_journal(shadow, path=BREAKEVEN_SHADOW_JOURNAL_PATH)
+        closed.append(shadow)
+    state["breakeven_shadows"] = []
     return closed
 
 

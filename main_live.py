@@ -118,8 +118,14 @@ def _tracked_strikes(state: dict) -> set:
     than for a slow-moving condor leg. Lower probability here (an 800pt
     same-day spot move is a >3% day, rare) but the same root cause, and
     free to close now that the fix exists.
+
+    Also protects every strike a breakeven shadow is still watching (see
+    trade_tracker.update_breakeven_shadows) -- those have no open
+    position or P&L impact, but a dropped quote would silently starve
+    the shadow of updates the same way it would a real trade.
     """
-    return {t["strike"] for t in state.get("trades", [])}
+    return ({t["strike"] for t in state.get("trades", [])}
+            | {s["strike"] for s in state.get("breakeven_shadows", [])})
 
 
 def market_is_open(now: datetime = None) -> bool:
@@ -228,12 +234,27 @@ def run_once(expiry: str, state: dict):
     # --- Step 1: update trades already being tracked, BEFORE looking for new ones ---
     closed = tt.update_open_trades(state, snapshot)
     for trade in closed:
-        log.info(
-            f"  [TRADE CLOSED: {trade['outcome']}] {trade['strike']} {trade['option_type']}  "
-            f"entry {trade['entry']} -> exit {trade['exit_ltp']}  "
-            f"pnl {trade['pnl_pct']:+.1f}% (Rs {trade['pnl_inr']:+,.0f})"
-        )
+        if trade["outcome"] == "BREAKEVEN_STOP":
+            log.info(
+                f"  [BREAKEVEN STOP] {trade['strike']} {trade['option_type']}  "
+                f"entry {trade['entry']} -> exit {trade['exit_ltp']} (armed at {config.BREAKEVEN_ARM_R:g}R, peaked {trade.get('max_r_reached')}R)  "
+                f"pnl {trade['pnl_pct']:+.1f}% (Rs {trade['pnl_inr']:+,.0f}) -- now watching to see if it would have hit target anyway"
+            )
+        else:
+            log.info(
+                f"  [TRADE CLOSED: {trade['outcome']}] {trade['strike']} {trade['option_type']}  "
+                f"entry {trade['entry']} -> exit {trade['exit_ltp']}  "
+                f"pnl {trade['pnl_pct']:+.1f}% (Rs {trade['pnl_inr']:+,.0f})"
+            )
         log.info(f"    lesson: {trade['lesson']}")
+
+    resolved_shadows = tt.update_breakeven_shadows(state, snapshot)
+    for shadow in resolved_shadows:
+        log.info(
+            f"  [BREAKEVEN SHADOW RESOLVED] {shadow['strike']} {shadow['option_type']}  "
+            f"{shadow['resolution']}  (closed at breakeven for Rs {shadow['breakeven_pnl_inr']:+,.0f}, "
+            f"peaked {shadow.get('max_r_seen_after_breakeven')}R afterward)"
+        )
 
     if state["trades"]:
         log.info(f"  Currently tracking {len(state['trades'])} open trade(s):")
@@ -364,7 +385,7 @@ def force_close_all(state: dict, expiry: str, last_snapshot=None):
     2026-07-22 incident notes in trade_tracker.force_close_end_of_day).
     Only falls back to a fresh fetch if no last_snapshot is available at all.
     """
-    if not state["trades"]:
+    if not state["trades"] and not state.get("breakeven_shadows"):
         return
     snapshot = last_snapshot if last_snapshot is not None else get_nifty_snapshot(
         expiry=expiry, must_include_strikes=_tracked_strikes(state))
@@ -377,6 +398,13 @@ def force_close_all(state: dict, expiry: str, last_snapshot=None):
             + ("  [ESTIMATED -- no closing quote available]" if trade.get("exit_price_estimated") else "")
         )
         log.info(f"    lesson: {trade['lesson']}")
+
+    resolved_shadows = tt.force_close_breakeven_shadows(state, snapshot)
+    for shadow in resolved_shadows:
+        log.info(
+            f"  [BREAKEVEN SHADOW EOD] {shadow['strike']} {shadow['option_type']}  "
+            f"still between breakeven and target when the market closed (peaked {shadow.get('max_r_seen_after_breakeven')}R)"
+        )
     tt.save_open_trades(state)
 
 
@@ -482,6 +510,7 @@ def run_forever():
             "date": date.today().isoformat(),
             "trades": [],
             "opened_today": state.get("opened_today", 0) if was_same_day else 0,
+            "breakeven_shadows": [],
         }
         tt.save_open_trades(state)
 
