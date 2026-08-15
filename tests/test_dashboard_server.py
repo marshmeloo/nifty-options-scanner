@@ -148,3 +148,54 @@ def test_entry_with_no_pnl_at_all_is_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(ds, "PNL_JOURNALS", [(j, "NIFTY", "Momentum")])
 
     assert ds._load_all_pnl_trades() == []
+
+
+# --------------------------------------------------------------------------
+# Peak favorable excursion: added 2026-08-15 after a real Bank Nifty
+# session closed six trades net negative that had each run to ~0.75R in
+# profit first -- the closed P&L alone gave no way to see that a trade
+# gave back real ground rather than never having been ahead. Three
+# journal shapes store this three different ways.
+# --------------------------------------------------------------------------
+
+def test_peak_favorable_prefers_momentums_own_field():
+    t = {"max_favorable_inr": 1059.0, "max_pnl_inr_seen": 999, "max_ltp_seen": 999, "entry": 1, "lots": 1}
+    assert ds._peak_favorable_inr(t, "Bank Nifty") == 1059.0
+
+
+def test_peak_favorable_falls_back_to_condor_field():
+    t = {"max_pnl_inr_seen": 1079.0}
+    assert ds._peak_favorable_inr(t, "NIFTY") == 1079.0
+
+
+def test_peak_favorable_derived_for_price_action_from_max_ltp_seen():
+    """price_action_journal.jsonl has no rupee figure at all -- only
+    max_ltp_seen, entry, and lots to derive one from."""
+    t = {"max_ltp_seen": 96.6, "entry": 59.1, "lots": 1}
+    assert ds._peak_favorable_inr(t, "NIFTY") == pytest.approx(round((96.6 - 59.1) * 65, 2))
+
+
+def test_peak_favorable_derivation_uses_the_right_lot_size_per_index():
+    t = {"max_ltp_seen": 110.0, "entry": 100.0, "lots": 1}
+    assert ds._peak_favorable_inr(t, "NIFTY") == pytest.approx(10 * 65)
+    assert ds._peak_favorable_inr(t, "Bank Nifty") == pytest.approx(10 * 30)
+
+
+def test_peak_favorable_is_none_not_zero_when_unavailable():
+    """A legacy entry from before excursion tracking existed must not
+    silently read as 'this trade never moved' -- that's a materially
+    different, false claim from 'we don't know'."""
+    assert ds._peak_favorable_inr({}, "NIFTY") is None
+
+
+def test_loaded_trades_carry_peak_fields(tmp_path, monkeypatch):
+    j = tmp_path / "trade_journal_banknifty.jsonl"
+    _write_journal(j, [{
+        "closed_at": "2026-08-14T13:59:11", "pnl_inr": -1531.17,
+        "max_favorable_inr": 1059.0, "max_r_seen": 0.75,
+    }])
+    monkeypatch.setattr(ds, "PNL_JOURNALS", [(j, "Bank Nifty", "Momentum")])
+
+    t = ds._load_all_pnl_trades()[0]
+    assert t["peak_favorable_inr"] == 1059.0
+    assert t["peak_r"] == 0.75

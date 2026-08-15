@@ -173,6 +173,7 @@
 
 <div class="panel">
   <h2>Trades in this period</h2>
+  <div class="legend-note">Peak (gold) is the best this trade ever looked before it closed — a trade can close red after having been well in profit; hover a Peak value for how much it gave back.</div>
   <div id="tradeTableWrap"></div>
 </div>
 
@@ -306,12 +307,39 @@ function parseLocalDate(s) {
   const [y, m, day] = s.split("-").map(Number);
   return new Date(y, m - 1, day);
 }
+function fmtInrAbs(v) {
+  // For phrases that already state their own direction ("gave back
+  // X") -- fmtInr's leading +/- would read as a second, redundant sign.
+  if (v === undefined || v === null || isNaN(v)) return "—";
+  return "Rs " + Math.abs(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+}
 function fmtInr(v) {
   if (v === undefined || v === null || isNaN(v)) return "—";
   const s = "Rs " + Math.abs(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
   return v > 0 ? "+" + s : (v < 0 ? "-" + s : s);
 }
 function pnlClass(v) { return v > 0 ? "pos" : (v < 0 ? "neg" : ""); }
+
+// GAVE_BACK_THRESHOLD_INR: below this, a peak-vs-close gap is noise
+// (a few rupees of tick movement), not a real "ran up then reversed"
+// story worth flagging -- added 2026-08-15 after a real Bank Nifty
+// session closed six trades net negative that had each run to ~0.75R
+// in profit first, which the closed P&L alone never showed.
+const GAVE_BACK_THRESHOLD_INR = 50;
+
+function peakLabel(t) {
+  if (t.peak_favorable_inr === null || t.peak_favorable_inr === undefined) return null;
+  const gaveBack = t.peak_favorable_inr - t.net_pnl_inr;
+  if (gaveBack < GAVE_BACK_THRESHOLD_INR) return null;   // closed near its own peak, nothing to flag
+  const rSuffix = (t.peak_r !== null && t.peak_r !== undefined) ? ` (${t.peak_r.toFixed(2)}R)` : "";
+  return { peak: t.peak_favorable_inr, gaveBack, rSuffix };
+}
+
+function peakNote(t) {
+  const p = peakLabel(t);
+  if (!p) return "";
+  return `<div style="color:var(--muted);">Peaked at <b style="color:#c9a44a;">${fmtInr(p.peak)}</b>${p.rSuffix} before closing — gave back ${fmtInrAbs(p.gaveBack)}</div>`;
+}
 
 function periodLabel() {
   if (duration === "day") return cursor.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
@@ -431,7 +459,8 @@ function attachDayChartHover(trades) {
       const time = p.t.closed_at ? p.t.closed_at.slice(11, 16) : "";
       tip.innerHTML = `<div>${time} · ${p.t.strategy} (${p.t.index})</div>` +
         (p.t.strike ? `<div>${p.t.strike} ${p.t.option_type || ""}</div>` : "") +
-        `<div>Trade: <b>${fmtInr(p.t.net_pnl_inr)}</b></div><div>Cumulative: <b>${fmtInr(p.cum)}</b></div>`;
+        `<div>Trade: <b>${fmtInr(p.t.net_pnl_inr)}</b></div><div>Cumulative: <b>${fmtInr(p.cum)}</b></div>` +
+        peakNote(p.t);
       const wrapRect = wrap.getBoundingClientRect();
       const ptRect = pt.getBoundingClientRect();
       tip.style.left = (ptRect.left - wrapRect.left + 14) + "px";
@@ -518,9 +547,9 @@ function renderTradeTable(trades) {
   wrap.innerHTML = `<table>
     <thead><tr>
       <th>Closed</th><th>Index</th><th>Strategy</th><th>Contract</th><th>Lots</th>
-      <th>Realised</th><th>Charges</th><th>Net</th><th>Outcome</th>
+      <th>Realised</th><th>Charges</th><th>Peak</th><th>Net</th><th>Outcome</th>
     </tr></thead>
-    <tbody>${sorted.map(t => `
+    <tbody>${sorted.map(t => { const pk = peakLabel(t); return `
       <tr>
         <td>${(t.closed_at || "").replace("T", " ").slice(0, 16)}</td>
         <td>${t.index}</td>
@@ -529,10 +558,11 @@ function renderTradeTable(trades) {
         <td>${t.lots ?? "—"}</td>
         <td class="${pnlClass(t.realised_pnl_inr)}">${fmtInr(t.realised_pnl_inr)}</td>
         <td>${t.charges_modelled ? fmtInr(-(t.charges_inr||0)) : "—"}</td>
+        <td title="${pk ? 'Gave back ' + fmtInrAbs(pk.gaveBack) + ' before closing' : ''}" style="${pk ? 'color:#c9a44a;' : ''}">${pk ? fmtInr(pk.peak) + pk.rSuffix : "—"}</td>
         <td class="${pnlClass(t.net_pnl_inr)}">${fmtInr(t.net_pnl_inr)}</td>
         <td>${t.outcome || "—"}</td>
       </tr>
-    `).join("")}</tbody>
+    `; }).join("")}</tbody>
   </table>`;
 }
 

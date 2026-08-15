@@ -268,6 +268,38 @@ PNL_JOURNALS = [
 ]
 
 
+# Lot size per index, for deriving a peak favorable move where a
+# journal doesn't already store one in rupees -- see _peak_favorable_inr.
+PNL_INDEX_LOT_SIZE = {"NIFTY": 65, "Bank Nifty": 30}
+
+
+def _peak_favorable_inr(t: dict, index_label: str):
+    """
+    Best favorable move this trade ever saw, in rupees, before its
+    final close -- the thing a closed P&L figure alone can't show (a
+    trade can close negative after having been well in profit). Three
+    different journal shapes store this three different ways:
+
+      - momentum: max_favorable_inr, already rupees, already lot-scaled.
+      - condor / directional-spread: max_pnl_inr_seen, same shape.
+      - price-action: no rupee figure at all, only max_ltp_seen -- has
+        to be derived from (peak price - entry) * lot_size * lots.
+
+    Returns None if none of those are available (e.g. a legacy journal
+    entry from before excursion tracking existed) rather than a
+    misleading 0, which would read as "this trade never moved."
+    """
+    if t.get("max_favorable_inr") is not None:
+        return round(t["max_favorable_inr"], 2)
+    if t.get("max_pnl_inr_seen") is not None:
+        return round(t["max_pnl_inr_seen"], 2)
+    max_ltp, entry, lots = t.get("max_ltp_seen"), t.get("entry"), t.get("lots")
+    if max_ltp is not None and entry is not None and lots is not None:
+        lot_size = PNL_INDEX_LOT_SIZE.get(index_label, 65)
+        return round((max_ltp - entry) * lot_size * lots, 2)
+    return None
+
+
 def _load_all_pnl_trades() -> list:
     """
     Every CLOSED trade across every strategy/index journal, normalised to
@@ -284,6 +316,13 @@ def _load_all_pnl_trades() -> list:
     frontend must not conflate. NET = pnl_inr_net if present, else falls
     back to realised (again, not truly cost-free, just not measured for
     that strategy yet).
+
+    Also carries peak_favorable_inr and peak_r -- the best this trade
+    ever looked before it closed, which the closed-trade figures above
+    can't show on their own. Added 2026-08-15: a real Bank Nifty session
+    closed six trades net negative that had each run to ~0.75R in
+    profit first, and the dashboard had no way to surface that a trade
+    gave back real ground rather than never having been ahead.
     """
     trades = []
     for path, index_label, strategy_label in PNL_JOURNALS:
@@ -324,6 +363,8 @@ def _load_all_pnl_trades() -> list:
                 "option_type": t.get("option_type"),
                 "outcome": t.get("outcome") or t.get("status"),
                 "lots": t.get("lots"),
+                "peak_favorable_inr": _peak_favorable_inr(t, index_label),
+                "peak_r": t.get("max_r_seen"),
             })
     return trades
 
