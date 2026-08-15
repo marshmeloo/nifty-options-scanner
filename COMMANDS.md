@@ -35,6 +35,21 @@ the backtested totals (see README/BACKLOG 2026-08-02 entries for what to expect)
 | `python3 dashboard_server.py` | Local live dashboard → http://127.0.0.1:8787 | Optional, separate terminal |
 | `python3 watchdog.py` | Warns if the scanner goes silent | Optional, separate terminal |
 
+## Sentinel v1.1-dev (candidate, paper-tracking only — added 2026-08-15)
+
+See `STRATEGY_VERSIONS.md` for the full Anchor/Sentinel registry and
+why this is a separate process rather than a flag on the live one.
+Identical signal pipeline to Anchor's momentum, plus a correlated-
+cluster cap (200pt/30min). Runs alongside Anchor, never instead of it
+— own state, own journal, own log, own decision log, tagged
+`strategy_name: "Sentinel"` in every entry so the P&L dashboard
+(`/pnl`) can compare the two on real data without pooling them.
+
+| Command | Purpose | When |
+|---|---|---|
+| `python3 main_live_sentinel.py` | Sentinel, NIFTY | Alongside `main_live.py`/`supervisor.py`, separate terminal |
+| `python3 main_live_banknifty_sentinel.py` | Sentinel, Bank Nifty | Alongside `main_live_banknifty.py`, separate terminal. **Cluster-cap values are NIFTY-backtested only, not yet verified for Bank Nifty** — see that file's own module docstring. |
+
 ## Order flow (optional, new 2026-08-02)
 
 Not wired into any strategy's decisions yet — read-only market data,

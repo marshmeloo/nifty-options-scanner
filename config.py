@@ -13,6 +13,28 @@ MAX_LOTS_PER_TRADE = 1           # hard cap on lot size per trade, independent o
 
 NIFTY_LOT_SIZE = 65             # update if NSE revises lot size
 
+# --- Strategy identity (added 2026-08-15) ---
+# A NAMED, FROZEN version of the momentum exit rule -- separate from
+# logic_version.py's hash fingerprint, which is designed to change
+# whenever any decision-relevant setting does. This is the opposite: a
+# stable human name/version stamped onto every real trade (both NIFTY
+# and Bank Nifty share this config), so live results stay attributable
+# to a specific, known configuration even as candidates are tried
+# elsewhere. See STRATEGY_VERSIONS.md for the full registry and the
+# promotion policy in one place.
+#
+# DO NOT bump this, and do not change BREAKEVEN_ARM_R / DEFAULT_TARGET_RR
+# / any other decision-relevant constant this name refers to, without
+# EITHER (a) solid evidence from real LIVE trading that this specific
+# version has a real problem, OR (b) a challenger version that has beaten
+# it on live data, not backtest alone. A promising backtest is not
+# sufficient on its own -- see the 2026-08-15 correlated-cluster-cap
+# episode in STRATEGY_VERSIONS.md: a backtest that looked like a clean
+# risk reduction turned out to cut ordinary trading along with the
+# actual problem, once examined closely.
+STRATEGY_NAME = "Anchor"
+STRATEGY_VERSION = "1.0"
+
 # --- Scoring mode (versioned -- see scanner.py's SCORING_MODE handling) ---
 #
 # "legacy": the original multi-component scorer below (FVG/S-R/OB, IV
@@ -628,3 +650,32 @@ REENTRY_PRICE_TOLERANCE_PCT = 3.0
 # 30 minutes matches the gap used in that measurement, not a separately
 # tuned value -- revisit if live data suggests a different window.
 DIRECTION_CHASE_COOLDOWN_MINUTES = 30
+
+# --- Correlated-cluster cap (added 2026-08-15) ---
+# A DIFFERENT pathology from DIRECTION_CHASE_COOLDOWN_MINUTES above:
+# that gate only fires once a same-direction trade has already STOPPED
+# OUT, so it does nothing about many same-direction positions opening
+# nearly simultaneously, before any of them has had a chance to close.
+# That's exactly what happened on 2026-08-12 (23 NIFTY trades, all
+# tagged "support", in three bursts of 5-11 adjacent strikes within
+# minutes) and 2026-08-14 (6 adjacent Bank Nifty PE strikes, all
+# reaching ~0.75R together then reversing together) -- MAX_TOTAL_EXPOSURE_PCT
+# never caught it either, since it only sums risk rupees and several
+# small positions on adjacent strikes are each too small individually
+# to breach it, despite being close to the same bet repeated.
+#
+# OFF by default -- this is Anchor v1.0's real, live, frozen config,
+# and Anchor does not get this gate. It exists here only so a
+# DIFFERENTLY-NAMED process (Sentinel v1.1-dev, see
+# STRATEGY_VERSIONS.md and main_live_sentinel.py /
+# main_live_banknifty_sentinel.py) can override these three constants
+# at its own process startup, the same way main_live_banknifty.py
+# already overrides NIFTY_LOT_SIZE etc. for its own process without
+# touching NIFTY's. Backtested (shadow.py, full NIFTY history, real
+# costs): the values below (200pt / 30min) gave up 14% of Anchor's
+# profit for a 62% smaller max drawdown -- the best trade-off found in
+# a sweep of several window sizes. See STRATEGY_VERSIONS.md for the
+# full numbers before ever changing these for a live process.
+CLUSTER_CAP_ENABLED = False
+CLUSTER_CAP_ADJACENCY_POINTS = 200
+CLUSTER_CAP_WINDOW_MINUTES = 30
