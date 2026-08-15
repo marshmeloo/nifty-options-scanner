@@ -108,6 +108,22 @@ class Policy:
     # live modules matters: a weighting under test must not be one edit
     # away from silently becoming the weighting that trades.
     rescore: object = None
+    # Correlated-cluster caps (added 2026-08-15, BACKTEST-ONLY -- neither
+    # is wired into risk_checker.check() or any live process). Investigated
+    # after finding real sessions where the scanner fired the same
+    # underlying signal repeatedly across adjacent strikes within minutes
+    # (NIFTY 2026-08-12: 23 trades, all tagged "support", in three bursts
+    # of 5-11 adjacent strikes; Bank Nifty 2026-08-14: 6 adjacent PE
+    # strikes, all reaching ~0.75R together then reversing together).
+    # MAX_TOTAL_EXPOSURE_PCT never caught this because it only sums risk
+    # rupees -- seven small positions on adjacent strikes are each too
+    # small individually to breach it, even though they are not a
+    # diversified seven bets, they are close to being the same bet seven
+    # times. Both are None (disabled) by default so every existing
+    # backtest and comparison in this session stays reproducible; a
+    # variant under test sets one explicitly.
+    max_open_per_direction: int = None        # None -> unlimited, today's real behaviour
+    strike_adjacency_band_points: float = None  # None -> disabled
 
     def resolved_min_score(self) -> float:
         return self.min_score if self.min_score is not None else config.MIN_CONVICTION_SCORE_TO_TRACK
@@ -331,6 +347,37 @@ def warn_if_incomplete(day: str, cycles) -> Optional[str]:
     )
 
 
+def correlated_cluster_blocked(setup, positions: list, ts, policy: Policy) -> bool:
+    """
+    True if `setup` should be rejected because it's the same underlying
+    bet as an already-open position, under whichever of policy's two
+    cluster caps is set (both None -> always False, today's real
+    behaviour). See Policy's own comment for the real sessions that
+    motivated this.
+
+    Same causality rule as risk_state_at: a position only counts as
+    "open" during opened_ts <= ts < closed_ts, even though `positions`
+    already holds its fully-resolved outcome (every trade here is
+    resolved instantly by walking forward through recorded prices).
+    """
+    if policy.max_open_per_direction is None and policy.strike_adjacency_band_points is None:
+        return False
+    open_same_direction = [
+        p for p in positions
+        if p["key"][1] == setup.option_type
+        and p["opened_ts"] <= ts
+        and (p["closed_ts"] is None or p["closed_ts"] > ts)
+    ]
+    if policy.max_open_per_direction is not None and len(open_same_direction) >= policy.max_open_per_direction:
+        return True
+    if policy.strike_adjacency_band_points is not None and any(
+        abs(p["key"][0] - setup.strike) < policy.strike_adjacency_band_points
+        for p in open_same_direction
+    ):
+        return True
+    return False
+
+
 def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
     """
     Replay a day under `policy`, returning the simulated trades it would
@@ -401,6 +448,9 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
             for setup in setups:
                 key = (setup.strike, setup.option_type)
                 if not policy.allow_repeat_strike and key in traded_keys:
+                    continue
+
+                if correlated_cluster_blocked(setup, positions, ts, policy):
                     continue
 
                 base_score = policy.rescore(setup) if policy.rescore else setup.score
