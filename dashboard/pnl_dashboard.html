@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>F&amp;O P&amp;L Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-raised: #1c2029;
+    --border: #262b36;
+    --text: #e6e9ef;
+    --muted: #8a92a3;
+    --green: #3ecf8e;
+    --red: #ef5f6a;
+    --accent: #5b8def;
+    --green-wash: rgba(62, 207, 142, 0.14);
+    --red-wash: rgba(239, 95, 106, 0.14);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+
+  header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 13px; }
+  .subtitle a { color: var(--accent); }
+  #refreshNote { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+  /* --- Controls --- */
+  .controls {
+    display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 18px; margin-bottom: 20px;
+  }
+  .control-group { display: flex; flex-direction: column; gap: 6px; }
+  .control-group .cg-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .pill-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .pill {
+    padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border);
+    background: var(--panel-raised); color: var(--muted); font-size: 12.5px; cursor: pointer;
+    user-select: none; white-space: nowrap;
+  }
+  .pill:hover { border-color: var(--accent); color: var(--text); }
+  .pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .pill.disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+  .duration-row { display: flex; gap: 4px; background: var(--panel-raised); border-radius: 8px; padding: 3px; }
+  .duration-row .pill { border: none; border-radius: 6px; }
+  .duration-row .pill.active { background: var(--accent); }
+
+  .nav-row { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+  .nav-btn {
+    background: var(--panel-raised); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; width: 28px; height: 28px; cursor: pointer; font-size: 14px;
+  }
+  .nav-btn:hover { border-color: var(--accent); }
+  .nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .period-label { font-size: 14px; font-weight: 600; min-width: 140px; text-align: center; }
+  #downloadBtn {
+    background: var(--panel-raised); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 12px; font-size: 12.5px; cursor: pointer;
+  }
+  #downloadBtn:hover { border-color: var(--accent); }
+
+  /* --- Summary cards: Net P&L / Realised P&L / Charges --- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .card .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+  .card .value.pos { color: var(--green); }
+  .card .value.neg { color: var(--red); }
+  .card .note { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 20px; }
+  .panel h2 { font-size: 13px; margin: 0 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .panel-desc { font-size: 12px; color: var(--muted); margin: -8px 0 12px; }
+
+  /* --- Tile grids (Year -> 12 months, Quarter -> 3 months, Month -> days) --- */
+  .tile-grid { display: grid; gap: 8px; }
+  .tile-grid.months { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+  .tile-grid.days { grid-template-columns: repeat(7, 1fr); }
+  .day-name { text-align: center; font-size: 10.5px; color: var(--muted); padding-bottom: 2px; }
+  .tile {
+    border-radius: 8px; padding: 10px 12px; cursor: pointer; border: 1px solid var(--border);
+    background: var(--panel-raised); transition: transform 0.08s;
+    display: flex; flex-direction: column; justify-content: space-between; min-height: 64px;
+  }
+  .tile:hover { transform: translateY(-1px); border-color: var(--accent); }
+  .tile.empty { cursor: default; opacity: 0.25; }
+  .tile.empty:hover { transform: none; border-color: var(--border); }
+  .tile.pos { background: var(--green-wash); border-color: rgba(62, 207, 142, 0.35); }
+  .tile.neg { background: var(--red-wash); border-color: rgba(239, 95, 106, 0.35); }
+  .tile .tile-title { font-size: 11.5px; color: var(--muted); }
+  .tile .tile-pnl { font-size: 13px; font-weight: 600; margin-top: 4px; }
+  .tile .tile-pnl.pos { color: var(--green); }
+  .tile .tile-pnl.neg { color: var(--red); }
+  .tile.day { min-height: 52px; padding: 6px 8px; }
+  .tile.day .tile-title { font-size: 12px; }
+  .tile.day .tile-pnl { font-size: 11.5px; }
+  .tile.today { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+  /* --- Day-view intraday chart --- */
+  svg.chart { width: 100%; height: auto; display: block; }
+  .gridline { stroke: var(--border); stroke-width: 1; }
+  .zero-line { stroke: #3a4152; stroke-width: 1; stroke-dasharray: 3 3; }
+  .axis-label { font-family: ui-monospace, monospace; font-size: 10px; fill: var(--muted); }
+  .chart-wrap { position: relative; }
+  .chart-tooltip {
+    position: absolute; pointer-events: none; opacity: 0; transition: opacity 0.1s;
+    background: #06070a; color: var(--text); font-size: 11.5px; padding: 7px 10px; border-radius: 6px;
+    white-space: nowrap; border: 1px solid var(--border); line-height: 1.5;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; }
+  tr:hover td { background: var(--panel-raised); }
+  .win { color: var(--green); } .loss { color: var(--red); }
+  .empty-note { color: var(--muted); font-size: 13px; padding: 24px 0; text-align: center; }
+
+  .legend-note { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>F&amp;O P&amp;L Dashboard</h1>
+    <div class="subtitle">Realised trades only, across every strategy this project runs. Analytics only — <a href="/">back to the live session dashboard</a>.</div>
+    <div id="refreshNote">Loading…</div>
+  </div>
+  <button id="downloadBtn">Download visible trades (CSV)</button>
+</header>
+
+<div class="controls">
+  <div class="control-group">
+    <div class="cg-label">Index</div>
+    <div class="pill-row" id="indexFilter"></div>
+  </div>
+  <div class="control-group">
+    <div class="cg-label">Strategy</div>
+    <div class="pill-row" id="strategyFilter"></div>
+  </div>
+  <div class="control-group">
+    <div class="cg-label">Duration</div>
+    <div class="duration-row" id="durationRow">
+      <div class="pill" data-dur="day">Day</div>
+      <div class="pill" data-dur="month">Month</div>
+      <div class="pill" data-dur="quarter">Quarter</div>
+      <div class="pill" data-dur="fy">Financial Year</div>
+    </div>
+  </div>
+  <div class="nav-row">
+    <button class="nav-btn" id="prevBtn">‹</button>
+    <div class="period-label" id="periodLabel">—</div>
+    <button class="nav-btn" id="nextBtn">›</button>
+  </div>
+</div>
+
+<div class="cards" id="cards"></div>
+
+<div class="panel" id="mainPanel">
+  <h2 id="mainPanelTitle">Performance</h2>
+  <div class="panel-desc" id="mainPanelDesc"></div>
+  <div id="mainPanelBody"></div>
+</div>
+
+<div class="panel">
+  <h2>Trades in this period</h2>
+  <div id="tradeTableWrap"></div>
+</div>
+
+<script>
+let allTrades = [];
+let activeIndexes = new Set();   // empty set = "all"
+let activeStrategies = new Set();
+let duration = "month";
+let cursor = new Date();   // the date whose period we're viewing
+
+const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const DAY_NAMES = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+async function fetchTrades() {
+  try {
+    const res = await fetch("/api/pnl", { cache: "no-store" });
+    const data = await res.json();
+    allTrades = data.trades || [];
+    document.getElementById("refreshNote").textContent =
+      `${allTrades.length} closed trades · updated ${new Date(data.generated_at).toLocaleTimeString()}`;
+    buildFilters();
+    render();
+  } catch (e) {
+    document.getElementById("refreshNote").textContent = "Could not reach the dashboard server (/api/pnl).";
+  }
+}
+
+function buildFilters() {
+  const indexes = [...new Set(allTrades.map(t => t.index))].sort();
+  const strategies = [...new Set(allTrades.map(t => t.strategy))].sort();
+
+  const idxEl = document.getElementById("indexFilter");
+  idxEl.innerHTML = `<div class="pill ${activeIndexes.size === 0 ? "active" : ""}" data-all="index">All</div>` +
+    indexes.map(i => `<div class="pill ${activeIndexes.has(i) ? "active" : ""}" data-index="${i}">${i}</div>`).join("");
+
+  const stratEl = document.getElementById("strategyFilter");
+  stratEl.innerHTML = `<div class="pill ${activeStrategies.size === 0 ? "active" : ""}" data-all="strategy">All</div>` +
+    strategies.map(s => `<div class="pill ${activeStrategies.has(s) ? "active" : ""}" data-strategy="${s}">${s}</div>`).join("");
+
+  idxEl.querySelectorAll(".pill").forEach(p => p.addEventListener("click", () => {
+    if (p.dataset.all) activeIndexes.clear();
+    else { const v = p.dataset.index; activeIndexes.has(v) ? activeIndexes.delete(v) : activeIndexes.add(v); }
+    buildFilters(); render();
+  }));
+  stratEl.querySelectorAll(".pill").forEach(p => p.addEventListener("click", () => {
+    if (p.dataset.all) activeStrategies.clear();
+    else { const v = p.dataset.strategy; activeStrategies.has(v) ? activeStrategies.delete(v) : activeStrategies.add(v); }
+    buildFilters(); render();
+  }));
+}
+
+document.querySelectorAll("#durationRow .pill").forEach(p => {
+  p.addEventListener("click", () => { duration = p.dataset.dur; render(); });
+});
+document.getElementById("prevBtn").addEventListener("click", () => { stepCursor(-1); render(); });
+document.getElementById("nextBtn").addEventListener("click", () => { stepCursor(1); render(); });
+
+function stepCursor(dir) {
+  const d = new Date(cursor);
+  if (duration === "day") d.setDate(d.getDate() + dir);
+  else if (duration === "month") d.setMonth(d.getMonth() + dir);
+  else if (duration === "quarter") d.setMonth(d.getMonth() + dir * 3);
+  else if (duration === "fy") d.setFullYear(d.getFullYear() + dir);
+  cursor = d;
+}
+
+function fyOf(d) {
+  // Indian financial year: Apr(y) - Mar(y+1), labelled by its starting calendar year.
+  const y = d.getFullYear(), m = d.getMonth();
+  return m >= 3 ? y : y - 1;
+}
+function quarterOf(d) {
+  // FY quarters: Q1 Apr-Jun, Q2 Jul-Sep, Q3 Oct-Dec, Q4 Jan-Mar.
+  const m = d.getMonth();
+  if (m >= 3 && m <= 5) return 1;
+  if (m >= 6 && m <= 8) return 2;
+  if (m >= 9 && m <= 11) return 3;
+  return 4;
+}
+function quarterMonths(fy, q) {
+  const starts = { 1: [3, fy], 2: [6, fy], 3: [9, fy], 4: [0, fy + 1] };
+  const [startMonth, startYear] = starts[q];
+  return [0, 1, 2].map(i => new Date(startYear, startMonth + i, 1));
+}
+
+function filteredTrades() {
+  return allTrades.filter(t =>
+    (activeIndexes.size === 0 || activeIndexes.has(t.index)) &&
+    (activeStrategies.size === 0 || activeStrategies.has(t.strategy))
+  );
+}
+
+function periodTrades(trades) {
+  if (duration === "day") {
+    const ds = fmtDate(cursor);
+    return trades.filter(t => t.date === ds);
+  }
+  if (duration === "month") {
+    const y = cursor.getFullYear(), m = cursor.getMonth();
+    return trades.filter(t => { const d = new Date(t.date); return d.getFullYear() === y && d.getMonth() === m; });
+  }
+  if (duration === "quarter") {
+    const fy = fyOf(cursor), q = quarterOf(cursor);
+    const months = quarterMonths(fy, q).map(d => d.getFullYear() + "-" + String(d.getMonth()));
+    return trades.filter(t => { const d = new Date(t.date); return months.includes(d.getFullYear() + "-" + d.getMonth()); });
+  }
+  // fy
+  const fy = fyOf(cursor);
+  return trades.filter(t => fyOf(new Date(t.date)) === fy);
+}
+
+function fmtDate(d) { return d.toISOString().slice(0, 10); }
+function fmtInr(v) {
+  if (v === undefined || v === null || isNaN(v)) return "—";
+  const s = "Rs " + Math.abs(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  return v > 0 ? "+" + s : (v < 0 ? "-" + s : s);
+}
+function pnlClass(v) { return v > 0 ? "pos" : (v < 0 ? "neg" : ""); }
+
+function periodLabel() {
+  if (duration === "day") return cursor.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  if (duration === "month") return MONTH_NAMES[cursor.getMonth()] + " " + cursor.getFullYear();
+  if (duration === "quarter") { const fy = fyOf(cursor), q = quarterOf(cursor); return `Q${q} FY${String(fy+1).slice(2)}`; }
+  const fy = fyOf(cursor); return `FY ${fy}-${String(fy+1).slice(2)}`;
+}
+
+function render() {
+  document.getElementById("periodLabel").textContent = periodLabel();
+  const trades = periodTrades(filteredTrades());
+  renderCards(trades);
+  renderMainPanel(trades);
+  renderTradeTable(trades);
+}
+
+function renderCards(trades) {
+  const realised = trades.reduce((s, t) => s + t.realised_pnl_inr, 0);
+  const charges = trades.reduce((s, t) => s + (t.charges_inr || 0), 0);
+  const net = trades.reduce((s, t) => s + t.net_pnl_inr, 0);
+  const anyModelled = trades.some(t => t.charges_modelled);
+  const allModelled = trades.length > 0 && trades.every(t => t.charges_modelled);
+
+  const cards = [
+    { label: "Net P&L", value: fmtInr(net), cls: pnlClass(net),
+      note: allModelled ? "after modelled costs" : (anyModelled ? "partially modelled — see charges note" : "= realised, no cost model for this strategy yet") },
+    { label: "Realised P&L", value: fmtInr(realised), cls: pnlClass(realised), note: "before costs" },
+    { label: "Charges", value: trades.length ? fmtInr(-charges) : "—", cls: "",
+      note: allModelled ? "statutory costs only, no spread" : (anyModelled ? "not modelled for every trade shown" : "not modelled for this strategy") },
+    { label: "Trades", value: trades.length, note: trades.length ? `${trades.filter(t=>t.net_pnl_inr>0).length} up · ${trades.filter(t=>t.net_pnl_inr<0).length} down` : "" },
+  ];
+  document.getElementById("cards").innerHTML = cards.map(c => `
+    <div class="card">
+      <div class="label">${c.label}</div>
+      <div class="value ${c.cls || ""}">${c.value}</div>
+      <div class="note">${c.note || ""}</div>
+    </div>
+  `).join("");
+}
+
+function renderMainPanel(trades) {
+  const title = document.getElementById("mainPanelTitle");
+  const desc = document.getElementById("mainPanelDesc");
+  const body = document.getElementById("mainPanelBody");
+
+  if (duration === "day") {
+    title.textContent = "Intraday P&L movement";
+    desc.textContent = "Cumulative net P&L across the day's closed trades, in the order they closed.";
+    body.innerHTML = renderDayChart(trades);
+    attachDayChartHover(trades);
+  } else if (duration === "month") {
+    title.textContent = "Daily performance";
+    desc.textContent = "Click a day to drill into its trades.";
+    body.innerHTML = renderDayGrid(trades);
+    attachTileHandlers(body, "day");
+  } else {
+    title.textContent = "Monthly performance";
+    desc.textContent = duration === "quarter" ? "The three months of this quarter." : "All twelve months of the financial year.";
+    body.innerHTML = renderMonthGrid(trades);
+    attachTileHandlers(body, "month");
+  }
+}
+
+function renderDayChart(trades) {
+  if (!trades.length) return `<div class="empty-note">No closed trades this day.</div>`;
+  const sorted = [...trades].sort((a, b) => new Date(a.closed_at) - new Date(b.closed_at));
+  let cum = 0;
+  const points = sorted.map(t => { cum += t.net_pnl_inr; return { t, cum }; });
+
+  const W = 860, H = 220, padL = 60, padR = 16, padT = 16, padB = 26;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const vals = points.map(p => p.cum);
+  let yMin = Math.min(0, ...vals), yMax = Math.max(0, ...vals);
+  const pad = (yMax - yMin) * 0.1 || 100; yMin -= pad; yMax += pad;
+  const x = i => points.length > 1 ? padL + (i / (points.length - 1)) * plotW : padL + plotW / 2;
+  const y = v => padT + (1 - (v - yMin) / (yMax - yMin)) * plotH;
+
+  let grid = "";
+  for (let g = 0; g <= 4; g++) {
+    const v = yMin + (g / 4) * (yMax - yMin), gy = y(v);
+    grid += `<line x1="${padL}" x2="${W-padR}" y1="${gy}" y2="${gy}" class="gridline"/>`;
+    grid += `<text x="${padL-8}" y="${gy+4}" class="axis-label" text-anchor="end">${fmtInr(Math.round(v))}</text>`;
+  }
+  if (yMin < 0 && yMax > 0) grid += `<line x1="${padL}" x2="${W-padR}" y1="${y(0)}" y2="${y(0)}" class="zero-line"/>`;
+
+  const color = vals[vals.length-1] >= 0 ? "var(--green)" : "var(--red)";
+  let path = points.map((p, i) => `${i===0?"M":"L"} ${x(i).toFixed(1)} ${y(p.cum).toFixed(1)}`).join(" ");
+  const dots = points.map((p, i) => `<circle class="pt" data-i="${i}" cx="${x(i).toFixed(1)}" cy="${y(p.cum).toFixed(1)}" r="9" fill="transparent"/>
+    <circle cx="${x(i).toFixed(1)}" cy="${y(p.cum).toFixed(1)}" r="3" fill="${color}"/>`).join("");
+
+  return `<div class="chart-wrap" id="dayChartWrap">
+    <svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+      ${grid}
+      <path d="${path}" fill="none" stroke="${color}" stroke-width="2.25" stroke-linejoin="round"/>
+      ${dots}
+    </svg>
+    <div class="chart-tooltip" id="dayChartTip"></div>
+  </div>`;
+}
+
+function attachDayChartHover(trades) {
+  const wrap = document.getElementById("dayChartWrap");
+  if (!wrap) return;
+  const sorted = [...trades].sort((a, b) => new Date(a.closed_at) - new Date(b.closed_at));
+  let cum = 0;
+  const points = sorted.map(t => { cum += t.net_pnl_inr; return { t, cum }; });
+  const tip = document.getElementById("dayChartTip");
+  wrap.querySelectorAll(".pt").forEach(pt => {
+    pt.addEventListener("mouseenter", (ev) => {
+      const p = points[+pt.dataset.i];
+      const time = p.t.closed_at ? p.t.closed_at.slice(11, 16) : "";
+      tip.innerHTML = `<div>${time} · ${p.t.strategy} (${p.t.index})</div>` +
+        (p.t.strike ? `<div>${p.t.strike} ${p.t.option_type || ""}</div>` : "") +
+        `<div>Trade: <b>${fmtInr(p.t.net_pnl_inr)}</b></div><div>Cumulative: <b>${fmtInr(p.cum)}</b></div>`;
+      const wrapRect = wrap.getBoundingClientRect();
+      const ptRect = pt.getBoundingClientRect();
+      tip.style.left = (ptRect.left - wrapRect.left + 14) + "px";
+      tip.style.top = (ptRect.top - wrapRect.top - 10) + "px";
+      tip.style.opacity = 1;
+    });
+    pt.addEventListener("mouseleave", () => { tip.style.opacity = 0; });
+  });
+}
+
+function groupByDate(trades) {
+  const m = {};
+  trades.forEach(t => { (m[t.date] = m[t.date] || []).push(t); });
+  return m;
+}
+
+function renderDayGrid(trades) {
+  const byDate = groupByDate(trades);
+  const y = cursor.getFullYear(), m = cursor.getMonth();
+  const firstDay = new Date(y, m, 1);
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const startOffset = firstDay.getDay();
+  const todayStr = fmtDate(new Date());
+
+  let html = DAY_NAMES.map(d => `<div class="day-name">${d}</div>`).join("");
+  html = `<div class="tile-grid days">` + html;
+  for (let i = 0; i < startOffset; i++) html += `<div></div>`;
+  for (let day = 1; day <= daysInMonth; day++) {
+    const ds = fmtDate(new Date(y, m, day));
+    const dayTrades = byDate[ds] || [];
+    const net = dayTrades.reduce((s, t) => s + t.net_pnl_inr, 0);
+    const cls = dayTrades.length ? (net >= 0 ? "pos" : "neg") : "empty";
+    const today = ds === todayStr ? " today" : "";
+    html += `<div class="tile day ${cls}${today}" data-date="${ds}" ${dayTrades.length ? "" : ""}>
+      <div class="tile-title">${day}</div>
+      ${dayTrades.length ? `<div class="tile-pnl ${cls}">${fmtInr(net)}</div>` : ""}
+    </div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function renderMonthGrid(trades) {
+  const byDate = groupByDate(trades);
+  let months;
+  if (duration === "quarter") months = quarterMonths(fyOf(cursor), quarterOf(cursor));
+  else months = Array.from({length: 12}, (_, i) => new Date(fyOf(cursor), 3 + i, 1)); // Apr..Mar
+
+  let html = `<div class="tile-grid months">`;
+  months.forEach(md => {
+    const y = md.getFullYear(), m = md.getMonth();
+    const monthTrades = Object.keys(byDate).filter(ds => { const d = new Date(ds); return d.getFullYear() === y && d.getMonth() === m; })
+      .flatMap(ds => byDate[ds]);
+    const net = monthTrades.reduce((s, t) => s + t.net_pnl_inr, 0);
+    const cls = monthTrades.length ? (net >= 0 ? "pos" : "neg") : "empty";
+    html += `<div class="tile ${cls}" data-year="${y}" data-month="${m}">
+      <div class="tile-title">${MONTH_NAMES[m]} ${y}</div>
+      ${monthTrades.length ? `<div class="tile-pnl ${cls}">${fmtInr(net)}</div><div class="tile-title">${monthTrades.length} trades</div>` : `<div class="tile-title">no trades</div>`}
+    </div>`;
+  });
+  html += `</div>`;
+  return html;
+}
+
+function attachTileHandlers(container, kind) {
+  container.querySelectorAll(".tile:not(.empty)").forEach(tile => {
+    tile.addEventListener("click", () => {
+      if (kind === "day") {
+        cursor = new Date(tile.dataset.date);
+        duration = "day";
+      } else {
+        cursor = new Date(+tile.dataset.year, +tile.dataset.month, 1);
+        duration = "month";
+      }
+      document.querySelectorAll("#durationRow .pill").forEach(p => p.classList.toggle("active", p.dataset.dur === duration));
+      render();
+    });
+  });
+}
+
+function renderTradeTable(trades) {
+  const wrap = document.getElementById("tradeTableWrap");
+  if (!trades.length) { wrap.innerHTML = `<div class="empty-note">No closed trades in this period.</div>`; return; }
+  const sorted = [...trades].sort((a, b) => new Date(b.closed_at) - new Date(a.closed_at));
+  wrap.innerHTML = `<table>
+    <thead><tr>
+      <th>Closed</th><th>Index</th><th>Strategy</th><th>Contract</th><th>Lots</th>
+      <th>Realised</th><th>Charges</th><th>Net</th><th>Outcome</th>
+    </tr></thead>
+    <tbody>${sorted.map(t => `
+      <tr>
+        <td>${(t.closed_at || "").replace("T", " ").slice(0, 16)}</td>
+        <td>${t.index}</td>
+        <td>${t.strategy}</td>
+        <td>${t.strike ? t.strike + " " + (t.option_type || "") : "—"}</td>
+        <td>${t.lots ?? "—"}</td>
+        <td class="${pnlClass(t.realised_pnl_inr)}">${fmtInr(t.realised_pnl_inr)}</td>
+        <td>${t.charges_modelled ? fmtInr(-(t.charges_inr||0)) : "—"}</td>
+        <td class="${pnlClass(t.net_pnl_inr)}">${fmtInr(t.net_pnl_inr)}</td>
+        <td>${t.outcome || "—"}</td>
+      </tr>
+    `).join("")}</tbody>
+  </table>`;
+}
+
+document.getElementById("downloadBtn").addEventListener("click", () => {
+  const trades = periodTrades(filteredTrades());
+  if (!trades.length) return;
+  const cols = ["date","closed_at","index","strategy","strike","option_type","lots","realised_pnl_inr","charges_inr","charges_modelled","net_pnl_inr","outcome"];
+  const csv = [cols.join(",")].concat(
+    trades.map(t => cols.map(c => JSON.stringify(t[c] ?? "")).join(","))
+  ).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `pnl_${duration}_${fmtDate(cursor)}.csv`;
+  a.click();
+});
+
+// initial duration highlight + first load, then auto-refresh
+document.querySelectorAll("#durationRow .pill").forEach(p => p.classList.toggle("active", p.dataset.dur === duration));
+fetchTrades();
+setInterval(fetchTrades, 30000);
+</script>
+
+</body>
+</html>

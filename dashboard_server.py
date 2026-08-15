@@ -247,6 +247,87 @@ def todays_banknifty_price_action_log_path() -> Path:
     return LOGS_DIR / f"price_action_banknifty_{datetime.now().strftime('%Y%m%d')}.log"
 
 
+DASHBOARD_PNL_HTML_PATH = BASE_DIR / "dashboard" / "pnl_dashboard.html"
+
+# Every closed-trade journal this project produces, across both indices
+# and all four strategies. Not every combination has ever run live (e.g.
+# Bank Nifty condor was backtested and never adopted -- see BACKLOG.md),
+# so this list intentionally includes paths that may not exist on disk;
+# _load_all_pnl_trades() skips missing files rather than erroring, and
+# the frontend only offers a filter for combinations that actually
+# produced at least one closed trade.
+PNL_JOURNALS = [
+    (LOGS_DIR / "trade_journal.jsonl", "NIFTY", "Momentum"),
+    (LOGS_DIR / "condor_journal.jsonl", "NIFTY", "Condor"),
+    (LOGS_DIR / "directional_spread_journal.jsonl", "NIFTY", "Directional Spread"),
+    (LOGS_DIR / "price_action_journal.jsonl", "NIFTY", "Price Action"),
+    (LOGS_DIR / "trade_journal_banknifty.jsonl", "Bank Nifty", "Momentum"),
+    (LOGS_DIR / "condor_journal_banknifty.jsonl", "Bank Nifty", "Condor"),
+    (LOGS_DIR / "directional_spread_journal_banknifty.jsonl", "Bank Nifty", "Directional Spread"),
+    (LOGS_DIR / "price_action_journal_banknifty.jsonl", "Bank Nifty", "Price Action"),
+]
+
+
+def _load_all_pnl_trades() -> list:
+    """
+    Every CLOSED trade across every strategy/index journal, normalised to
+    a common shape the P&L dashboard can group by day without caring
+    which strategy produced it.
+
+    The three P&L figures deliberately mirror what a broker's own P&L
+    report shows (see the Groww F&O P&L dashboard this was modelled on):
+    REALISED = pnl_inr, the raw price-move P&L a broker's contract note
+    would show, before this project's own cost model. CHARGES = costs_inr
+    if this journal's tracker computes one (momentum and price-action do;
+    condor and directional-spread do not yet -- see their own trackers),
+    else 0, meaning "not modelled here" rather than "zero cost", which the
+    frontend must not conflate. NET = pnl_inr_net if present, else falls
+    back to realised (again, not truly cost-free, just not measured for
+    that strategy yet).
+    """
+    trades = []
+    for path, index_label, strategy_label in PNL_JOURNALS:
+        if not path.exists():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            continue
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                t = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            closed_at = t.get("closed_at")
+            if not closed_at:
+                continue   # still open -- the P&L dashboard is realised-trades only
+            realised = t.get("pnl_inr")
+            if realised is None:
+                continue   # no recorded P&L at all, nothing to plot
+            has_cost_model = "costs_inr" in t
+            charges = t.get("costs_inr") if has_cost_model else 0.0
+            net = t.get("pnl_inr_net") if t.get("pnl_inr_net") is not None else realised
+            trades.append({
+                "index": index_label,
+                "strategy": strategy_label,
+                "opened_at": t.get("opened_at"),
+                "closed_at": closed_at,
+                "date": closed_at[:10],
+                "realised_pnl_inr": round(realised, 2),
+                "charges_inr": round(charges, 2) if charges is not None else 0.0,
+                "charges_modelled": has_cost_model,
+                "net_pnl_inr": round(net, 2),
+                "strike": t.get("strike"),
+                "option_type": t.get("option_type"),
+                "outcome": t.get("outcome") or t.get("status"),
+                "lots": t.get("lots"),
+            })
+    return trades
+
+
 def build_state() -> dict:
     """Assemble everything the dashboard needs from whatever's on disk right now."""
     decision_cycles = _read_jsonl_tail(todays_decision_log_path(), DECISION_LOG_TAIL_LINES)
@@ -479,17 +560,21 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/" or self.path == "/index.html":
-            self._serve_html()
+            self._serve_html(DASHBOARD_HTML_PATH)
         elif self.path == "/api/state":
             self._serve_state()
+        elif self.path == "/pnl" or self.path == "/pnl.html":
+            self._serve_html(DASHBOARD_PNL_HTML_PATH)
+        elif self.path == "/api/pnl":
+            self._serve_pnl()
         else:
             self.send_error(404, "Not found")
 
-    def _serve_html(self):
+    def _serve_html(self, path: Path):
         try:
-            content = DASHBOARD_HTML_PATH.read_text(encoding="utf-8")
+            content = path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            self.send_error(500, f"Dashboard HTML not found at {DASHBOARD_HTML_PATH}")
+            self.send_error(500, f"Dashboard HTML not found at {path}")
             return
         body = content.encode("utf-8")
         self.send_response(200)
@@ -502,6 +587,22 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         try:
             state = build_state()
             body = json.dumps(state, default=str).encode("utf-8")
+            status = 200
+        except Exception as e:
+            body = json.dumps({"error": str(e)}).encode("utf-8")
+            status = 500
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_pnl(self):
+        try:
+            trades = _load_all_pnl_trades()
+            body = json.dumps({"trades": trades, "generated_at": datetime.now().isoformat()},
+                              default=str).encode("utf-8")
             status = 200
         except Exception as e:
             body = json.dumps({"error": str(e)}).encode("utf-8")
