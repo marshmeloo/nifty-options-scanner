@@ -47,7 +47,7 @@ import argparse
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 from typing import Optional
 
 import config
@@ -124,6 +124,17 @@ class Policy:
     # variant under test sets one explicitly.
     max_open_per_direction: int = None        # None -> unlimited, today's real behaviour
     strike_adjacency_band_points: float = None  # None -> disabled
+    # Sentinel v1.1-dev refinement (added 2026-08-15, STILL BACKTEST-ONLY):
+    # the two caps above had no time component -- a position blocked new
+    # same-direction entries for its ENTIRE open lifetime, which for an
+    # EOD-outcome trade can be hours, and backtested 30-54% profit cut for
+    # a 71-75% drawdown cut -- the right direction, wrong magnitude,
+    # because it was blocking ordinary trading, not just the rapid-fire
+    # pattern. This narrows either cap above to only apply if the
+    # blocking position was opened within this many minutes of `ts` --
+    # None means no narrowing (identical to the original, untimed
+    # behaviour), so this stays off unless explicitly set.
+    cluster_window_minutes: float = None
 
     def resolved_min_score(self) -> float:
         return self.min_score if self.min_score is not None else config.MIN_CONVICTION_SCORE_TO_TRACK
@@ -359,6 +370,12 @@ def correlated_cluster_blocked(setup, positions: list, ts, policy: Policy) -> bo
     "open" during opened_ts <= ts < closed_ts, even though `positions`
     already holds its fully-resolved outcome (every trade here is
     resolved instantly by walking forward through recorded prices).
+
+    If policy.cluster_window_minutes is set (Sentinel v1.1-dev), a
+    same-direction position only counts toward EITHER cap if it was
+    also opened within that many minutes of `ts` -- narrowing "blocks
+    for its entire open lifetime" down to "blocks only while the same
+    burst is plausibly still happening."
     """
     if policy.max_open_per_direction is None and policy.strike_adjacency_band_points is None:
         return False
@@ -368,6 +385,9 @@ def correlated_cluster_blocked(setup, positions: list, ts, policy: Policy) -> bo
         and p["opened_ts"] <= ts
         and (p["closed_ts"] is None or p["closed_ts"] > ts)
     ]
+    if policy.cluster_window_minutes is not None:
+        cutoff = ts - timedelta(minutes=policy.cluster_window_minutes)
+        open_same_direction = [p for p in open_same_direction if p["opened_ts"] >= cutoff]
     if policy.max_open_per_direction is not None and len(open_same_direction) >= policy.max_open_per_direction:
         return True
     if policy.strike_adjacency_band_points is not None and any(

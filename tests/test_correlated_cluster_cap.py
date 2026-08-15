@@ -120,6 +120,47 @@ def test_adjacency_is_exclusive_at_the_boundary():
 # Reproducing the real 2026-08-12 shape directly
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# cluster_window_minutes (Sentinel v1.1-dev): narrows either cap above to
+# only apply while the blocking position is RECENTLY opened, instead of
+# for its entire open lifetime.
+# --------------------------------------------------------------------------
+
+def test_window_none_matches_original_untimed_behaviour():
+    """Explicitly confirms the refinement doesn't change anything when
+    left off -- Sentinel's window is additive, not a silent behaviour
+    change to the two original caps."""
+    policy = shadow.Policy(max_open_per_direction=1, cluster_window_minutes=None)
+    positions = [_position(23850.0, "PE", T0)]
+    long_after = datetime(2026, 8, 12, 15, 0)   # ~5 hours later, still "open"
+    assert shadow.correlated_cluster_blocked(_setup(24050.0, "PE"), positions, long_after, policy) is True
+
+
+def test_window_stops_blocking_once_the_position_is_stale():
+    """The exact fix this refinement is for: a position opened hours
+    ago must stop counting as 'the same burst', even though it may
+    still technically be open (an EOD-outcome trade can sit open for
+    hours)."""
+    policy = shadow.Policy(max_open_per_direction=1, cluster_window_minutes=15)
+    positions = [_position(23850.0, "PE", T0)]   # opened 10:15
+    long_after = datetime(2026, 8, 12, 15, 0)     # ~5 hours later, still open, but stale
+    assert shadow.correlated_cluster_blocked(_setup(24050.0, "PE"), positions, long_after, policy) is False
+
+
+def test_window_still_blocks_within_the_window():
+    policy = shadow.Policy(max_open_per_direction=1, cluster_window_minutes=15)
+    positions = [_position(23850.0, "PE", T0)]   # opened 10:15
+    ten_min_later = datetime(2026, 8, 12, 10, 25)
+    assert shadow.correlated_cluster_blocked(_setup(24050.0, "PE"), positions, ten_min_later, policy) is True
+
+
+def test_window_applies_to_adjacency_cap_too():
+    policy = shadow.Policy(strike_adjacency_band_points=200, cluster_window_minutes=15)
+    positions = [_position(23900.0, "PE", T0)]   # 150pt away, opened 10:15
+    long_after = datetime(2026, 8, 12, 15, 0)
+    assert shadow.correlated_cluster_blocked(_setup(24050.0, "PE"), positions, long_after, policy) is False
+
+
 def test_reproduces_the_real_2026_08_12_morning_burst():
     """
     The actual real burst: 7 adjacent PE strikes (23850..24150, 50pt
