@@ -24,6 +24,7 @@ Not yet forward-validated — both are in-sample backtest results. Watch
 early live sessions against the documented expectations before trusting
 the backtested totals (see README/BACKLOG 2026-08-02 entries for what to expect).
 
+
 ## Daily use
 
 | Command | Purpose | When |
@@ -49,6 +50,7 @@ useful on its own for watching the live book and measuring real spreads.
 
 | Command | Purpose | When |
 |---|---|---|
+| `python3 session_summary.py` | End-of-day digest -- hand this to a fresh Claude session, not raw logs | After market close |
 | `python3 approve_orders.py` | Review & approve/reject anything staged | Whenever something is pending |
 | Open `dashboard/trade_journal_dashboard.html` in a browser | Post-trade stats (win rate, capture %) | Anytime — drag in `logs/trade_journal.jsonl` |
 
