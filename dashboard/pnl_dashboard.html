@@ -272,19 +272,40 @@ function periodTrades(trades) {
   }
   if (duration === "month") {
     const y = cursor.getFullYear(), m = cursor.getMonth();
-    return trades.filter(t => { const d = new Date(t.date); return d.getFullYear() === y && d.getMonth() === m; });
+    return trades.filter(t => { const d = parseLocalDate(t.date); return d.getFullYear() === y && d.getMonth() === m; });
   }
   if (duration === "quarter") {
     const fy = fyOf(cursor), q = quarterOf(cursor);
     const months = quarterMonths(fy, q).map(d => d.getFullYear() + "-" + String(d.getMonth()));
-    return trades.filter(t => { const d = new Date(t.date); return months.includes(d.getFullYear() + "-" + d.getMonth()); });
+    return trades.filter(t => { const d = parseLocalDate(t.date); return months.includes(d.getFullYear() + "-" + d.getMonth()); });
   }
   // fy
   const fy = fyOf(cursor);
-  return trades.filter(t => fyOf(new Date(t.date)) === fy);
+  return trades.filter(t => fyOf(parseLocalDate(t.date)) === fy);
 }
 
-function fmtDate(d) { return d.toISOString().slice(0, 10); }
+function fmtDate(d) {
+  // LOCAL calendar date, deliberately not toISOString() -- that renders
+  // in UTC, and a Date built at local midnight (new Date(y, m, day)) in
+  // any positive-UTC-offset zone (IST included) lands on the PREVIOUS
+  // day once converted to UTC, silently shelving a day's real trades
+  // under the wrong calendar cell. Bug found 2026-08-15: a Friday's
+  // trades were rendering under Saturday's tile.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function parseLocalDate(s) {
+  // The inverse: turn a bare "YYYY-MM-DD" string (as this project's own
+  // journals and t.date always are) into a Date at LOCAL midnight for
+  // that calendar date. `new Date("YYYY-MM-DD")` parses as UTC midnight
+  // per spec, which is a different instant in any non-UTC zone -- use
+  // this instead of the bare constructor anywhere a journal date string
+  // needs to become a Date object.
+  const [y, m, day] = s.split("-").map(Number);
+  return new Date(y, m - 1, day);
+}
 function fmtInr(v) {
   if (v === undefined || v === null || isNaN(v)) return "—";
   const s = "Rs " + Math.abs(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
@@ -300,6 +321,12 @@ function periodLabel() {
 }
 
 function render() {
+  // Single source of truth for the pill highlight: every path that
+  // changes `duration` (a direct pill click, or a tile drill-down) ends
+  // in render(), so syncing the active class here means it can never
+  // drift out of sync the way per-caller toggling did (bug found
+  // 2026-08-15: clicking Month/Quarter/FY directly left "Day" lit).
+  document.querySelectorAll("#durationRow .pill").forEach(p => p.classList.toggle("active", p.dataset.dur === duration));
   document.getElementById("periodLabel").textContent = periodLabel();
   const trades = periodTrades(filteredTrades());
   renderCards(trades);
@@ -456,7 +483,7 @@ function renderMonthGrid(trades) {
   let html = `<div class="tile-grid months">`;
   months.forEach(md => {
     const y = md.getFullYear(), m = md.getMonth();
-    const monthTrades = Object.keys(byDate).filter(ds => { const d = new Date(ds); return d.getFullYear() === y && d.getMonth() === m; })
+    const monthTrades = Object.keys(byDate).filter(ds => { const d = parseLocalDate(ds); return d.getFullYear() === y && d.getMonth() === m; })
       .flatMap(ds => byDate[ds]);
     const net = monthTrades.reduce((s, t) => s + t.net_pnl_inr, 0);
     const cls = monthTrades.length ? (net >= 0 ? "pos" : "neg") : "empty";
@@ -473,13 +500,12 @@ function attachTileHandlers(container, kind) {
   container.querySelectorAll(".tile:not(.empty)").forEach(tile => {
     tile.addEventListener("click", () => {
       if (kind === "day") {
-        cursor = new Date(tile.dataset.date);
+        cursor = parseLocalDate(tile.dataset.date);
         duration = "day";
       } else {
         cursor = new Date(+tile.dataset.year, +tile.dataset.month, 1);
         duration = "month";
       }
-      document.querySelectorAll("#durationRow .pill").forEach(p => p.classList.toggle("active", p.dataset.dur === duration));
       render();
     });
   });
