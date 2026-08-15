@@ -88,7 +88,32 @@ sweep. A window should target the actual pattern (the same signal
 firing again within minutes) without touching unrelated same-direction
 trades hours apart.
 
-**Status of testing:** see the results appended below as they land.
+**Status of testing:** time-window sweep run 2026-08-15, full NIFTY
+history (2020-08 to 2026-08), real costs, `strike_adjacency_band_points
+= 200`, breakeven@0.5R -- same methodology as Anchor's own backtest:
+
+| Config | Trades | Net P&L | Max drawdown | vs. Anchor (profit / drawdown) |
+|---|---|---|---|---|
+| Anchor v1.0 (no cap) | 10,660 | +₹36,79,200 | 16.75% | — |
+| Untimed cap (no window) | 6,049 | +₹25,86,343 | 4.50% | -30% / -73% |
+| Sentinel, 15-min window | 8,868 | +₹33,27,158 | 10.69% | **-10% / -36%** |
+| Sentinel, 30-min window | 7,713 | +₹31,49,585 | 6.34% | **-14% / -62%** |
+| Sentinel, 60-min window | 6,929 | +₹29,22,207 | 6.19% | -21% / -63% |
+
+The window works as intended: the 30-minute version gives up only 14%
+of Anchor's profit while cutting drawdown by 62% — a far better trade
+than the untimed version's 30%-for-73%. 60 minutes is strictly worse
+than 30 (lower profit, no real further drawdown improvement), so there
+is little reason to go wider than 30-45 minutes. 15 minutes is the
+gentlest but may not fully cover slower-forming bursts (the real
+Bank Nifty 08-14 cluster spanned close to an hour end to end, even
+though most of it fired within 3 minutes).
+
+**Still not deployed, still not tested against the real 08-12/08-14
+sessions themselves** (reconstructed data ends 2026-08-05) or against
+Bank Nifty's own history. A promising backtest is evidence toward
+promotion, not promotion itself — see the policy at the top of this
+file.
 
 ---
 
@@ -100,3 +125,4 @@ trades hours apart.
 | 2026-08-15 | Correlated-cluster pattern found in real NIFTY (08-12) and Bank Nifty (08-14) sessions |
 | 2026-08-15 | First two cap designs backtested, found too blunt (see Sentinel above) |
 | 2026-08-15 | This registry created; Anchor formally named and frozen; Sentinel v1.1-dev (time-windowed) opened for testing |
+| 2026-08-15 | Sentinel v1.1-dev time-window sweep complete: 30-min window gives -14% profit for -62% drawdown vs Anchor -- best trade-off found so far, not yet promoted |
