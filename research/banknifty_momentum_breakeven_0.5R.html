@@ -1,0 +1,721 @@
+<title>Bank Nifty Breakeven@0.5R</title>
+<style>
+  :root {
+    --paper: #eef0ea;
+    --paper-raised: #e4e7dd;
+    --paper-sunk: #e8ebe3;
+    --ink: #17201a;
+    --ink-secondary: #48513f;
+    --muted: #8b8f79;
+    --rule: #cdd0c0;
+    --rule-strong: #a9ad98;
+    --baseline: #1f66ba;
+    --breakeven: #1a7a1a;
+    --loss: #b6342f;
+    --gold: #8a5c15;
+    --gold-wash: #e9dcc0;
+    --baseline-wash: #dbe6f3;
+    --breakeven-wash: #dcecdc;
+    --loss-wash: #f3dcda;
+    --shadow: rgba(23, 32, 26, 0.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #14180f;
+      --paper-raised: #1c2116;
+      --paper-sunk: #10130c;
+      --ink: #eceee3;
+      --ink-secondary: #b9bdaa;
+      --muted: #7c8069;
+      --rule: #333827;
+      --rule-strong: #454b34;
+      --baseline: #5b9ce6;
+      --breakeven: #4fbf4f;
+      --loss: #e2716c;
+      --gold: #d3a24f;
+      --gold-wash: #362a12;
+      --baseline-wash: #1a2532;
+      --breakeven-wash: #172a17;
+      --loss-wash: #2f1917;
+      --shadow: rgba(0, 0, 0, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #14180f;
+    --paper-raised: #1c2116;
+    --paper-sunk: #10130c;
+    --ink: #eceee3;
+    --ink-secondary: #b9bdaa;
+    --muted: #7c8069;
+    --rule: #333827;
+    --rule-strong: #454b34;
+    --baseline: #5b9ce6;
+    --breakeven: #4fbf4f;
+    --loss: #e2716c;
+    --gold: #d3a24f;
+    --gold-wash: #362a12;
+    --baseline-wash: #1a2532;
+    --breakeven-wash: #172a17;
+    --loss-wash: #2f1917;
+    --shadow: rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .sans { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .mono { font-family: ui-monospace, "SF Mono", Consolas, "Cascadia Mono", monospace; font-variant-numeric: tabular-nums; }
+
+  .page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 56px 24px 90px;
+  }
+  .prose { max-width: 700px; }
+
+  /* ---------- Masthead ---------- */
+  .eyebrow {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 18px;
+  }
+  .eyebrow .rule { flex: 1; height: 1px; background: var(--rule); }
+
+  .masthead { margin-bottom: 54px; }
+  .masthead .kicker {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--breakeven);
+    margin: 0 0 14px;
+  }
+  h1.title {
+    font-size: 42px;
+    line-height: 1.08;
+    letter-spacing: -0.01em;
+    margin: 0 0 16px;
+    text-wrap: balance;
+    font-weight: 400;
+  }
+  .subtitle {
+    font-size: 19px;
+    color: var(--ink-secondary);
+    margin: 0 0 26px;
+    text-wrap: balance;
+    max-width: 640px;
+  }
+  .byline {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 12.5px;
+    color: var(--muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 22px;
+    padding-top: 18px;
+    border-top: 1px solid var(--rule);
+  }
+  .byline b { color: var(--ink-secondary); font-weight: 600; }
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 3px;
+    background: var(--breakeven-wash); color: var(--breakeven);
+  }
+  .status-pill::before { content: "●"; font-size: 8px; }
+
+  /* ---------- Section structure ---------- */
+  section { margin: 62px 0; }
+  section:first-of-type { margin-top: 0; }
+  h2.sec-title {
+    font-size: 27px;
+    font-weight: 400;
+    letter-spacing: -0.005em;
+    margin: 0 0 20px;
+    text-wrap: balance;
+  }
+  h2.sec-title .num {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 13px; font-weight: 700; color: var(--muted);
+    letter-spacing: 0.06em; display: block; margin-bottom: 8px;
+  }
+  h3.sub-title { font-size: 19px; font-weight: 700; margin: 34px 0 12px; }
+  p { margin: 0 0 16px; }
+  .prose p, .prose li { max-width: 66ch; }
+  ul, ol { padding-left: 22px; }
+  li { margin-bottom: 8px; }
+  a { color: var(--baseline); }
+  strong { font-weight: 700; }
+  em.tag-be { font-style: normal; color: var(--breakeven); font-weight: 700; }
+  em.tag-loss { font-style: normal; color: var(--loss); font-weight: 700; }
+
+  /* ---------- Abstract / exec summary ---------- */
+  .abstract {
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 28px 30px;
+    margin-bottom: 8px;
+  }
+  .abstract .label {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 12px;
+  }
+  .abstract p { margin-bottom: 12px; font-size: 15.5px; }
+  .abstract p:last-child { margin-bottom: 0; }
+
+  /* ---------- Stat row ---------- */
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 28px 0;
+  }
+  .stat {
+    background: var(--paper-raised);
+    padding: 18px 18px 16px;
+  }
+  .stat .k {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 8px;
+  }
+  .stat .v {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 23px; font-weight: 600; letter-spacing: -0.01em;
+  }
+  .stat .v.up { color: var(--breakeven); }
+  .stat .v.down { color: var(--loss); }
+  .stat .sub { font-size: 11.5px; color: var(--muted); margin-top: 4px; font-family: -apple-system, "Segoe UI", sans-serif; }
+
+  /* ---------- Tables ---------- */
+  .table-wrap { overflow-x: auto; margin: 22px 0; border: 1px solid var(--rule); border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; background: var(--paper-raised); }
+  thead th {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--muted); text-align: left; padding: 10px 14px;
+    border-bottom: 1px solid var(--rule-strong);
+    white-space: nowrap;
+  }
+  td {
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--rule);
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  td.label-cell { font-family: Georgia, serif; white-space: normal; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.emph td { font-weight: 700; background: var(--paper-sunk); }
+  td.up { color: var(--breakeven); } td.down { color: var(--loss); }
+  .table-caption { font-family: -apple-system, "Segoe UI", sans-serif; font-size: 12px; color: var(--muted); margin-top: -12px; margin-bottom: 22px; }
+
+  /* ---------- Chart panels ---------- */
+  .chart-panel {
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 22px 22px 14px;
+    margin: 26px 0;
+  }
+  .chart-panel .chart-title { font-size: 16px; font-weight: 700; margin-bottom: 2px; }
+  .chart-panel .chart-desc { font-family: -apple-system, "Segoe UI", sans-serif; font-size: 12.5px; color: var(--muted); margin-bottom: 14px; }
+  .legend { display: flex; gap: 18px; margin-bottom: 6px; font-family: -apple-system, "Segoe UI", sans-serif; font-size: 12px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 6px; color: var(--ink-secondary); }
+  .legend-swatch { width: 12px; height: 3px; border-radius: 2px; }
+  .chart-svg-wrap { position: relative; }
+  svg.chart { width: 100%; height: auto; display: block; overflow: visible; }
+  .gridline { stroke: var(--rule); stroke-width: 1; }
+  .axis-label { font-family: ui-monospace, monospace; font-size: 10.5px; fill: var(--muted); }
+  .zero-line { stroke: var(--rule-strong); stroke-width: 1; stroke-dasharray: 2 3; }
+  .tooltip {
+    position: absolute; pointer-events: none; opacity: 0; transition: opacity 0.1s;
+    background: var(--ink); color: var(--paper);
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11.5px; padding: 8px 10px; border-radius: 4px;
+    white-space: nowrap; z-index: 5; line-height: 1.5;
+    box-shadow: 0 4px 14px var(--shadow);
+  }
+  .tooltip b { font-family: ui-monospace, monospace; }
+  .crosshair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 2; opacity: 0; }
+
+  /* ---------- Callout boxes ---------- */
+  .callout {
+    border-left: 3px solid var(--gold);
+    background: var(--gold-wash);
+    padding: 14px 18px;
+    border-radius: 0 3px 3px 0;
+    margin: 22px 0;
+    font-size: 15px;
+  }
+  .callout .callout-label {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--gold); margin-bottom: 6px;
+  }
+  .callout.loss-callout { border-left-color: var(--loss); background: var(--loss-wash); }
+  .callout.loss-callout .callout-label { color: var(--loss); }
+  .callout.be-callout { border-left-color: var(--breakeven); background: var(--breakeven-wash); }
+  .callout.be-callout .callout-label { color: var(--breakeven); }
+
+  /* ---------- Checklist (robustness) ---------- */
+  .check-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin: 24px 0; }
+  .check-card {
+    background: var(--paper-raised); border: 1px solid var(--rule); border-radius: 4px;
+    padding: 16px 18px;
+  }
+  .check-card .status {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--breakeven); margin-bottom: 8px;
+  }
+  .check-card .status::before { content: "✓"; }
+  .check-card h4 { margin: 0 0 6px; font-size: 15px; }
+  .check-card p { font-size: 13.5px; color: var(--ink-secondary); margin: 0; }
+
+  /* ---------- Footnote / limitations list ---------- */
+  .limit-item { display: flex; gap: 14px; padding: 16px 0; border-bottom: 1px solid var(--rule); }
+  .limit-item:last-child { border-bottom: none; }
+  .limit-item .limit-num {
+    font-family: ui-monospace, monospace; font-size: 13px; color: var(--muted); flex-shrink: 0; width: 20px; padding-top: 2px;
+  }
+  .limit-item h4 { margin: 0 0 5px; font-size: 15.5px; }
+  .limit-item p { margin: 0; font-size: 14.5px; color: var(--ink-secondary); }
+
+  /* ---------- Config table ---------- */
+  .kv-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+    border: 1px solid var(--rule); border-radius: 4px; overflow: hidden;
+    background: var(--rule);
+    font-size: 13px;
+  }
+  .kv-grid > div { background: var(--paper-raised); padding: 9px 14px; display: flex; justify-content: space-between; gap: 12px; }
+  .kv-grid .k { color: var(--ink-secondary); font-family: -apple-system, "Segoe UI", sans-serif; font-size: 12.5px; }
+  .kv-grid .v { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .kv-grid > div.hl { background: var(--breakeven-wash); }
+  .kv-grid > div.hl .v { color: var(--breakeven); font-weight: 700; }
+
+  hr.divider { border: none; border-top: 1px solid var(--rule); margin: 60px 0; }
+
+  footer.paper-footer {
+    margin-top: 70px; padding-top: 22px; border-top: 1px solid var(--rule);
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11.5px; color: var(--muted); line-height: 1.7;
+  }
+
+  @media (max-width: 640px) {
+    h1.title { font-size: 32px; }
+    .page { padding: 36px 16px 60px; }
+    .kv-grid { grid-template-columns: 1fr; }
+  }
+</style>
+<div class="page">
+
+  <div class="masthead">
+    <div class="kicker">Strategy Research Note · Vol. 2</div>
+    <h1 class="title">Bank Nifty Momentum: The Breakeven@0.5R Exit Rule</h1>
+    <p class="subtitle">The same exit logic now live on Bank Nifty — arm a breakeven stop once a trade reaches 0.5R. Five years of real market data, real costs, real measured spread. It earns more than NIFTY, and it hurts considerably more to hold.</p>
+    <div class="byline">
+      <span><b>Prepared</b> 2026-08-15</span>
+      <span><b>Universe</b> Bank Nifty index options</span>
+      <span><b>Window</b> 2021-08-04 → 2026-08-11 (1,244 trading days, 8,324 trades)</span>
+      <span class="status-pill">Live in production</span>
+    </div>
+  </div>
+
+  <section id="abstract">
+    <div class="abstract">
+      <div class="label sans">Executive Summary</div>
+      <p>Bank Nifty momentum runs the identical pipeline as its NIFTY counterpart — buy calls or puts on an OI/IV/PCR/VWAP signal, 2R target, ATR-derived stop, and since 2026-08-14 a breakeven stop armed once a trade reaches +0.5R. Replayed across 8,324 trades with real statutory costs and real measured spread on every leg, it returns <span class="mono"><strong>+₹45,73,883</strong></span> — a <span class="mono"><strong>+915%</strong></span> cumulative return on a flat ₹5,00,000 base, more than the NIFTY version earns.</p>
+      <p><strong>It is also a materially rougher instrument to hold.</strong> Maximum drawdown is <span class="mono"><strong>40.9%</strong></span> (₹2,04,657) against NIFTY's 16.8% — roughly 2.4× the pain for about 1.2× the profit. The trade profile differs in kind, not just degree: <strong>69.6% of Bank Nifty trades simply ride to the end of the day</strong> without touching target or stop, and only 8.5% ever reach the 2R target. This note reports those numbers alongside the returns, and is explicit about where its supporting evidence is thinner than the NIFTY note's (§6).</p>
+    </div>
+  </section>
+
+  <section id="strategy">
+    <h2 class="sec-title"><span class="num sans">01 — The Strategy</span>Identical logic, different instrument</h2>
+    <div class="prose">
+      <p>The live process (<span class="mono">main_live_banknifty.py</span>) is separate from NIFTY's, but imports the same <span class="mono">scanner.py</span>, <span class="mono">plan_generator.py</span>, <span class="mono">risk_checker.py</span> and <span class="mono">trade_tracker.py</span>. It differs only in instrument-specific configuration. Nothing in it places a broker order — it is decision-support the operator acts on manually.</p>
+      <p>A trade closes on the first of four conditions, checked in this order every cycle: <strong>2R target</strong> → <strong>breakeven-armed stop</strong> (reached +0.5R at some point, price now back at entry) → <strong>original ATR stop</strong> → <strong>forced end-of-day close</strong>.</p>
+
+      <div class="kv-grid sans">
+        <div><span class="k">Lot size</span><span class="v">30 (vs NIFTY's 65)</span></div>
+        <div><span class="k">Premium band</span><span class="v">₹300 – ₹800</span></div>
+        <div><span class="k">Strike range</span><span class="v">±2000 points</span></div>
+        <div class="hl"><span class="k">Breakeven arm</span><span class="v">0.5R (live since 2026-08-14)</span></div>
+        <div><span class="k">Target R:R</span><span class="v">2.0 (fixed)</span></div>
+        <div><span class="k">Max lots / trade</span><span class="v">1</span></div>
+        <div><span class="k">Avg entry premium</span><span class="v">₹417</span></div>
+        <div><span class="k">Session window</span><span class="v">09:15 – 15:15 IST, no overnight hold</span></div>
+      </div>
+      <p>The wider premium band and ±2000-point strike range reflect Bank Nifty's larger index level and wider daily ranges; both were validated separately before this note.</p>
+    </div>
+  </section>
+
+  <section id="method">
+    <h2 class="sec-title"><span class="num sans">02 — Data &amp; Method</span></h2>
+    <div class="prose">
+      <p>Every cycle is <strong>reconstructed</strong> from Dhan's Expired Options Data endpoint — real recorded OHLC, OI and IV at 5-minute granularity — and replayed through the strategy's own code. Bank Nifty's reconstructed history covers <strong>1,244 days</strong>, roughly a year shorter than NIFTY's 1,491, because the backfill begins 2021-08-04.</p>
+      <p>This dataset was regenerated from a completely fresh scanner run on 2026-08-15, not reloaded from any cached file. It independently reproduced an earlier Bank Nifty run <em>to the rupee</em> on both the baseline and breakeven totals — a genuine reproducibility check, not a re-presentation of the same output.</p>
+
+      <h3 class="sub-title">The full cost stack, stated honestly</h3>
+      <p>The breakeven figure is <strong>not</strong> "gross minus costs" — it is a different computation, because the rule replaces the outcome of trades that round-tripped. Both are shown so the arithmetic is checkable:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Line</th><th>Amount</th></tr></thead>
+          <tbody>
+            <tr><td class="label-cell">Gross P&amp;L</td><td class="up">+₹36,93,690</td></tr>
+            <tr><td class="label-cell">less statutory costs (STT, exchange, SEBI, stamp, brokerage, GST)</td><td class="down">-₹5,91,700</td></tr>
+            <tr><td class="label-cell">less real measured bid-ask spread, both legs</td><td class="down">-₹5,27,682</td></tr>
+            <tr><td class="label-cell">= net if every trade ran to its original target/stop</td><td class="up">+₹25,74,308</td></tr>
+            <tr class="emph"><td class="label-cell">Net under breakeven@0.5R (the live strategy)</td><td class="up">+₹45,73,883</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Spread is measured from real recorded order books, banded by premium level, and charged on both legs at each leg's own band. Personal income tax is not modeled — see §7.</p>
+    </div>
+  </section>
+
+  <section id="results">
+    <h2 class="sec-title"><span class="num sans">03 — Headline Results</span></h2>
+
+    <div class="stat-row">
+      <div class="stat"><div class="k">Net P&amp;L (real costs)</div><div class="v up">+₹45.7L</div><div class="sub">8,324 trades, five years</div></div>
+      <div class="stat"><div class="k">Cumulative return</div><div class="v up">+915%</div><div class="sub">on flat ₹5,00,000</div></div>
+      <div class="stat"><div class="k">Max drawdown</div><div class="v down">40.9%</div><div class="sub">₹2,04,657 · NIFTY's was 16.8%</div></div>
+      <div class="stat"><div class="k">Reached the 2R target</div><div class="v">8.5%</div><div class="sub">707 of 8,324 trades</div></div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Metric</th><th>Bank Nifty</th><th>NIFTY (reference)</th></tr></thead>
+        <tbody>
+          <tr><td class="label-cell">Trades</td><td>8,324</td><td>10,660</td></tr>
+          <tr><td class="label-cell">— closed at target (WIN)</td><td>707 (8.5%)</td><td>2,505 (23.5%)</td></tr>
+          <tr><td class="label-cell">— closed by breakeven arm</td><td>966 (11.6%)</td><td>2,299 (21.6%)</td></tr>
+          <tr><td class="label-cell">— closed at original stop (LOSS)</td><td>854 (10.3%)</td><td>2,579 (24.2%)</td></tr>
+          <tr><td class="label-cell">— forced end-of-day close</td><td>5,797 (69.6%)</td><td>3,277 (30.7%)</td></tr>
+          <tr class="emph"><td class="label-cell">Net P&amp;L</td><td class="up">+₹45,73,883</td><td class="up">+₹36,79,201</td></tr>
+          <tr class="emph"><td class="label-cell">Max drawdown</td><td class="down">₹2,04,657 (40.9%)</td><td class="down">₹83,764 (16.8%)</td></tr>
+          <tr><td class="label-cell">Drawdown window</td><td>2025-01-13 → 2025-03-13</td><td>2025-01-09 → 2025-02-04</td></tr>
+          <tr><td class="label-cell">Profitable months</td><td>53 of 61</td><td>68 of 73</td></tr>
+          <tr><td class="label-cell">Losing years</td><td class="up">none</td><td class="up">none</td></tr>
+          <tr><td class="label-cell">Worst single day</td><td class="down">-₹31,899</td><td class="down">-₹24,165</td></tr>
+          <tr><td class="label-cell">Best single day</td><td class="up">+₹1,44,669</td><td class="up">+₹55,017</td></tr>
+          <tr><td class="label-cell">Top-3 trade concentration</td><td>1.01%</td><td>0.76%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout loss-callout">
+      <div class="callout-label sans">The trade-off in one line</div>
+      Bank Nifty earns roughly <strong>1.24× NIFTY's profit</strong> while inflicting roughly <strong>2.4× the drawdown</strong>. Per unit of drawdown endured it is the <em>worse</em> of the two strategies (≈22:1 against NIFTY's ≈44:1), despite the larger headline return. Choosing between them on total P&amp;L alone reads the wrong number.
+    </div>
+  </section>
+
+  <section id="profile">
+    <h2 class="sec-title"><span class="num sans">04 — A Different Kind of Strategy</span>Why the outcome mix matters</h2>
+    <div class="prose">
+      <p>The two indices produce genuinely different trade profiles from identical logic. On Bank Nifty, <strong>69.6% of trades never touch target or stop at all</strong> — they are force-closed at 15:15. Median peak favorable excursion is just <span class="mono">0.43R</span>; only 45.7% of trades ever reach 0.5R, and only 8.5% reach the 2R target.</p>
+      <p>Read plainly: on Bank Nifty this is <strong>not primarily a target-hitting strategy</strong>. It mostly harvests intraday drift banked at the closing bell. That has a direct consequence for the breakeven rule — it fires on only 11.6% of Bank Nifty trades versus 21.6% on NIFTY, because fewer trades travel far enough to arm it. It still nearly doubles net P&amp;L (₹25.7L → ₹45.7L), but from a smaller base of opportunities.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Peak excursion reached</th><th>Share of trades</th></tr></thead>
+          <tbody>
+            <tr><td class="label-cell">Median trade peaks at</td><td>0.43R</td></tr>
+            <tr><td class="label-cell">Ever reached 0.5R (arms the breakeven rule)</td><td>45.7%</td></tr>
+            <tr><td class="label-cell">Ever reached 2.0R (the target)</td><td>8.5%</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="equity-curve">
+    <h2 class="sec-title"><span class="num sans">05 — Equity Curve &amp; Drawdown</span></h2>
+    <div class="prose"><p>Cumulative net P&amp;L against the ₹5,00,000 base, and the underwater view beneath it. The deepest trough — January to March 2025 — is the same market window that hit NIFTY hardest, but it cuts far deeper here.</p></div>
+
+    <div class="chart-panel">
+      <div class="chart-title">Cumulative net P&amp;L, 2021–2026</div>
+      <div class="chart-desc sans">Monthly resolution · real statutory + spread costs, median scenario · hover for detail</div>
+      <div class="legend"><div class="legend-item"><span class="legend-swatch" style="background:var(--breakeven);"></span>Bank Nifty breakeven@0.5R (live)</div></div>
+      <div class="chart-svg-wrap" id="equity-chart-wrap">
+        <svg class="chart" id="equity-chart" viewBox="0 0 860 360" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="tooltip" id="equity-tooltip"></div>
+      </div>
+    </div>
+
+    <div class="chart-panel">
+      <div class="chart-title">Drawdown from peak equity, as % of ₹5,00,000</div>
+      <div class="chart-desc sans">Monthly resolution · lower is worse · hover for detail</div>
+      <div class="legend"><div class="legend-item"><span class="legend-swatch" style="background:var(--breakeven);"></span>Drawdown</div></div>
+      <div class="chart-svg-wrap" id="dd-chart-wrap">
+        <svg class="chart" id="dd-chart" viewBox="0 0 860 260" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="tooltip" id="dd-tooltip"></div>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Year</th><th>Net P&amp;L</th><th>Return on ₹5,00,000</th></tr></thead>
+        <tbody id="yearly-tbody"></tbody>
+      </table>
+    </div>
+    <div class="table-caption sans">2021 and 2026 are partial years (data begins 2021-08-04, ends 2026-08-11) — their figures are understated relative to a full year.</div>
+  </section>
+
+  <section id="robustness">
+    <h2 class="sec-title"><span class="num sans">06 — Robustness, and Where It Is Thin</span></h2>
+    <div class="prose"><p>Three checks pass cleanly. Two that support the NIFTY note <strong>have not been run here</strong>, and this section says so rather than implying equivalent backing.</p></div>
+
+    <div class="check-grid">
+      <div class="check-card">
+        <div class="status sans">Reproducible</div>
+        <h4>Fresh rerun matched to the rupee</h4>
+        <p>Regenerated from scratch on 2026-08-15 and independently reproduced an earlier run's baseline (+₹25,74,308) and breakeven (+₹45,73,883) totals exactly, ruling out a caching or staleness artifact.</p>
+      </div>
+      <div class="check-card">
+        <div class="status sans">No losing year</div>
+        <h4>All 6 calendar years positive</h4>
+        <p>2021 (partial) through 2026 (partial) are each net-positive, including 2025 — the year containing the 40.9% drawdown.</p>
+      </div>
+      <div class="check-card">
+        <div class="status sans">Not a few lucky trades</div>
+        <h4>Top-3 trades = 1.01% of total</h4>
+        <p>Trade-level outlier concentration is low (top-10: 2.97%). But see the day-level caveat below — the trade is not the right unit of risk here.</p>
+      </div>
+      <div class="check-card" style="border-color: var(--loss);">
+        <div class="status sans" style="color: var(--loss);">Not available</div>
+        <h4>Almost no live tracking yet</h4>
+        <p>Bank Nifty's live paper-tracking journal holds <strong>6 trades from a single day</strong> (2026-08-14), which lost ₹11,565 on a correlated cluster of PE positions. One session is far too little to confirm or contradict anything. NIFTY's equivalent check used 77 trades across 12 days.</p>
+      </div>
+    </div>
+
+    <div class="callout loss-callout">
+      <div class="callout-label sans">Day-level concentration: the trade-level number is reassuring, and misleading</div>
+      Top-3 <em>trades</em> are only 1.01% of profit. But the <strong>top-5 days are 11.96%</strong> of all profit, each a 16–26 trade day, and two of them (2023-02-01, 2026-02-01) are Union Budget days. Because the strategy opens many correlated same-direction positions within a session, its real unit of risk is the <em>day</em>, not the trade. The 2026-08-14 live session showed exactly this shape: six PE positions, all reaching ~0.75R, all reversing together.
+    </div>
+
+    <h3 class="sub-title">Not yet run for Bank Nifty</h3>
+    <ul>
+      <li><strong>Signal-reversal falsification test.</strong> The NIFTY note demonstrates its entry signal carries real information by showing that inverting every signal loses roughly 2.5× more than the forward version makes. That test has <em>not</em> been run on Bank Nifty data. Until it is, this signal's validity here is assumed by analogy, not demonstrated.</li>
+      <li><strong>Live-journal cross-check at meaningful sample size.</strong> Requires accumulating live paper-tracking sessions; one day exists so far.</li>
+    </ul>
+
+    <h3 class="sub-title">Spread-cost sensitivity</h3>
+    <p class="prose">Unusually insensitive, because breakeven-closed trades are charged the entry-band spread twice rather than a wider exit-band spread:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Spread scenario</th><th>Net P&amp;L</th></tr></thead>
+        <tbody>
+          <tr><td class="label-cell">Median (headline)</td><td class="up">+₹45,73,878</td></tr>
+          <tr><td class="label-cell">75th percentile</td><td class="up">+₹45,26,795</td></tr>
+          <tr><td class="label-cell">90th percentile (pessimistic)</td><td class="up">+₹44,84,004</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="limitations">
+    <h2 class="sec-title"><span class="num sans">07 — What This Does Not Model</span></h2>
+
+    <div class="limit-item">
+      <div class="limit-num mono">01</div>
+      <div><h4>Personal income tax</h4><p>Every figure is <strong>pre-tax</strong>. F&amp;O profit in India is non-speculative business income taxed at your own slab rate — it cannot be generically baked into a backtest. Reduce every net figure by your effective rate.</p></div>
+    </div>
+    <div class="limit-item">
+      <div class="limit-num mono">02</div>
+      <div><h4>No real-money execution, and no order-entry delay modeled</h4><p><strong>Nothing in this system has ever placed a real broker order.</strong> Every figure assumes a fill at exactly the price that existed when the signal fired. A real order is punched in seconds later and fills elsewhere — and not symmetrically: stops and breakeven exits fire <em>because</em> price is moving against the position, so a delayed exit systematically fills worse. Since 2026-08-15 the live system records what each contract was priced at one and two cycles after every entry and exit, to measure this from observation. That dataset starts empty and contributes nothing here.</p></div>
+    </div>
+    <div class="limit-item">
+      <div class="limit-num mono">03</div>
+      <div><h4>The breakeven exit fill assumption</h4><p>For the 966 trades this rule closed, the exit is modeled at ~entry price while still paying full statutory and spread cost. A real stop on a fast reversal may fill better or worse. The live shadow-tracking system gathers forward evidence on exactly this question.</p></div>
+    </div>
+    <div class="limit-item">
+      <div class="limit-num mono">04</div>
+      <div><h4>Correlated intraday positions are not risk-capped</h4><p>The strategy opens many same-direction positions in one session, and the day-level concentration above shows profit depends on them. Nothing in the backtest caps how much of a day's risk sits on one directional view; the live daily-loss breaker (3% of capital) is the only backstop, and it never bound in this backtest.</p></div>
+    </div>
+    <div class="limit-item">
+      <div class="limit-num mono">05</div>
+      <div><h4>Shorter history than NIFTY</h4><p>1,244 days from 2021-08-04, versus NIFTY's 1,491 from 2020-08-03. Bank Nifty's record misses the 2020–21 period entirely, so it is tested across fewer distinct market regimes.</p></div>
+    </div>
+    <div class="limit-item">
+      <div class="limit-num mono">06</div>
+      <div><h4>The between-cycles blind spot</h4><p>Triggers here are checked at reconstructed <strong>5-minute</strong> cycles. Live, entries are scanned every <strong>30s</strong> and target/stop/breakeven every <strong>5s</strong>. A spike that touches a level and reverses inside one reconstructed bar is invisible here.</p></div>
+    </div>
+    <div class="limit-item">
+      <div class="limit-num mono">07</div>
+      <div><h4>Non-compounding capital</h4><p>Every trade is sized against the same flat ₹5,00,000 across all five years. Returns quoted are simple, not compounded.</p></div>
+    </div>
+  </section>
+
+  <section id="recommendation">
+    <h2 class="sec-title"><span class="num sans">08 — Status</span></h2>
+    <div class="prose">
+      <p><strong>Live as of 2026-08-14</strong> in <span class="mono">main_live_banknifty.py</span>, sharing <span class="mono">config.BREAKEVEN_ARM_R = 0.5</span> and <span class="mono">trade_tracker.py</span> with the NIFTY process, with its own separate journals and shadow-tracking files.</p>
+    </div>
+    <div class="callout">
+      <div class="callout-label sans">How to read this note against the NIFTY one</div>
+      The Bank Nifty result is <strong>larger and less well-supported</strong>. It earns more in absolute terms, on a shorter history, with 2.4× the drawdown, a profile that depends on end-of-day drift rather than target hits, meaningful day-level profit concentration, and without the falsification test that backs the NIFTY signal. None of that makes it wrong — but it is a weaker evidential position, and the higher headline return should not be mistaken for higher confidence.
+    </div>
+  </section>
+
+  <footer class="paper-footer">
+    Prepared from the project's own scanner, plan generator, risk-checker and trade-tracker code, replayed against reconstructed historical option-chain data (Dhan Expired Options Data endpoint). Analytics only — nothing described here places a real brokerage order. Figures rounded to the nearest rupee where shown; underlying computation carries full precision.
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  const monthly = {"2021-08":-10573.63,"2021-09":110625.31,"2021-10":138732.32,"2021-11":39294.84,"2021-12":9401.98,"2022-01":100921.27,"2022-02":170281.44,"2022-03":65067.57,"2022-04":82405.41,"2022-05":111324.49,"2022-06":27093.91,"2022-07":101394.02,"2022-08":85616.41,"2022-09":-23927.45,"2022-10":7916.3,"2022-11":-48493.79,"2022-12":149043.72,"2023-01":1811.65,"2023-02":198873.81,"2023-03":213064.38,"2023-04":14022.79,"2023-05":32596.95,"2023-06":30997.23,"2023-07":77724.91,"2023-08":12620.48,"2023-09":19444.07,"2023-10":96889.89,"2023-11":-7889.75,"2023-12":195130.7,"2024-01":98862.73,"2024-02":231842.16,"2024-03":-74241.55,"2024-04":195804.87,"2024-05":123592.33,"2024-06":90561.11,"2024-07":92307.12,"2024-08":39730.93,"2024-09":79952.86,"2024-10":261231.85,"2024-11":91443.85,"2024-12":62661.97,"2025-01":6161.48,"2025-02":-75565.81,"2025-03":97052.04,"2025-04":113722.36,"2025-05":19441.06,"2025-06":102773.39,"2025-07":89193.48,"2025-08":25054.8,"2025-09":29065.28,"2025-10":11520.51,"2025-11":14324.84,"2025-12":-13423.78,"2026-01":127960.66,"2026-02":165366.31,"2026-03":142306.08,"2026-04":1034.08,"2026-05":149864.78,"2026-06":161405.55,"2026-07":112507.86,"2026-08":-1043.71};
+  const CAP = 500000;
+  const months = Object.keys(monthly);
+
+  function cumulative(m) { let run = 0; return months.map(k => { run += m[k]; return run; }); }
+  function drawdownSeries(cumArr) {
+    let peak = -Infinity;
+    return cumArr.map(v => { peak = Math.max(peak, v); return peak > 0 ? ((peak - v) / CAP) * 100 : 0; });
+  }
+  const cum = cumulative(monthly);
+  const dd = drawdownSeries(cum);
+
+  function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function fmtInr(v) {
+    const s = 'Rs ' + Math.abs(Math.round(v)).toLocaleString('en-IN');
+    return v < 0 ? '-' + s : '+' + s;
+  }
+  function monthLabel(mm) {
+    const [y, mo] = mm.split('-');
+    const names = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return names[parseInt(mo,10)-1] + " '" + y.slice(2);
+  }
+
+  function buildLineChart(svgId, wrapId, tooltipId, series, opts) {
+    const svg = document.getElementById(svgId);
+    const wrap = document.getElementById(wrapId);
+    const tooltip = document.getElementById(tooltipId);
+    const W = 860, H = svg.viewBox.baseVal.height;
+    const padL = 64, padR = 16, padT = 16, padB = 28;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+
+    let yMin = Math.min(0, ...series), yMax = Math.max(0, ...series);
+    if (opts.invertY) { yMin = 0; yMax = Math.max(...series) * 1.08; }
+    else { const pad = (yMax - yMin) * 0.08; yMin -= pad; yMax += pad; }
+
+    const x = i => padL + (i / (months.length - 1)) * plotW;
+    const y = v => opts.invertY ? padT + (v / yMax) * plotH
+                                : padT + (1 - (v - yMin) / (yMax - yMin)) * plotH;
+
+    const ns = 'http://www.w3.org/2000/svg';
+    function el(tag, attrs) { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+    svg.innerHTML = '';
+
+    for (let g = 0; g <= 4; g++) {
+      const v = yMin + (g / 4) * (yMax - yMin), gy = y(v);
+      svg.appendChild(el('line', { x1: padL, x2: W - padR, y1: gy, y2: gy, class: 'gridline' }));
+      const label = opts.invertY ? Math.round(v) + '%' : (Math.abs(v) >= 100000 ? (v/100000).toFixed(1) + 'L' : Math.round(v));
+      const t = el('text', { x: padL - 10, y: gy + 4, class: 'axis-label', 'text-anchor': 'end' });
+      t.textContent = opts.invertY ? label : (v >= 0 ? '+' : '') + label;
+      svg.appendChild(t);
+    }
+    if (!opts.invertY && yMin < 0 && yMax > 0) {
+      svg.appendChild(el('line', { x1: padL, x2: W - padR, y1: y(0), y2: y(0), class: 'zero-line' }));
+    }
+    months.forEach((mm, i) => {
+      if (mm.endsWith('-01') || i === 0) {
+        const t = el('text', { x: x(i), y: H - 8, class: 'axis-label', 'text-anchor': 'middle' });
+        t.textContent = "'" + mm.slice(2, 4);
+        svg.appendChild(t);
+      }
+    });
+
+    const color = cssVar(opts.invertY ? '--loss' : '--breakeven');
+    let d = 'M ' + x(0) + ' ' + y(series[0]);
+    for (let i = 1; i < series.length; i++) d += ' L ' + x(i) + ' ' + y(series[i]);
+    const base = opts.invertY ? 0 : yMin;
+    svg.appendChild(el('path', { d: d + ' L ' + x(series.length-1) + ' ' + y(base) + ' L ' + x(0) + ' ' + y(base) + ' Z',
+                                 fill: color, opacity: 0.14, stroke: 'none' }));
+    svg.appendChild(el('path', { d: d, fill: 'none', stroke: color, 'stroke-width': 2.25,
+                                 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+    svg.appendChild(el('circle', { cx: x(series.length-1), cy: y(series[series.length-1]), r: 3.5, fill: color }));
+
+    const hoverLine = el('line', { x1: 0, x2: 0, y1: padT, y2: H - padB, class: 'crosshair' });
+    svg.appendChild(hoverLine);
+    const dot = el('circle', { r: 4, fill: color, stroke: cssVar('--paper-raised'), 'stroke-width': 2, opacity: 0 });
+    svg.appendChild(dot);
+    const hit = el('rect', { x: padL, y: padT, width: plotW, height: plotH, fill: 'transparent' });
+    svg.appendChild(hit);
+
+    hit.addEventListener('mousemove', (ev) => {
+      const rect = svg.getBoundingClientRect(), scale = W / rect.width;
+      let idx = Math.round(((ev.clientX - rect.left) * scale - padL) / plotW * (months.length - 1));
+      idx = Math.max(0, Math.min(months.length - 1, idx));
+      hoverLine.setAttribute('x1', x(idx)); hoverLine.setAttribute('x2', x(idx)); hoverLine.style.opacity = 1;
+      dot.setAttribute('cx', x(idx)); dot.setAttribute('cy', y(series[idx])); dot.style.opacity = 1;
+      const fmt = opts.invertY ? (v => v.toFixed(1) + '%') : fmtInr;
+      tooltip.innerHTML = '<div style="margin-bottom:4px;font-weight:600;">' + monthLabel(months[idx]) + '</div>' +
+        '<div>' + (opts.invertY ? 'Drawdown' : 'Cumulative') + ': <b>' + fmt(series[idx]) + '</b></div>' +
+        '<div>Month P&amp;L: <b>' + fmtInr(monthly[months[idx]]) + '</b></div>';
+      tooltip.style.opacity = 1;
+      const wr = wrap.getBoundingClientRect();
+      let left = (x(idx) / W) * wr.width + 14;
+      if (left > wr.width - 160) left -= 180;
+      tooltip.style.left = left + 'px';
+      tooltip.style.top = ((y(series[idx]) / H) * wr.height - 10) + 'px';
+    });
+    hit.addEventListener('mouseleave', () => {
+      hoverLine.style.opacity = 0; dot.style.opacity = 0; tooltip.style.opacity = 0;
+    });
+  }
+
+  function render() {
+    buildLineChart('equity-chart', 'equity-chart-wrap', 'equity-tooltip', cum, { invertY: false });
+    buildLineChart('dd-chart', 'dd-chart-wrap', 'dd-tooltip', dd, { invertY: true });
+  }
+  render();
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
+
+  const years = {};
+  months.forEach(mm => { const y = mm.slice(0,4); years[y] = (years[y] || 0) + monthly[mm]; });
+  const tbody = document.getElementById('yearly-tbody');
+  Object.keys(years).sort().forEach(y => {
+    const partial = (y === '2021' || y === '2026') ? '*' : '';
+    const v = years[y];
+    const row = document.createElement('tr');
+    row.innerHTML = '<td class="label-cell">' + y + partial + '</td>' +
+      '<td class="' + (v >= 0 ? 'up' : 'down') + '">' + fmtInr(v) + '</td>' +
+      '<td class="' + (v >= 0 ? 'up' : 'down') + '">' + (v/CAP*100).toFixed(1) + '%</td>';
+    tbody.appendChild(row);
+  });
+  const tr = document.createElement('tr');
+  tr.className = 'emph';
+  const tot = months.reduce((s,mm)=>s+monthly[mm],0);
+  tr.innerHTML = '<td class="label-cell">Total</td><td class="up">' + fmtInr(tot) +
+                 '</td><td class="up">' + (tot/CAP*100).toFixed(0) + '%</td>';
+  tbody.appendChild(tr);
+})();
+</script>

@@ -1,0 +1,732 @@
+<title>NIFTY Breakeven@0.5R</title>
+<style>
+  :root {
+    --paper: #eef0ea;
+    --paper-raised: #e4e7dd;
+    --paper-sunk: #e8ebe3;
+    --ink: #17201a;
+    --ink-secondary: #48513f;
+    --muted: #8b8f79;
+    --rule: #cdd0c0;
+    --rule-strong: #a9ad98;
+    --baseline: #1f66ba;
+    --breakeven: #1a7a1a;
+    --loss: #b6342f;
+    --gold: #8a5c15;
+    --gold-wash: #e9dcc0;
+    --baseline-wash: #dbe6f3;
+    --breakeven-wash: #dcecdc;
+    --loss-wash: #f3dcda;
+    --shadow: rgba(23, 32, 26, 0.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #14180f;
+      --paper-raised: #1c2116;
+      --paper-sunk: #10130c;
+      --ink: #eceee3;
+      --ink-secondary: #b9bdaa;
+      --muted: #7c8069;
+      --rule: #333827;
+      --rule-strong: #454b34;
+      --baseline: #5b9ce6;
+      --breakeven: #4fbf4f;
+      --loss: #e2716c;
+      --gold: #d3a24f;
+      --gold-wash: #362a12;
+      --baseline-wash: #1a2532;
+      --breakeven-wash: #172a17;
+      --loss-wash: #2f1917;
+      --shadow: rgba(0, 0, 0, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #14180f;
+    --paper-raised: #1c2116;
+    --paper-sunk: #10130c;
+    --ink: #eceee3;
+    --ink-secondary: #b9bdaa;
+    --muted: #7c8069;
+    --rule: #333827;
+    --rule-strong: #454b34;
+    --baseline: #5b9ce6;
+    --breakeven: #4fbf4f;
+    --loss: #e2716c;
+    --gold: #d3a24f;
+    --gold-wash: #362a12;
+    --baseline-wash: #1a2532;
+    --breakeven-wash: #172a17;
+    --loss-wash: #2f1917;
+    --shadow: rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .sans { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .mono { font-family: ui-monospace, "SF Mono", Consolas, "Cascadia Mono", monospace; font-variant-numeric: tabular-nums; }
+
+  .page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 56px 24px 90px;
+  }
+  .prose { max-width: 700px; }
+
+  /* ---------- Masthead ---------- */
+  .eyebrow {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 18px;
+  }
+  .eyebrow .rule { flex: 1; height: 1px; background: var(--rule); }
+
+  .masthead { margin-bottom: 54px; }
+  .masthead .kicker {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--breakeven);
+    margin: 0 0 14px;
+  }
+  h1.title {
+    font-size: 42px;
+    line-height: 1.08;
+    letter-spacing: -0.01em;
+    margin: 0 0 16px;
+    text-wrap: balance;
+    font-weight: 400;
+  }
+  .subtitle {
+    font-size: 19px;
+    color: var(--ink-secondary);
+    margin: 0 0 26px;
+    text-wrap: balance;
+    max-width: 640px;
+  }
+  .byline {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 12.5px;
+    color: var(--muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 22px;
+    padding-top: 18px;
+    border-top: 1px solid var(--rule);
+  }
+  .byline b { color: var(--ink-secondary); font-weight: 600; }
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 3px;
+    background: var(--breakeven-wash); color: var(--breakeven);
+  }
+  .status-pill::before { content: "●"; font-size: 8px; }
+
+  /* ---------- Section structure ---------- */
+  section { margin: 62px 0; }
+  section:first-of-type { margin-top: 0; }
+  h2.sec-title {
+    font-size: 27px;
+    font-weight: 400;
+    letter-spacing: -0.005em;
+    margin: 0 0 20px;
+    text-wrap: balance;
+  }
+  h2.sec-title .num {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 13px; font-weight: 700; color: var(--muted);
+    letter-spacing: 0.06em; display: block; margin-bottom: 8px;
+  }
+  h3.sub-title { font-size: 19px; font-weight: 700; margin: 34px 0 12px; }
+  p { margin: 0 0 16px; }
+  .prose p, .prose li { max-width: 66ch; }
+  ul, ol { padding-left: 22px; }
+  li { margin-bottom: 8px; }
+  a { color: var(--baseline); }
+  strong { font-weight: 700; }
+  em.tag-be { font-style: normal; color: var(--breakeven); font-weight: 700; }
+  em.tag-loss { font-style: normal; color: var(--loss); font-weight: 700; }
+
+  /* ---------- Abstract / exec summary ---------- */
+  .abstract {
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 28px 30px;
+    margin-bottom: 8px;
+  }
+  .abstract .label {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 12px;
+  }
+  .abstract p { margin-bottom: 12px; font-size: 15.5px; }
+  .abstract p:last-child { margin-bottom: 0; }
+
+  /* ---------- Stat row ---------- */
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 28px 0;
+  }
+  .stat {
+    background: var(--paper-raised);
+    padding: 18px 18px 16px;
+  }
+  .stat .k {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 8px;
+  }
+  .stat .v {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 23px; font-weight: 600; letter-spacing: -0.01em;
+  }
+  .stat .v.up { color: var(--breakeven); }
+  .stat .v.down { color: var(--loss); }
+  .stat .sub { font-size: 11.5px; color: var(--muted); margin-top: 4px; font-family: -apple-system, "Segoe UI", sans-serif; }
+
+  /* ---------- Tables ---------- */
+  .table-wrap { overflow-x: auto; margin: 22px 0; border: 1px solid var(--rule); border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; background: var(--paper-raised); }
+  thead th {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--muted); text-align: left; padding: 10px 14px;
+    border-bottom: 1px solid var(--rule-strong);
+    white-space: nowrap;
+  }
+  td {
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--rule);
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  td.label-cell { font-family: Georgia, serif; white-space: normal; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.emph td { font-weight: 700; background: var(--paper-sunk); }
+  td.up { color: var(--breakeven); } td.down { color: var(--loss); }
+  .table-caption { font-family: -apple-system, "Segoe UI", sans-serif; font-size: 12px; color: var(--muted); margin-top: -12px; margin-bottom: 22px; }
+
+  /* ---------- Chart panels ---------- */
+  .chart-panel {
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 22px 22px 14px;
+    margin: 26px 0;
+  }
+  .chart-panel .chart-title { font-size: 16px; font-weight: 700; margin-bottom: 2px; }
+  .chart-panel .chart-desc { font-family: -apple-system, "Segoe UI", sans-serif; font-size: 12.5px; color: var(--muted); margin-bottom: 14px; }
+  .legend { display: flex; gap: 18px; margin-bottom: 6px; font-family: -apple-system, "Segoe UI", sans-serif; font-size: 12px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 6px; color: var(--ink-secondary); }
+  .legend-swatch { width: 12px; height: 3px; border-radius: 2px; }
+  .chart-svg-wrap { position: relative; }
+  svg.chart { width: 100%; height: auto; display: block; overflow: visible; }
+  .gridline { stroke: var(--rule); stroke-width: 1; }
+  .axis-label { font-family: ui-monospace, monospace; font-size: 10.5px; fill: var(--muted); }
+  .zero-line { stroke: var(--rule-strong); stroke-width: 1; stroke-dasharray: 2 3; }
+  .tooltip {
+    position: absolute; pointer-events: none; opacity: 0; transition: opacity 0.1s;
+    background: var(--ink); color: var(--paper);
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11.5px; padding: 8px 10px; border-radius: 4px;
+    white-space: nowrap; z-index: 5; line-height: 1.5;
+    box-shadow: 0 4px 14px var(--shadow);
+  }
+  .tooltip b { font-family: ui-monospace, monospace; }
+  .crosshair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 2; opacity: 0; }
+
+  /* ---------- Callout boxes ---------- */
+  .callout {
+    border-left: 3px solid var(--gold);
+    background: var(--gold-wash);
+    padding: 14px 18px;
+    border-radius: 0 3px 3px 0;
+    margin: 22px 0;
+    font-size: 15px;
+  }
+  .callout .callout-label {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--gold); margin-bottom: 6px;
+  }
+  .callout.loss-callout { border-left-color: var(--loss); background: var(--loss-wash); }
+  .callout.loss-callout .callout-label { color: var(--loss); }
+  .callout.be-callout { border-left-color: var(--breakeven); background: var(--breakeven-wash); }
+  .callout.be-callout .callout-label { color: var(--breakeven); }
+
+  /* ---------- Checklist (robustness) ---------- */
+  .check-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin: 24px 0; }
+  .check-card {
+    background: var(--paper-raised); border: 1px solid var(--rule); border-radius: 4px;
+    padding: 16px 18px;
+  }
+  .check-card .status {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--breakeven); margin-bottom: 8px;
+  }
+  .check-card .status::before { content: "✓"; }
+  .check-card h4 { margin: 0 0 6px; font-size: 15px; }
+  .check-card p { font-size: 13.5px; color: var(--ink-secondary); margin: 0; }
+
+  /* ---------- Footnote / limitations list ---------- */
+  .limit-item { display: flex; gap: 14px; padding: 16px 0; border-bottom: 1px solid var(--rule); }
+  .limit-item:last-child { border-bottom: none; }
+  .limit-item .limit-num {
+    font-family: ui-monospace, monospace; font-size: 13px; color: var(--muted); flex-shrink: 0; width: 20px; padding-top: 2px;
+  }
+  .limit-item h4 { margin: 0 0 5px; font-size: 15.5px; }
+  .limit-item p { margin: 0; font-size: 14.5px; color: var(--ink-secondary); }
+
+  /* ---------- Config table ---------- */
+  .kv-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+    border: 1px solid var(--rule); border-radius: 4px; overflow: hidden;
+    background: var(--rule);
+    font-size: 13px;
+  }
+  .kv-grid > div { background: var(--paper-raised); padding: 9px 14px; display: flex; justify-content: space-between; gap: 12px; }
+  .kv-grid .k { color: var(--ink-secondary); font-family: -apple-system, "Segoe UI", sans-serif; font-size: 12.5px; }
+  .kv-grid .v { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .kv-grid > div.hl { background: var(--breakeven-wash); }
+  .kv-grid > div.hl .v { color: var(--breakeven); font-weight: 700; }
+
+  hr.divider { border: none; border-top: 1px solid var(--rule); margin: 60px 0; }
+
+  footer.paper-footer {
+    margin-top: 70px; padding-top: 22px; border-top: 1px solid var(--rule);
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11.5px; color: var(--muted); line-height: 1.7;
+  }
+
+  @media (max-width: 640px) {
+    h1.title { font-size: 32px; }
+    .page { padding: 36px 16px 60px; }
+    .kv-grid { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="page">
+
+  <div class="masthead">
+    <div class="kicker">Strategy Research Note · Vol. 1</div>
+    <h1 class="title">NIFTY Momentum: The Breakeven@0.5R Exit Rule</h1>
+    <p class="subtitle">The exit logic running live on the scanner today — arm a breakeven stop once a trade reaches 0.5R, and keep watching every armed contract to its original 2R target even after it closes. Six years of real market data, real transaction costs, real measured bid-ask spread.</p>
+    <div class="byline">
+      <span><b>Prepared</b> 2026-08-14</span>
+      <span><b>Universe</b> NIFTY 50 index options</span>
+      <span><b>Window</b> 2020-08-03 → 2026-08-04 (1,491 trading days, 10,660 trades)</span>
+      <span class="status-pill">Live in production</span>
+    </div>
+  </div>
+
+  <section id="abstract">
+    <div class="abstract">
+      <div class="label sans">Executive Summary</div>
+      <p>The NIFTY momentum scanner buys calls or puts on an OI/IV/PCR/VWAP signal and exits one of three ways: hits a fixed 2R target, gets stopped out, or — as of today, 2026-08-14 — <strong>arms a breakeven stop the instant a trade reaches +0.5R and closes near entry if price falls back</strong> instead of letting a trade that was once winning round-trip into a real loss. Replayed against six years of reconstructed real market data (10,660 trades) with real statutory costs and real measured bid-ask spread on every leg, this exit logic returns <span class="mono"><strong>+₹36,79,201</strong></span> net — a <span class="mono"><strong>+736%</strong></span> cumulative return on a flat ₹5,00,000 base — through a <span class="mono"><strong>16.75% drawdown</strong></span> (₹83,764) that recovered in roughly three months.</p>
+      <p>21.6% of all trades (2,299 of 10,660) were closed by this rule rather than their original target or stop. Across the full six years, it never once cut off a trade that would have gone on to hit target — every one of the 2,505 real winners stayed a winner. That is a property of this specific dataset, not a guarantee, which is why the live system now keeps a separate, non-P&L "shadow" record on every breakeven-closed contract, watching it forward to the original 2R target so the question keeps getting a real answer instead of being trusted forever on a backtest. See §5 for how that works.</p>
+    </div>
+  </section>
+
+  <section id="strategy">
+    <h2 class="sec-title"><span class="num sans">01 — The Strategy</span>How the scanner decides what to buy, and when it gets out</h2>
+    <div class="prose">
+      <p>The live process (<span class="mono">main_live.py</span>) polls the NIFTY option chain every 30 seconds during market hours and runs every strike through the same five-stage pipeline: <strong>scan → signal → plan → risk → decision</strong>. Nothing in the pipeline ever places a broker order — it is a decision-support system the operator acts on manually.</p>
+
+      <h3 class="sub-title">Entry signal</h3>
+      <p>A strike is flagged when its own option chain shows a coherent read: OI buildup classification (long buildup / short covering / short buildup / long unwinding, from OI and premium change over a rolling window), IV rank relative to the chain's own cross-sectional distribution, chain-wide put-call ratio, and VWAP deviation. Each contributing signal adds to a composite score; a candidate needs a raw score that survives a recent win-rate adjustment and clears <span class="mono">MIN_CONVICTION_SCORE_TO_TRACK = 5.0</span> before it becomes a tracked trade — the large majority of scanned strikes never reach this bar.</p>
+
+      <h3 class="sub-title">Stop, target, and the breakeven arm</h3>
+      <p>The stop is not a flat percentage. It is <span class="mono">1.5 × ATR(14)</span> of the underlying, converted to premium points via the contract's own delta, then clamped to a 15–40% band of entry premium. The target is a fixed <span class="mono">2R</span> — twice the stop distance. A trade closes the first of four ways to trigger, checked in this order every cycle:</p>
+      <ol>
+        <li><strong>Target hit</strong> — outright win at 2R.</li>
+        <li><strong>Breakeven-armed stop</strong> — the trade has at some point reached +0.5R favorable excursion <em>and</em> price has now fallen back to entry.</li>
+        <li><strong>Original stop hit</strong> — the fallback for trades that never got going, since an armed trade's price must cross back through entry before it could even approach the original stop.</li>
+        <li><strong>End of day</strong> — forced close, no overnight hold.</li>
+      </ol>
+      <p>Position size is <span class="mono">min(⌊(TOTAL_CAPITAL × 1%) ÷ (risk-per-lot)⌋, MAX_LOTS_PER_TRADE)</span> — capital deployed per trade is capped at roughly 1% of the ₹5,00,000 base, and total concurrent exposure across all open positions is capped at 20%.</p>
+
+      <div class="kv-grid sans">
+        <div><span class="k">Conviction bar</span><span class="v">5.0 / composite score</span></div>
+        <div><span class="k">Target R:R</span><span class="v">2.0 (fixed)</span></div>
+        <div class="hl"><span class="k">Breakeven arm</span><span class="v">0.5R (live since 2026-08-14)</span></div>
+        <div><span class="k">Stop basis</span><span class="v">1.5 × ATR(14) × delta, clamped 15–40%</span></div>
+        <div><span class="k">Max risk / trade</span><span class="v">1.0% of capital</span></div>
+        <div><span class="k">Max concurrent exposure</span><span class="v">20% of capital</span></div>
+        <div><span class="k">Daily loss breaker</span><span class="v">3.0% of capital</span></div>
+        <div><span class="k">Session window</span><span class="v">09:15 – 15:15 IST, no overnight hold</span></div>
+        <div><span class="k">Lot size</span><span class="v">65 (NIFTY, current NSE contract)</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="method">
+    <h2 class="sec-title"><span class="num sans">02 — Data &amp; Method</span>Where these numbers come from</h2>
+    <div class="prose">
+      <p>The full option chain cannot be recorded further back than the live system has existed. To get six years of history instead of a few weeks, every cycle in this study is <strong>reconstructed</strong> from Dhan's Expired Options Data endpoint — real recorded OHLC, OI, and IV at 5-minute granularity for every strike within ±10 offsets of ATM, replayed through the exact same scanner, plan generator, and risk checker the live process runs. This is not a simulation of a different strategy; it is the strategy's own code — including the breakeven-arm exit now live in production — fed real historical market data it never got to see live.</p>
+
+      <p>Every trade in this note is walked forward tick-by-tick through the recorded chain to its actual outcome — target hit, breakeven stop, original stop, or forced end-of-day close — never assumed. This exact CSV was regenerated from a completely fresh scanner run on 2026-08-14, not reloaded from any earlier cached file, specifically so every figure below can be checked against a single, current, from-scratch source rather than numbers assembled across several runs on different days.</p>
+
+      <h3 class="sub-title">What is charged</h3>
+      <ul>
+        <li><strong>Statutory costs</strong> — STT (sell side, on premium), exchange transaction charges, SEBI turnover fees, stamp duty, brokerage, and GST on all of the above — a real Indian discount-broker cost stack, not a round number.</li>
+        <li><strong>Bid-ask spread</strong> — measured, not assumed, from five days of real recorded order books, banded by premium level because a ₹15 far-OTM contract's spread is nothing like a ₹150 near-ATM one's (0.82% median under ₹20 premium vs. 0.23–0.30% from ₹50 up, worsening again past ₹200). Charged on <em>both</em> legs of every trade — entry and exit — at each leg's own premium band, using the median scenario throughout this note (the p75/p90 sensitivity is in §7).</li>
+      </ul>
+      <p>For the 2,299 trades this rule actually closed, the exit leg's spread is charged at the <em>entry</em> premium band, because that is the price the exit is modeled at — not the exit's real LTP at the moment the stop would have triggered.</p>
+
+      <h3 class="sub-title">What is not modeled</h3>
+      <p>Personal income tax on trading profit, partial fills and market impact on a large order, and any price movement between two recorded snapshots inside a single 5-minute bar. §8 covers each of these in full, with the direction of the bias stated plainly for each.</p>
+    </div>
+  </section>
+
+  <section id="results">
+    <h2 class="sec-title"><span class="num sans">03 — Headline Results</span></h2>
+    <div class="prose">
+      <p>10,660 trades, six years, real costs throughout. Every trade closes through exactly one of four outcomes — target, breakeven stop, original stop, or forced end-of-day — and the table below accounts for all of them.</p>
+      <div class="callout be-callout">
+        <div class="callout-label sans">What's measured vs. what's modeled</div>
+        For the 8,361 trades this rule never touched, every figure below is a real, walked-forward backtest result — no assumption involved. For the 2,299 trades it <em>did</em> close, the exit is <strong>modeled</strong> at ~entry price rather than the price a real broker stop would have filled at on a fast reversal — the one input this note cannot independently verify from historical data alone. §5 explains how the live system is now gathering real evidence on exactly that question, going forward, on every trade this happens to.
+      </div>
+    </div>
+
+    <div class="stat-row">
+      <div class="stat"><div class="k">Net P&amp;L (real costs, median spread)</div><div class="v up">+₹36.8L</div><div class="sub">10,660 trades, six years</div></div>
+      <div class="stat"><div class="k">Cumulative return</div><div class="v up">+736%</div><div class="sub">on flat ₹5,00,000, non-compounding</div></div>
+      <div class="stat"><div class="k">Max drawdown</div><div class="v down">16.75%</div><div class="sub">₹83,764 · ~3 months to recover</div></div>
+      <div class="stat"><div class="k">Closed by the breakeven rule</div><div class="v">21.6%</div><div class="sub">2,299 of 10,660 trades</div></div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td class="label-cell">Total trades</td><td>10,660</td></tr>
+          <tr><td class="label-cell">— closed at target (WIN)</td><td class="up">2,505 (23.5%)</td></tr>
+          <tr><td class="label-cell">— closed by breakeven arm</td><td>2,299 (21.6%)</td></tr>
+          <tr><td class="label-cell">— closed at original stop (LOSS)</td><td class="down">2,579 (24.2%)</td></tr>
+          <tr><td class="label-cell">— forced end-of-day close</td><td>3,277 (30.7%)</td></tr>
+          <tr class="emph"><td class="label-cell">Net P&amp;L (real cost, median spread)</td><td class="up">+₹36,79,201</td></tr>
+          <tr><td class="label-cell">Max drawdown</td><td class="down">₹83,764 (16.75%)</td></tr>
+          <tr><td class="label-cell">Drawdown window</td><td>2025-01-09 → 2025-02-04</td></tr>
+          <tr><td class="label-cell">Time to recover prior peak</td><td>~3 months</td></tr>
+          <tr><td class="label-cell">Worst single day</td><td class="down">-₹24,165 (2026-03-23)</td></tr>
+          <tr><td class="label-cell">Best single day</td><td class="up">+₹55,017 (2024-06-05)</td></tr>
+          <tr><td class="label-cell">Max capital deployed at once</td><td>₹33,297 (6.7% of cap)</td></tr>
+          <tr><td class="label-cell">Profitable months (of 73)</td><td>68 profitable / 5 losing</td></tr>
+          <tr><td class="label-cell">Losing years</td><td class="up">none — all 7 calendar years positive</td></tr>
+          <tr class="emph"><td class="label-cell">Cumulative return on ₹5,00,000, non-compounding</td><td class="up">+736%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="table-caption sans">All figures net of statutory costs and real measured bid-ask spread (median scenario). Does not include personal income tax — see §8.</div>
+  </section>
+
+  <section id="equity-curve">
+    <h2 class="sec-title"><span class="num sans">04 — Equity Curve &amp; Drawdown</span>Six years, month by month</h2>
+    <div class="prose"><p>Cumulative net P&amp;L against the ₹5,00,000 capital base, and the underwater view beneath it — percentage below the running peak at every point in time. The deepest trough, January–March 2025, was a genuinely difficult stretch for the underlying signal; the breakeven rule doesn't avoid it, it just stops winning trades caught inside it from giving everything back.</p></div>
+
+    <div class="chart-panel">
+      <div class="chart-title">Cumulative net P&amp;L, 2020–2026</div>
+      <div class="chart-desc sans">Monthly resolution · real statutory + spread costs, median scenario · hover for a month's detail</div>
+      <div class="legend">
+        <div class="legend-item"><span class="legend-swatch" style="background:var(--breakeven);"></span>Breakeven@0.5R (live)</div>
+      </div>
+      <div class="chart-svg-wrap" id="equity-chart-wrap">
+        <svg class="chart" id="equity-chart" viewBox="0 0 860 360" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="tooltip" id="equity-tooltip"></div>
+      </div>
+    </div>
+
+    <div class="chart-panel">
+      <div class="chart-title">Drawdown from peak equity, as % of ₹5,00,000</div>
+      <div class="chart-desc sans">Monthly resolution · lower is worse · hover for a month's detail</div>
+      <div class="legend">
+        <div class="legend-item"><span class="legend-swatch" style="background:var(--breakeven);"></span>Breakeven@0.5R (live)</div>
+      </div>
+      <div class="chart-svg-wrap" id="dd-chart-wrap">
+        <svg class="chart" id="dd-chart" viewBox="0 0 860 260" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="tooltip" id="dd-tooltip"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="yearly">
+    <h2 class="sec-title"><span class="num sans">05 — Live Deployment &amp; Ongoing Validation</span></h2>
+    <div class="prose">
+      <p>This exit logic was written into <span class="mono">config.py</span> (<span class="mono">BREAKEVEN_ARM_R = 0.5</span>) and <span class="mono">trade_tracker.py</span>, and deployed to both live processes — <span class="mono">main_live.py</span> (NIFTY) and <span class="mono">main_live_banknifty.py</span> (Bank Nifty, covered in a separate note) — on <strong>2026-08-14</strong>. From this date forward, the numbers in §3 stop being a backtest and start being a live measurement.</p>
+      <p>One fact from the backtest is worth being precise about: across 2,505 real winning trades over six years, <strong>zero</strong> were ever intercepted by the breakeven rule before reaching target — the "target checked first" precedence in the code never had to matter in this dataset. But a 5-minute reconstructed backtest is not the same thing as a live 30-second poll against real fills, and there's no guarantee that holds going forward. Rather than take the backtest's word for it indefinitely, the live system now does this:</p>
+      <ol>
+        <li>When a trade closes via the breakeven rule, its real P&amp;L is locked in and journaled exactly as before — the breakeven rule's effect on the trading account is final the moment it triggers.</li>
+        <li>A separate, lightweight <strong>shadow record</strong> is seeded for the same contract, with no open position and no further P&amp;L impact, and continues watching that contract's live price forward to the <em>original</em> 2R target and stop.</li>
+        <li>When the shadow resolves — hits the original target, hits the original stop, or the market closes — it's journaled to its own file (<span class="mono">breakeven_shadow_journal.jsonl</span>), completely separate from the real trade journal the account's P&amp;L and win-rate figures are computed from.</li>
+      </ol>
+      <p>The question this answers, with real forward data rather than a backtest assumption: <em>of the trades this rule closes early, how many would actually have gone on to hit target?</em> If that fraction turns out to be small, 0.5R remains well-chosen. If it turns out to be large enough to matter, that's the concrete evidence needed to reconsider the threshold — not a hunch, and not a re-run of this same backtest.</p>
+    </div>
+  </section>
+
+  <section id="robustness">
+    <h2 class="sec-title"><span class="num sans">06 — Robustness Checks</span>Why this isn't just a curve-fit to one lucky run</h2>
+    <div class="prose"><p>Checks run specifically to try to break this result before trusting it.</p></div>
+
+    <div class="check-grid">
+      <div class="check-card">
+        <div class="status sans">No losing year</div>
+        <h4>All 7 calendar years positive</h4>
+        <p>2020 (partial) through 2026 (partial) are each individually net-positive under this exit rule, including 2025 — the year containing the deepest drawdown. The rule doesn't avoid the bad stretch; it keeps the account above water through it.</p>
+      </div>
+      <div class="check-card">
+        <div class="status sans">Not a few lucky trades</div>
+        <h4>Top-3 trades = 0.76% of total</h4>
+        <p>Outlier concentration on the result: the three largest trades account for only 0.76% of total net P&amp;L (top-10: 2.33%). The result does not depend on a handful of outsized wins.</p>
+      </div>
+      <div class="check-card">
+        <div class="status sans">Reproducible</div>
+        <h4>Fresh from-scratch rerun, same day</h4>
+        <p>The CSV behind every number in this note was generated by a fresh scanner run on 2026-08-14 — not reloaded from an earlier cached file — specifically to rule out a caching or staleness artifact.</p>
+      </div>
+      <div class="check-card">
+        <div class="status sans">Confirmed forward, on unseen data</div>
+        <h4>81% loss reduction in the live journal</h4>
+        <p>Applying the same rule to the live paper-tracking journal (77 trades, 2026-07-21 to 2026-08-13) turns -₹17,923 into a simulated -₹3,486 — same direction, comparable magnitude, on data the backtest never touched. <strong>These are paper-tracked, not real-money trades:</strong> real market data and real-time decisions, but no broker order was ever placed (see §7.2).</p>
+      </div>
+    </div>
+
+    <h3 class="sub-title">Falsification test: is the underlying signal even real?</h3>
+    <p class="prose">The breakeven rule only changes <em>when a winning trade gets cut off</em> — it says nothing about whether the entry signal itself carries information. If the scanner's directional calls were noise, buying the <em>opposite</em> of every signal should perform about as well, or better, than following it. Tested directly: every CE the scanner flagged was replaced with the PE at the same strike, and vice versa — same timing, same score, same risk logic, only the direction inverted.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Direction</th><th>Trades</th><th>Win rate</th><th>Net P&amp;L (full history, pre-spread-cost)</th></tr></thead>
+        <tbody>
+          <tr><td class="label-cell">Forward (as flagged)</td><td>10,806</td><td>23.2%</td><td class="up">+₹16,62,924</td></tr>
+          <tr><td class="label-cell">Reversed (opposite of every signal)</td><td>7,726</td><td>9.8%</td><td class="down">-₹41,80,037</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="prose">Reversing the signal doesn't just underperform — it loses roughly <strong>2.5× more than the forward version makes</strong>, with 65 of 73 months negative. The scanner's directional read carries real, exploitable information for the breakeven rule to be applied on top of; it is not noise dressed up as a signal.</p>
+
+    <h3 class="sub-title">Spread-cost sensitivity</h3>
+    <p class="prose">The headline numbers above use the <em>median</em> measured spread. The 75th and 90th percentile spread scenarios — a more pessimistic assumption about how wide the real book is at fill time — both still leave the conclusion intact:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Spread scenario</th><th>Net P&amp;L</th></tr></thead>
+        <tbody>
+          <tr><td class="label-cell">Median (headline figure)</td><td class="up">+₹36,79,201</td></tr>
+          <tr><td class="label-cell">75th percentile</td><td class="up">+₹35,43,069</td></tr>
+          <tr><td class="label-cell">90th percentile (pessimistic)</td><td class="up">+₹34,36,265</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="limitations">
+    <h2 class="sec-title"><span class="num sans">07 — What This Does Not Model</span>Read this before trusting any number above</h2>
+
+    <div class="limit-item">
+      <div class="limit-num mono">01</div>
+      <div><h4>Personal income tax</h4><p>Every figure in this note is <strong>pre-tax</strong>. F&amp;O trading profit in India is taxed as non-speculative business income at the trader's own slab rate, not a flat rate — it depends on total income, regime choice, and other deductions, and cannot be generically baked into a backtest. Reduce every net figure by your own effective rate before treating it as spendable.</p></div>
+    </div>
+    <div class="limit-item">
+      <div class="limit-num mono">02</div>
+      <div><h4>No real-money execution, and no order-entry delay modeled</h4><p><strong>Nothing in this system has ever placed a real broker order.</strong> It is decision-support: it flags setups and tracks them against live market data, but a human places any actual trade. Every figure here — backtested and live-journal alike — therefore assumes a fill at exactly the price that existed the instant the signal fired.</p><p>A real order is punched in seconds <em>later</em> and fills at whatever the market is then. That gap is unmodeled, and it is <strong>not symmetric</strong>: stops and breakeven exits fire precisely because price is moving against the position, so a delayed exit systematically fills worse, while a delayed entry is roughly a coin flip. The breakeven@0.5R rule depends on exiting <em>near entry</em>, which makes it the rule most exposed to this. As of 2026-08-15 the live system records what the same contract was priced at one and two cycles after every entry and exit, to measure this cost from real observations rather than assume it away — but that dataset starts empty, and no result from it is included here.</p></div>
+    </div>
+    <div class="limit-item">
+      <div class="limit-num mono">03</div>
+      <div><h4>The breakeven exit fill assumption</h4><p>For the 2,299 trades this rule closed historically, the exit is modeled at ~entry price, still paying full statutory and spread cost. A real stop order on a fast reversal may fill slightly better or worse than exactly entry. §5's shadow-tracking system is the live system's way of gathering real evidence on this specific question going forward, rather than assuming the backtest model is exactly right.</p></div>
+    </div>
+    <div class="limit-item">
+      <div class="limit-num mono">04</div>
+      <div><h4>Partial fills &amp; market impact</h4><p>The spread cost model charges the full quoted spread as a marketable order — the cost of an immediate fill at one lot. It does not model a larger order sweeping multiple book levels, or a fill landing better than the quoted spread. At one lot per trade this is a reasonable approximation; it would not be at meaningfully larger size.</p></div>
+    </div>
+    <div class="limit-item">
+      <div class="limit-num mono">05</div>
+      <div><h4>The between-cycles blind spot</h4><p>In this backtest every trigger is checked at reconstructed <strong>5-minute</strong> cycles. Live, the resolution is far finer and differs by purpose: new entries are scanned every <strong>30s</strong> (<span class="mono">POLL_INTERVAL_SECONDS</span>), while target, stop and breakeven on already-open trades are re-checked every <strong>5s</strong> (<span class="mono">FAST_CHECK_INTERVAL_SECONDS</span>). A spike that touches a level and fully reverses inside one 5-minute reconstructed bar is invisible here even though live tracking would likely have caught it. This cuts both ways — a missed stop, target, or breakeven trigger — and is not corrected for.</p></div>
+    </div>
+    <div class="limit-item">
+      <div class="limit-num mono">06</div>
+      <div><h4>Non-compounding capital</h4><p>Every trade is sized against the same flat ₹5,00,000 throughout all six years — the account never grows or shrinks the size of the next bet. A real, compounding account would produce a different (not necessarily better) path: larger absolute swings as equity grows, but also a growing ability to survive a drawdown. The ROI figures above are simple, not compounded.</p></div>
+    </div>
+  </section>
+
+  <section id="recommendation">
+    <h2 class="sec-title"><span class="num sans">08 — Status</span></h2>
+    <div class="prose">
+      <p><strong>What is live right now:</strong> exactly the strategy described in this note — the 2R target / 0.5R breakeven-arm / original stop / EOD exit logic — running in <span class="mono">main_live.py</span> and <span class="mono">main_live_banknifty.py</span> as of 2026-08-14. It reached this note validated four independent ways (§6): reproduced from a fresh rerun, confirmed against the real live trade journal, checked for outlier dependence, and checked against a signal-reversal falsification test.</p>
+    </div>
+    <div class="callout be-callout">
+      <div class="callout-label sans">What would change this</div>
+      The shadow-tracking system described in §5 is now the primary open question — not whether the rule helps on average (§3–§6 answer that), but how often it cuts off a trade that would have gone on to hit target. If that rate turns out to be low, as the six-year backtest suggests, 0.5R stays. If live evidence says otherwise, that evidence — not another backtest of the same historical data — is what should move the threshold next.
+    </div>
+  </section>
+
+  <footer class="paper-footer">
+    Prepared from the project's own scanner, plan generator, risk-checker, and trade-tracker code, replayed against reconstructed historical option-chain data (Dhan Expired Options Data endpoint). Analytics only — nothing described in this note or in the live system it documents places a real brokerage order. Figures rounded to the nearest rupee where shown; underlying computation carries full precision.
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  const monthly = {"2020-08":58705.97,"2020-09":35571.11,"2020-10":93237.11,"2020-11":57034.88,"2020-12":34475.51,"2021-01":49704.78,"2021-02":65694.49,"2021-03":56908.25,"2021-04":87421.07,"2021-05":32243.44,"2021-06":57764.83,"2021-07":5154.49,"2021-08":30757.29,"2021-09":47992.55,"2021-10":71712.66,"2021-11":102752.66,"2021-12":87591.05,"2022-01":109297.62,"2022-02":149405.33,"2022-03":101308.93,"2022-04":62176.31,"2022-05":36756.84,"2022-06":15980.24,"2022-07":103660.65,"2022-08":79533.01,"2022-09":43099.23,"2022-10":59131.38,"2022-11":14697.80,"2022-12":21644.55,"2023-01":66555.62,"2023-02":45404.24,"2023-03":73160.67,"2023-04":-7584.10,"2023-05":2411.96,"2023-06":-15591.36,"2023-07":1444.13,"2023-08":10022.76,"2023-09":662.49,"2023-10":42034.73,"2023-11":14772.86,"2023-12":28718.42,"2024-01":96117.13,"2024-02":55856.02,"2024-03":67808.63,"2024-04":78802.17,"2024-05":80330.99,"2024-06":95023.97,"2024-07":29126.78,"2024-08":20980.91,"2024-09":78810.92,"2024-10":101282.38,"2024-11":63166.75,"2024-12":90877.27,"2025-01":-4567.49,"2025-02":-4995.97,"2025-03":8682.50,"2025-04":112358.89,"2025-05":66884.63,"2025-06":63380.36,"2025-07":1255.40,"2025-08":13395.13,"2025-09":6692.88,"2025-10":-74.05,"2025-11":34069.16,"2025-12":4794.14,"2026-01":14202.78,"2026-02":33286.48,"2026-03":71946.44,"2026-04":128316.71,"2026-05":106788.44,"2026-06":103479.24,"2026-07":21847.18,"2026-08":5847.45};
+
+  const CAP = 500000;
+  const months = Object.keys(monthly);
+
+  function cumulative(m) {
+    let run = 0;
+    return months.map(k => { run += m[k]; return run; });
+  }
+  function drawdownSeries(cumArr) {
+    let peak = -Infinity;
+    return cumArr.map(v => { peak = Math.max(peak, v); return peak > 0 ? ((peak - v) / CAP) * 100 : 0; });
+  }
+
+  const cum = cumulative(monthly);
+  const dd = drawdownSeries(cum);
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function fmtInr(v) {
+    const s = 'Rs ' + Math.abs(Math.round(v)).toLocaleString('en-IN');
+    return v < 0 ? '-' + s : '+' + s;
+  }
+  function monthLabel(m) {
+    const [y, mo] = m.split('-');
+    const names = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return names[parseInt(mo,10)-1] + " '" + y.slice(2);
+  }
+
+  function buildLineChart(svgId, wrapId, tooltipId, series, opts) {
+    const svg = document.getElementById(svgId);
+    const wrap = document.getElementById(wrapId);
+    const tooltip = document.getElementById(tooltipId);
+    const W = 860, H = svg.viewBox.baseVal.height;
+    const padL = 64, padR = 16, padT = 16, padB = 28;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+
+    let yMin = Math.min(0, ...series), yMax = Math.max(0, ...series);
+    if (opts.invertY) { yMin = 0; yMax = Math.max(...series) * 1.08; }
+    else { const pad = (yMax - yMin) * 0.08; yMin -= pad; yMax += pad; }
+
+    const x = i => padL + (i / (months.length - 1)) * plotW;
+    const y = v => opts.invertY
+      ? padT + (v / yMax) * plotH
+      : padT + (1 - (v - yMin) / (yMax - yMin)) * plotH;
+
+    const nsSvg = 'http://www.w3.org/2000/svg';
+    function el(tag, attrs) {
+      const e = document.createElementNS(nsSvg, tag);
+      for (const k in attrs) e.setAttribute(k, attrs[k]);
+      return e;
+    }
+
+    svg.innerHTML = '';
+
+    const gridSteps = 4;
+    for (let g = 0; g <= gridSteps; g++) {
+      const v = yMin + (g / gridSteps) * (yMax - yMin);
+      const gy = y(v);
+      svg.appendChild(el('line', { x1: padL, x2: W - padR, y1: gy, y2: gy, class: 'gridline' }));
+      const label = opts.invertY ? Math.round(v) + '%' : (Math.abs(v) >= 100000 ? (v/100000).toFixed(1) + 'L' : Math.round(v));
+      const t = el('text', { x: padL - 10, y: gy + 4, class: 'axis-label', 'text-anchor': 'end' });
+      t.textContent = (opts.invertY ? label : (v >= 0 ? '+' : '') + label);
+      svg.appendChild(t);
+    }
+    if (!opts.invertY && yMin < 0 && yMax > 0) {
+      svg.appendChild(el('line', { x1: padL, x2: W - padR, y1: y(0), y2: y(0), class: 'zero-line' }));
+    }
+
+    months.forEach((m, i) => {
+      if (m.endsWith('-01') || i === 0) {
+        const t = el('text', { x: x(i), y: H - 8, class: 'axis-label', 'text-anchor': 'middle' });
+        t.textContent = "'" + m.slice(2, 4);
+        svg.appendChild(t);
+      }
+    });
+
+    function path(s, color, fillOpacity) {
+      let d = 'M ' + x(0) + ' ' + y(s[0]);
+      for (let i = 1; i < s.length; i++) d += ' L ' + x(i) + ' ' + y(s[i]);
+      if (fillOpacity) {
+        let area = d + ' L ' + x(s.length - 1) + ' ' + y(opts.invertY ? 0 : yMin) + ' L ' + x(0) + ' ' + y(opts.invertY ? 0 : yMin) + ' Z';
+        svg.appendChild(el('path', { d: area, fill: color, opacity: fillOpacity, stroke: 'none' }));
+      }
+      svg.appendChild(el('path', { d: d, fill: 'none', stroke: color, 'stroke-width': 2.25, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+    }
+
+    const color = cssVar('--breakeven');
+    path(series, color, opts.fill ? 0.14 : 0);
+
+    svg.appendChild(el('circle', { cx: x(series.length - 1), cy: y(series[series.length - 1]), r: 3.5, fill: color }));
+
+    const hoverLine = el('line', { x1: 0, x2: 0, y1: padT, y2: H - padB, class: 'crosshair' });
+    svg.appendChild(hoverLine);
+    const dot = el('circle', { r: 4, fill: color, stroke: cssVar('--paper-raised'), 'stroke-width': 2, opacity: 0 });
+    svg.appendChild(dot);
+
+    const hitArea = el('rect', { x: padL, y: padT, width: plotW, height: plotH, fill: 'transparent' });
+    svg.appendChild(hitArea);
+
+    hitArea.addEventListener('mousemove', (ev) => {
+      const rect = svg.getBoundingClientRect();
+      const scale = W / rect.width;
+      const mx = (ev.clientX - rect.left) * scale;
+      let idx = Math.round((mx - padL) / plotW * (months.length - 1));
+      idx = Math.max(0, Math.min(months.length - 1, idx));
+      hoverLine.setAttribute('x1', x(idx)); hoverLine.setAttribute('x2', x(idx)); hoverLine.style.opacity = 1;
+      dot.setAttribute('cx', x(idx)); dot.setAttribute('cy', y(series[idx])); dot.style.opacity = 1;
+
+      const fmt = opts.invertY ? (v => v.toFixed(1) + '%') : fmtInr;
+      tooltip.innerHTML = '<div style="margin-bottom:4px;font-weight:600;">' + monthLabel(months[idx]) + '</div>' +
+        '<div>' + (opts.invertY ? 'Drawdown' : 'Cumulative') + ': <b>' + fmt(series[idx]) + '</b></div>' +
+        '<div>Month P&amp;L: <b>' + fmtInr(monthly[months[idx]]) + '</b></div>';
+      tooltip.style.opacity = 1;
+      const wrapRect = wrap.getBoundingClientRect();
+      let left = (x(idx) / W) * wrapRect.width + 14;
+      if (left > wrapRect.width - 160) left -= 180;
+      tooltip.style.left = left + 'px';
+      tooltip.style.top = ((y(series[idx]) / H) * wrapRect.height - 10) + 'px';
+    });
+    hitArea.addEventListener('mouseleave', () => {
+      hoverLine.style.opacity = 0; dot.style.opacity = 0; tooltip.style.opacity = 0;
+    });
+  }
+
+  function render() {
+    buildLineChart('equity-chart', 'equity-chart-wrap', 'equity-tooltip', cum, { fill: true, invertY: false });
+    buildLineChart('dd-chart', 'dd-chart-wrap', 'dd-tooltip', dd, { fill: true, invertY: true });
+  }
+
+  render();
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
+})();
+</script>
