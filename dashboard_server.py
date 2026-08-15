@@ -257,14 +257,21 @@ DASHBOARD_PNL_HTML_PATH = BASE_DIR / "dashboard" / "pnl_dashboard.html"
 # the frontend only offers a filter for combinations that actually
 # produced at least one closed trade.
 PNL_JOURNALS = [
-    (LOGS_DIR / "trade_journal.jsonl", "NIFTY", "Momentum"),
+    (LOGS_DIR / "trade_journal.jsonl", "NIFTY", "Momentum (Anchor)"),
     (LOGS_DIR / "condor_journal.jsonl", "NIFTY", "Condor"),
     (LOGS_DIR / "directional_spread_journal.jsonl", "NIFTY", "Directional Spread"),
     (LOGS_DIR / "price_action_journal.jsonl", "NIFTY", "Price Action"),
-    (LOGS_DIR / "trade_journal_banknifty.jsonl", "Bank Nifty", "Momentum"),
+    (LOGS_DIR / "trade_journal_banknifty.jsonl", "Bank Nifty", "Momentum (Anchor)"),
     (LOGS_DIR / "condor_journal_banknifty.jsonl", "Bank Nifty", "Condor"),
     (LOGS_DIR / "directional_spread_journal_banknifty.jsonl", "Bank Nifty", "Directional Spread"),
     (LOGS_DIR / "price_action_journal_banknifty.jsonl", "Bank Nifty", "Price Action"),
+    # Sentinel v1.1-dev: the correlated-cluster-cap candidate, running as
+    # its own paper-tracking process alongside Anchor -- see
+    # STRATEGY_VERSIONS.md. Same journal shape as Anchor's momentum
+    # (both use trade_tracker.py), so this needs no new parsing logic,
+    # just a distinct label so the two never get pooled together.
+    (LOGS_DIR / "trade_journal_sentinel.jsonl", "NIFTY", "Momentum (Sentinel)"),
+    (LOGS_DIR / "trade_journal_banknifty_sentinel.jsonl", "Bank Nifty", "Momentum (Sentinel)"),
 ]
 
 

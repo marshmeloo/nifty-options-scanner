@@ -64,10 +64,25 @@ Sentinel (below) is investigating a fix for.
 
 ---
 
-## Sentinel — v1.1-dev — CANDIDATE, BACKTEST-ONLY
+## Sentinel — v1.1-dev — CANDIDATE, LIVE PAPER-TRACKING (built 2026-08-15)
 
-**Status:** Under test. Not deployed. Not paper-traded live. No trade,
-real or paper, has ever run under this configuration.
+**Status:** Backtested (below), and now built as its own live
+paper-tracking process — `main_live_sentinel.py` (NIFTY) and
+`main_live_banknifty_sentinel.py` (Bank Nifty), each independent of
+Anchor's own processes (separate state, journal, log, decision log).
+**Not started as of this writing** — nothing runs until you launch
+them; see COMMANDS.md. No trade, real or paper, has run under this
+configuration yet. Every trade it does open will carry
+`strategy_name: "Sentinel"` in its journal entry, distinct from
+Anchor's, so the two can be compared on the `/pnl` dashboard without
+ever pooling.
+
+**Anchor is untouched by this build.** Both new files patch the same
+shared `config`/`trade_tracker` modules Anchor's processes import, but
+only within their OWN separate OS process — confirmed directly:
+importing `main_live.py` and `main_live_banknifty.py` in isolation
+still shows `STRATEGY_NAME = "Anchor"` and `CLUSTER_CAP_ENABLED =
+False`, unaffected by Sentinel's files existing at all.
 
 **What it changes vs. Anchor:** adds a time-windowed correlated-cluster
 cap on top of Anchor's exact same breakeven@0.5R exit logic — reject a
@@ -109,6 +124,14 @@ gentlest but may not fully cover slower-forming bursts (the real
 Bank Nifty 08-14 cluster spanned close to an hour end to end, even
 though most of it fired within 3 minutes).
 
+**Bank Nifty caveat, stated plainly:** the 200pt/30min values above
+come entirely from NIFTY's own backtest. NIFTY strikes are 50pt apart;
+Bank Nifty's are 100pt apart, and Bank Nifty's own trade profile is
+already known to differ substantially (69.6% EOD-close trades vs
+NIFTY's 30.7%, per the Bank Nifty research note). Running the same
+values on Bank Nifty's Sentinel process is a reasonable first pass,
+not a claim that they've been separately verified for it.
+
 **Still not deployed, still not tested against the real 08-12/08-14
 sessions themselves** (reconstructed data ends 2026-08-05) or against
 Bank Nifty's own history. A promising backtest is evidence toward
@@ -126,3 +149,4 @@ file.
 | 2026-08-15 | First two cap designs backtested, found too blunt (see Sentinel above) |
 | 2026-08-15 | This registry created; Anchor formally named and frozen; Sentinel v1.1-dev (time-windowed) opened for testing |
 | 2026-08-15 | Sentinel v1.1-dev time-window sweep complete: 30-min window gives -14% profit for -62% drawdown vs Anchor -- best trade-off found so far, not yet promoted |
+| 2026-08-15 | Sentinel v1.1-dev built as its own live paper-tracking process (NIFTY + Bank Nifty), 200pt/30min. Anchor confirmed unaffected in isolation. Not yet started. |

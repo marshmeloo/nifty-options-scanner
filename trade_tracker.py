@@ -1105,6 +1105,37 @@ def expiry_day_rules(expiry: str, now: datetime) -> tuple:
     return bar, None
 
 
+def cluster_cap_blocks(state: dict, strike: float, option_type: str, now: datetime) -> bool:
+    """
+    True if `strike`/`option_type` should be rejected because a
+    same-direction position is ALREADY OPEN nearby and was opened
+    recently -- see config.CLUSTER_CAP_ENABLED's own comment for the
+    real sessions this is for. Live counterpart of
+    shadow.correlated_cluster_blocked(), same rule, applied to
+    state["trades"] instead of a backtest's `positions` list.
+
+    OFF unless config.CLUSTER_CAP_ENABLED is True -- Anchor v1.0's real
+    config leaves this False, so this always returns False for Anchor's
+    live process regardless of what any other process's config sets.
+    """
+    if not getattr(config, "CLUSTER_CAP_ENABLED", False):
+        return False
+    band = getattr(config, "CLUSTER_CAP_ADJACENCY_POINTS", None)
+    window = getattr(config, "CLUSTER_CAP_WINDOW_MINUTES", None)
+    if band is None or window is None:
+        return False
+    for t in state.get("trades", []):
+        if t["option_type"] != option_type:
+            continue
+        opened_at = t.get("opened_at")
+        if not opened_at:
+            continue
+        age_minutes = (now - datetime.fromisoformat(opened_at)).total_seconds() / 60
+        if 0 <= age_minutes <= window and abs(t["strike"] - strike) < band:
+            return True
+    return False
+
+
 def _cooldown_key(strike, option_type) -> str:
     return f"{strike}_{option_type}"
 
@@ -1200,6 +1231,8 @@ def try_open_new_trade(setups_with_plans, state, snapshot, bias_label=None, bias
         if is_repeat_of_stopped_plan(state, setup.strike, setup.option_type, plan.entry):
             continue
         if is_direction_chase(state, setup.option_type, snapshot.timestamp):
+            continue
+        if cluster_cap_blocks(state, setup.strike, setup.option_type, snapshot.timestamp):
             continue
 
         conviction_bar, blocked = expiry_day_rules(setup.expiry, snapshot.timestamp)
