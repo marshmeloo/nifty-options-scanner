@@ -13,6 +13,28 @@ MAX_LOTS_PER_TRADE = 1           # hard cap on lot size per trade, independent o
 
 NIFTY_LOT_SIZE = 65             # update if NSE revises lot size
 
+# --- Strategy identity (added 2026-08-15) ---
+# A NAMED, FROZEN version of the momentum exit rule -- separate from
+# logic_version.py's hash fingerprint, which is designed to change
+# whenever any decision-relevant setting does. This is the opposite: a
+# stable human name/version stamped onto every real trade (both NIFTY
+# and Bank Nifty share this config), so live results stay attributable
+# to a specific, known configuration even as candidates are tried
+# elsewhere. See STRATEGY_VERSIONS.md for the full registry and the
+# promotion policy in one place.
+#
+# DO NOT bump this, and do not change BREAKEVEN_ARM_R / DEFAULT_TARGET_RR
+# / any other decision-relevant constant this name refers to, without
+# EITHER (a) solid evidence from real LIVE trading that this specific
+# version has a real problem, OR (b) a challenger version that has beaten
+# it on live data, not backtest alone. A promising backtest is not
+# sufficient on its own -- see the 2026-08-15 correlated-cluster-cap
+# episode in STRATEGY_VERSIONS.md: a backtest that looked like a clean
+# risk reduction turned out to cut ordinary trading along with the
+# actual problem, once examined closely.
+STRATEGY_NAME = "Anchor"
+STRATEGY_VERSION = "1.0"
+
 # --- Scoring mode (versioned -- see scanner.py's SCORING_MODE handling) ---
 #
 # "legacy": the original multi-component scorer below (FVG/S-R/OB, IV

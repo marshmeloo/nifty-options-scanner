@@ -651,6 +651,13 @@ def open_new_trade(setup, plan, snapshot) -> dict:
         # statistics silently average across incompatible versions of the
         # system -- see logic_version.py.
         "logic_version": logic_version.compute(),
+        # Named, human-stable strategy identity -- separate from the hash
+        # above. See config.STRATEGY_NAME's own comment and
+        # STRATEGY_VERSIONS.md: this stays constant across trades so a
+        # later comparison against a challenger version has a clean label
+        # to group by, without needing to decode a config hash first.
+        "strategy_name": getattr(config, "STRATEGY_NAME", None),
+        "strategy_version": getattr(config, "STRATEGY_VERSION", None),
         "reasons_at_entry": list(setup.reasons),
         "reason_tags": _reason_tags(setup.reasons),
         "status": "OPEN",
