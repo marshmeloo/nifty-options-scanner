@@ -52,6 +52,14 @@ JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 # journal of what that same contract did AFTERWARD, up to the original
 # target/stop/EOD. Never affects real P&L or state["trades"].
 BREAKEVEN_SHADOW_JOURNAL_PATH = LOG_DIR / "breakeven_shadow_journal.jsonl"
+# Execution-delay measurement (added 2026-08-15). Every price this system
+# acts on is the price at the instant a signal fired, but a real order is
+# punched in some seconds LATER, and fills at whatever the market is then.
+# Nothing in the backtest models that gap. These probes record, for each
+# entry and each exit, what the same contract was priced at one and two
+# cycles after the trigger -- purely observational, never affects real
+# P&L or any trading decision. See _seed_delay_probe().
+DELAY_PROBE_JOURNAL_PATH = LOG_DIR / "execution_delay_journal.jsonl"
 
 
 def load_open_trades() -> dict:
@@ -76,15 +84,18 @@ def load_open_trades() -> dict:
             data.setdefault("stop_cooldowns", {})
             data.setdefault("direction_cooldowns", {})
             data.setdefault("breakeven_shadows", [])
+            data.setdefault("delay_probes", [])
             return data
         if data.get("trades"):
             data["_stale_from_previous_session"] = True
             data.setdefault("stop_cooldowns", {})
             data.setdefault("direction_cooldowns", {})
             data.setdefault("breakeven_shadows", [])
+            data.setdefault("delay_probes", [])
             return data
     return {"date": date.today().isoformat(), "trades": [], "opened_today": 0,
-            "stop_cooldowns": {}, "direction_cooldowns": {}, "breakeven_shadows": []}
+            "stop_cooldowns": {}, "direction_cooldowns": {}, "breakeven_shadows": [],
+            "delay_probes": []}
 
 
 def settle_stale_trades(state: dict, snapshot=None) -> list:
@@ -741,6 +752,10 @@ def update_open_trades(state: dict, snapshot) -> list:
                 _record_direction_cooldown(state, trade)
             elif outcome == "BREAKEVEN_STOP":
                 _seed_breakeven_shadow(state, trade, snapshot.timestamp)
+            # Exit-side delay probe. Deliberately seeded for EVERY outcome,
+            # not just stops: a target exit is delayed too, and only
+            # sampling the adverse ones would overstate the measured cost.
+            _seed_delay_probe(state, trade, "exit", current_ltp, snapshot.timestamp)
             closed_this_cycle.append(trade)
         else:
             trade["current_ltp"] = current_ltp
@@ -903,6 +918,110 @@ def force_close_breakeven_shadows(state: dict, snapshot) -> list:
         _append_journal(shadow, path=BREAKEVEN_SHADOW_JOURNAL_PATH)
         closed.append(shadow)
     state["breakeven_shadows"] = []
+    return closed
+
+
+def _seed_delay_probe(state: dict, trade: dict, leg: str, signal_price: float, timestamp) -> None:
+    """
+    Start measuring what an order-entry delay would have cost on this
+    leg. `leg` is "entry" (we would be BUYING) or "exit" (SELLING).
+
+    Records nothing but observations -- no trading decision reads these,
+    and the trade's own entry/exit/P&L are untouched. See
+    config.DELAY_PROBE_SAMPLES for why this exists.
+    """
+    if not getattr(config, "DELAY_PROBE_SAMPLES", 0):
+        return
+    state.setdefault("delay_probes", []).append({
+        "trade_id": trade.get("id"),
+        "strike": trade["strike"],
+        "option_type": trade["option_type"],
+        "leg": leg,
+        "lots": trade.get("lots", 1),
+        "signal_at": timestamp.isoformat(),
+        "signal_price": signal_price,
+        "samples": [],
+    })
+
+
+def _delay_sample(probe: dict, price: float, timestamp) -> dict:
+    """
+    One post-signal observation. `adverse_inr` is signed so that
+    NEGATIVE always means "this delay cost money", for both legs:
+    buying later at a higher price is bad, selling later at a lower
+    price is bad. Reading a single sign convention wrongly is exactly
+    how a slippage study ends up concluding delay is free.
+    """
+    signal_price = probe["signal_price"]
+    delta = round(price - signal_price, 2)
+    qty = probe.get("lots", 1) * getattr(config, "NIFTY_LOT_SIZE", 65)
+    if probe["leg"] == "entry":
+        adverse_inr = round(-delta * qty, 2)   # paying MORE later = worse
+    else:
+        adverse_inr = round(delta * qty, 2)    # receiving LESS later = worse
+    signal_ts = datetime.fromisoformat(probe["signal_at"])
+    return {
+        "at": timestamp.isoformat(),
+        "delay_sec": round((timestamp - signal_ts).total_seconds(), 1),
+        "price": price,
+        "delta_vs_signal": delta,
+        "adverse_inr": adverse_inr,
+    }
+
+
+def update_delay_probes(state: dict, snapshot) -> list:
+    """
+    Call every cycle. Samples each open probe's contract once per cycle
+    until it has config.DELAY_PROBE_SAMPLES observations, then journals
+    and retires it. Returns the probes completed this cycle.
+    """
+    wanted = getattr(config, "DELAY_PROBE_SAMPLES", 0)
+    if not wanted:
+        state["delay_probes"] = []
+        return []
+
+    completed = []
+    still_open = []
+    quote_lookup = {(q.strike, q.option_type): q for q in snapshot.chain}
+
+    for probe in state.get("delay_probes", []):
+        quote = quote_lookup.get((probe["strike"], probe["option_type"]))
+        if quote is None:
+            still_open.append(probe)   # missing quote: keep waiting, same as trades/shadows
+            continue
+
+        probe["samples"].append(_delay_sample(probe, exit_price_for(quote), snapshot.timestamp))
+        if len(probe["samples"]) >= wanted:
+            probe["completed_at"] = snapshot.timestamp.isoformat()
+            probe["complete"] = True
+            _append_journal(probe, path=DELAY_PROBE_JOURNAL_PATH)
+            completed.append(probe)
+        else:
+            still_open.append(probe)
+
+    state["delay_probes"] = still_open
+    return completed
+
+
+def force_close_delay_probes(state: dict, snapshot) -> list:
+    """
+    EOD finalisation. Journals every probe still collecting, flagged
+    incomplete -- a probe seeded near the close legitimately never gets
+    its full sample count, and silently dropping those would bias the
+    measurement toward mid-session conditions only.
+    """
+    closed = []
+    quote_lookup = {(q.strike, q.option_type): q for q in snapshot.chain}
+    for probe in state.get("delay_probes", []):
+        quote = quote_lookup.get((probe["strike"], probe["option_type"]))
+        if quote is not None:
+            probe["samples"].append(_delay_sample(probe, exit_price_for(quote), snapshot.timestamp))
+        probe["completed_at"] = snapshot.timestamp.isoformat()
+        probe["complete"] = len(probe["samples"]) >= getattr(config, "DELAY_PROBE_SAMPLES", 0)
+        probe["ended_at_market_close"] = True
+        _append_journal(probe, path=DELAY_PROBE_JOURNAL_PATH)
+        closed.append(probe)
+    state["delay_probes"] = []
     return closed
 
 
@@ -1101,6 +1220,7 @@ def try_open_new_trade(setups_with_plans, state, snapshot, bias_label=None, bias
         trade["learned_adjustment_notes"] = learn_notes
         state["trades"].append(trade)
         state["opened_today"] += 1
+        _seed_delay_probe(state, trade, "entry", plan.entry, snapshot.timestamp)
         return trade
 
     return None

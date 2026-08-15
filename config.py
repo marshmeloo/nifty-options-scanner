@@ -481,6 +481,25 @@ LVN_MULTIPLE = 0.5             # bin volume <= this x average -> low-volume node
 # ID resolution) planned before going live with real capital.
 FAST_CHECK_INTERVAL_SECONDS = 5
 
+# --- Execution-delay probes (added 2026-08-15) ---
+# How many full cycles after a signal to keep sampling that contract's
+# price, to measure what a REAL order-entry delay would have cost.
+#
+# Everything this system records assumes a fill at the price that existed
+# the instant the signal fired. In reality a human sees the alert, punches
+# the order into the broker, and fills seconds later at a different price.
+# That gap is unmodelled in every backtest here, and it is NOT symmetric:
+# a stop or breakeven exit triggers precisely BECAUSE price is moving
+# against the position, so a delayed exit systematically fills worse. The
+# breakeven@0.5R rule depends on exiting NEAR ENTRY, making it the rule
+# most exposed to this.
+#
+# 2 samples at ~33s/cycle covers roughly the first minute -- long enough
+# to bound a realistic manual-entry delay, short enough to stay cheap.
+# Purely observational: no trading decision reads these. Set to 0 to
+# disable. Journalled to trade_tracker.DELAY_PROBE_JOURNAL_PATH.
+DELAY_PROBE_SAMPLES = 2
+
 # --- Trade tracking ---
 # The scanner re-evaluates the whole chain every cycle, which is correct
 # for FINDING setups but wrong for TRACKING one: without a cap, "highest

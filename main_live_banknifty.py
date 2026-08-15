@@ -121,6 +121,7 @@ assert tt.JOURNAL_PATH.name == "trade_journal.jsonl", (
 tt.OPEN_TRADES_PATH = tt.STATE_DIR / "open_trades_banknifty.json"
 tt.JOURNAL_PATH = tt.LOG_DIR / "trade_journal_banknifty.jsonl"
 tt.BREAKEVEN_SHADOW_JOURNAL_PATH = tt.LOG_DIR / "breakeven_shadow_journal_banknifty.jsonl"
+tt.DELAY_PROBE_JOURNAL_PATH = tt.LOG_DIR / "execution_delay_journal_banknifty.jsonl"
 snapshot_recorder.SNAPSHOT_DIR = Path(__file__).parent / "logs" / "snapshots_banknifty"
 snapshot_recorder.SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 decision_log.LOG_PATH = Path(__file__).parent / "logs" / "decision_log_banknifty.jsonl"
@@ -191,7 +192,8 @@ def get_banknifty_intraday_candles(interval: str = None, from_date: str = None, 
 
 def _tracked_strikes(state: dict) -> set:
     return ({t["strike"] for t in state.get("trades", [])}
-            | {s["strike"] for s in state.get("breakeven_shadows", [])})
+            | {s["strike"] for s in state.get("breakeven_shadows", [])}
+            | {p["strike"] for p in state.get("delay_probes", [])})
 
 
 def market_is_open(now: datetime = None) -> bool:
@@ -292,6 +294,14 @@ def run_once(expiry: str, state: dict):
             f"  [BREAKEVEN SHADOW RESOLVED] {shadow['strike']} {shadow['option_type']}  "
             f"{shadow['resolution']}  (closed at breakeven for Rs {shadow['breakeven_pnl_inr']:+,.0f}, "
             f"peaked {shadow.get('max_r_seen_after_breakeven')}R afterward)"
+        )
+
+    for probe in tt.update_delay_probes(state, snapshot):
+        last = probe["samples"][-1]
+        log.info(
+            f"  [DELAY PROBE] {probe['strike']} {probe['option_type']} {probe['leg']}  "
+            f"signal {probe['signal_price']} -> {last['price']} after {last['delay_sec']:.0f}s "
+            f"(Rs {last['adverse_inr']:+,.0f} if filled that late)"
         )
 
     if state["trades"]:
@@ -397,7 +407,7 @@ def run_once(expiry: str, state: dict):
 
 
 def force_close_all(state: dict, expiry: str, last_snapshot=None):
-    if not state["trades"] and not state.get("breakeven_shadows"):
+    if not state["trades"] and not state.get("breakeven_shadows") and not state.get("delay_probes"):
         return
     snapshot = last_snapshot if last_snapshot is not None else get_banknifty_snapshot(
         must_include_strikes=_tracked_strikes(state))
@@ -416,6 +426,13 @@ def force_close_all(state: dict, expiry: str, last_snapshot=None):
         log.info(
             f"  [BREAKEVEN SHADOW EOD] {shadow['strike']} {shadow['option_type']}  "
             f"still between breakeven and target when the market closed (peaked {shadow.get('max_r_seen_after_breakeven')}R)"
+        )
+
+    for probe in tt.force_close_delay_probes(state, snapshot):
+        log.info(
+            f"  [DELAY PROBE EOD] {probe['strike']} {probe['option_type']} {probe['leg']}  "
+            f"{len(probe['samples'])} sample(s) collected before close"
+            + ("" if probe.get("complete") else " -- incomplete, flagged in the journal")
         )
     tt.save_open_trades(state)
 
@@ -491,6 +508,7 @@ def run_forever():
             "trades": [],
             "opened_today": state.get("opened_today", 0) if was_same_day else 0,
             "breakeven_shadows": [],
+            "delay_probes": [],
         }
         tt.save_open_trades(state)
 
