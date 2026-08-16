@@ -242,6 +242,7 @@
   </div>
   <div class="metric">VWAP<b id="vwap-value-bn">—</b></div>
   <div class="metric">PCR<b id="pcr-value-bn">—</b></div>
+  <div class="metric">GAP<b id="gap-value-bn">—</b></div>
   <div class="metric">SOURCE<b id="source-value-bn">—</b></div>
   <div class="metric">TODAY'S P&amp;L<b id="total-pnl-value-bn">—</b></div>
   <div class="live-dot-wrap">
@@ -890,6 +891,13 @@ async function refresh() {
     if (bnTotals) {
       bnPnlEl.textContent = fmtInr(bnTotals.total_pnl_today_inr);
       bnPnlEl.className = pnlClass(bnTotals.total_pnl_today_inr);
+    }
+
+    if (gap && gap.banknifty) {
+      document.getElementById("gap-value-bn").textContent =
+        (gap.banknifty.gap_points > 0 ? "+" : "") + gap.banknifty.gap_points + " (" + (gap.banknifty.gap_pct > 0 ? "+" : "") + gap.banknifty.gap_pct + "%)";
+    } else {
+      document.getElementById("gap-value-bn").textContent = "—";
     }
 
     const bnAge = bn.main_log_age_seconds;
