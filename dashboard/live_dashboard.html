@@ -143,9 +143,31 @@
   }
   .section-header .rule { flex: 1; height: 1px; background: var(--border); }
   .section-header.bn h1 { color: var(--blue); }
+
+  /* ---- Index tabs: NIFTY and Bank Nifty each render in their own
+     panel below; only one is visible at a time, so switching indices
+     never means scrolling past the other one's panels. ---- */
+  .tabs { display: flex; gap: 10px; margin-bottom: 18px; }
+  .tab-btn {
+    background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+    padding: 11px 26px; border-radius: 9px; font-family: var(--sans);
+    font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    cursor: pointer;
+  }
+  .tab-btn.active { color: var(--text); border-color: var(--blue); background: var(--panel-raised); }
+  .tab-btn.bn.active { border-color: var(--blue); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
 </style>
 </head>
 <body>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="nifty">NIFTY</button>
+  <button class="tab-btn bn" data-tab="banknifty">Bank Nifty</button>
+</div>
+
+<div class="tab-panel active" id="tab-panel-nifty">
 
 <div class="section-header"><h1>NIFTY</h1><div class="rule"></div></div>
 
@@ -212,6 +234,10 @@
   <div id="activity-container"><div class="empty-state">No activity yet.</div></div>
 </div>
 
+</div><!-- /tab-panel-nifty -->
+
+<div class="tab-panel" id="tab-panel-banknifty">
+
 <div class="section-header bn"><h1>Bank Nifty</h1><div class="rule"></div></div>
 
 <div class="ticker" id="ticker-bn">
@@ -259,9 +285,30 @@
   <div id="activity-container-bn"><div class="empty-state">No activity yet.</div></div>
 </div>
 
+</div><!-- /tab-panel-banknifty -->
+
 <div class="footer-note">Read-only local view of main_live.py / main_live_banknifty.py's state &amp; logs. Refreshes every 8s. Nothing on this page can place, modify, or cancel anything.</div>
 
 <script>
+const TAB_STORAGE_KEY = "live_dashboard_active_tab";
+
+function initTabs() {
+  const buttons = document.querySelectorAll(".tab-btn");
+  const panels = {
+    nifty: document.getElementById("tab-panel-nifty"),
+    banknifty: document.getElementById("tab-panel-banknifty"),
+  };
+  function activate(tab) {
+    buttons.forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+    Object.entries(panels).forEach(([name, el]) => el.classList.toggle("active", name === tab));
+    localStorage.setItem(TAB_STORAGE_KEY, tab);
+  }
+  buttons.forEach(b => b.addEventListener("click", () => activate(b.dataset.tab)));
+  const saved = localStorage.getItem(TAB_STORAGE_KEY);
+  activate(saved === "banknifty" ? "banknifty" : "nifty");
+}
+initTabs();
+
 const REFRESH_MS = 8000;
 const STALE_SECONDS = 90;
 

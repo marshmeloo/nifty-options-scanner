@@ -172,8 +172,8 @@ def update_position(state: dict, snapshot) -> dict:
         if pct_of_max_profit >= target_pct:
             detail = (
                 f"Profit target reached: Rs {mtm_pnl:,.0f} is {pct_of_max_profit:.0f}% of "
-                f"max profit (target {target_pct:.0f}%). Tracker closed this position "
-                f"automatically -- close the matching real position at the broker too."
+                f"max profit (target {target_pct:.0f}%). Tracker closed this paper position "
+                f"automatically -- no broker order to close, this system doesn't place any."
             )
             log.info(f"  CONDOR PROFIT TARGET REACHED: {detail}")
             staging.stage_advisory(
