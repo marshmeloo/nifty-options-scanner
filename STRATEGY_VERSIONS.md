@@ -66,13 +66,13 @@ Sentinel (below) is investigating a fix for.
 
 ## Sentinel — v1.1-dev — CANDIDATE, LIVE PAPER-TRACKING (built 2026-08-15)
 
-**Status:** Backtested (below), and now built as its own live
-paper-tracking process — `main_live_sentinel.py` (NIFTY) and
+**Status:** Backtested (below), built as its own live paper-tracking
+process — `main_live_sentinel.py` (NIFTY) and
 `main_live_banknifty_sentinel.py` (Bank Nifty), each independent of
-Anchor's own processes (separate state, journal, log, decision log).
-**Not started as of this writing** — nothing runs until you launch
-them; see COMMANDS.md. No trade, real or paper, has run under this
-configuration yet. Every trade it does open will carry
+Anchor's own processes (separate state, journal, log, decision log) —
+and, as of 2026-08-16, wired into `automation/start_trading.ps1` so
+both start automatically every trading morning alongside Anchor and
+the other loops (see COMMANDS.md). Every trade it opens carries
 `strategy_name: "Sentinel"` in its journal entry, distinct from
 Anchor's, so the two can be compared on the `/pnl` dashboard without
 ever pooling.
@@ -150,3 +150,4 @@ file.
 | 2026-08-15 | This registry created; Anchor formally named and frozen; Sentinel v1.1-dev (time-windowed) opened for testing |
 | 2026-08-15 | Sentinel v1.1-dev time-window sweep complete: 30-min window gives -14% profit for -62% drawdown vs Anchor -- best trade-off found so far, not yet promoted |
 | 2026-08-15 | Sentinel v1.1-dev built as its own live paper-tracking process (NIFTY + Bank Nifty), 200pt/30min. Anchor confirmed unaffected in isolation. Not yet started. |
+| 2026-08-16 | Sentinel v1.1-dev wired into `automation/start_trading.ps1` (both NIFTY and Bank Nifty) -- now starts automatically every trading morning alongside Anchor. Anchor's own two entries in the script left byte-for-byte unchanged. |

@@ -45,10 +45,15 @@ cluster cap (200pt/30min). Runs alongside Anchor, never instead of it
 `strategy_name: "Sentinel"` in every entry so the P&L dashboard
 (`/pnl`) can compare the two on real data without pooling them.
 
+**Wired into `automation/start_trading.ps1` as of 2026-08-16** — both
+scripts below now start automatically every morning alongside the
+other nine, no manual launch needed. Still fine to run either by hand
+(e.g. for a standalone test) with the commands below.
+
 | Command | Purpose | When |
 |---|---|---|
-| `python3 main_live_sentinel.py` | Sentinel, NIFTY | Alongside `main_live.py`/`supervisor.py`, separate terminal |
-| `python3 main_live_banknifty_sentinel.py` | Sentinel, Bank Nifty | Alongside `main_live_banknifty.py`, separate terminal. **Cluster-cap values are NIFTY-backtested only, not yet verified for Bank Nifty** — see that file's own module docstring. |
+| `python3 main_live_sentinel.py` | Sentinel, NIFTY | Runs automatically via `start_trading.ps1`; manual command for standalone testing |
+| `python3 main_live_banknifty_sentinel.py` | Sentinel, Bank Nifty | Runs automatically via `start_trading.ps1`; manual command for standalone testing. **Cluster-cap values are NIFTY-backtested only, not yet verified for Bank Nifty** — see that file's own module docstring. |
 
 ## Order flow (optional, new 2026-08-02)
 

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Runs the pre-market brief, then starts the order-flow feed, all seven
+  Runs the pre-market brief, then starts the order-flow feed, all nine
   live/paper strategy loops, and the read-only dashboard in parallel,
   hidden (no visible console windows).
 
@@ -9,7 +9,7 @@
   this project is analytics/paper-tracking only (see each script's own
   docstring), and dashboard_server.py is read-only (never writes state,
   never talks to Dhan/NSE itself). This just automates what you'd
-  otherwise do by opening nine terminals by hand each morning.
+  otherwise do by opening eleven terminals by hand each morning.
 
   REQUIRES DHAN_ACCESS_TOKEN / DHAN_CLIENT_ID to already be set as
   PERSISTENT Windows USER environment variables (via `setx`, run in
@@ -93,14 +93,27 @@ if ($premarketExit -eq 0) {
 # orderflow_feed.py's --strike-range 300 matches what was actually
 # being run manually before this automation existed -- narrower than
 # its own default (config.STRIKE_RANGE_POINTS, 800pts) if omitted.
+#
+# main_live_sentinel.py / main_live_banknifty_sentinel.py (added
+# 2026-08-16): Sentinel v1.1-dev, the correlated-cluster-cap candidate
+# -- see STRATEGY_VERSIONS.md. Each is its own process with its own
+# state/journal/log files (suffixed _sentinel), started alongside, not
+# instead of, its Anchor counterpart. They patch the same shared
+# config/trade_tracker modules Anchor imports, but only within their
+# OWN process -- Anchor's own main_live.py / main_live_banknifty.py
+# processes are unaffected (confirmed by importing them in isolation
+# after the Sentinel files were added; STRATEGY_NAME stayed "Anchor",
+# CLUSTER_CAP_ENABLED stayed False).
 $scripts = @(
     @{ file = "orderflow_feed.py"; args = @("--strike-range", "300") },
     @{ file = "main_live.py"; args = @() },
+    @{ file = "main_live_sentinel.py"; args = @() },
     @{ file = "main_condor.py"; args = @() },
     @{ file = "main_directional_spread.py"; args = @() },
     @{ file = "main_price_action.py"; args = @() },
     @{ file = "main_price_action_banknifty.py"; args = @() },
     @{ file = "main_live_banknifty.py"; args = @() },
+    @{ file = "main_live_banknifty_sentinel.py"; args = @() },
     @{ file = "main_directional_spread_banknifty.py"; args = @() },
     @{ file = "dashboard_server.py"; args = @() }
 )
