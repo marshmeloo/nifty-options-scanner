@@ -3,6 +3,64 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## decision_log.jsonl silently stopped growing for 2+ weeks -- watchdog extended, root cause only partly confirmed (added 2026-08-16)
+
+Investigating "do we have enough order-flow data to analyse book_imbalance"
+found `logs/decision_log.jsonl` (NIFTY) had recorded ZERO new cycles since
+2026-07-29T15:29:50, despite `main_live.py` clearly continuing to scan and
+trade normally through at least 2026-08-14 (confirmed against real,
+multi-hundred-KB `nifty_scan_*.log` growth on every day in between, with
+every single cycle reaching the log line immediately before the
+`decision_log.log_cycle()` call). dev's own copy shows the same pattern,
+stopping 2026-08-05. Consequence: `book_imbalance`/`total_quantity_imbalance`
+(added 2026-08-07, see the "Order flow" entry below) have literally never
+been captured for NIFTY -- not "too small a sample yet," zero samples,
+because the file meant to hold them never grew past a point that predates
+the feature.
+
+CONFIRMED, not the cause: a bug in `decision_log.log_cycle()` or
+`_candidate_record()` -- directly reproduced by calling `log_cycle()` with
+realistic `MarketSnapshot`/`Setup`/`TradePlan`/`RiskVerdict` objects against
+the real file; it appended correctly, no exception, every time. Also ruled
+out: a silent early-return in `run_once()` (the scan logs show `setups` is
+never empty on any of these days) and the per-cycle blanket exception
+handler swallowing it (every "Error this cycle" message across
+2026-08-03..14 traces to unrelated NSE/Dhan data-source hiccups, none to
+decision_log or orderflow).
+
+STRONGLY IMPLICATED, not fully proven: `logs/decision_log.jsonl` was
+accidentally committed to git early on (`ebdae60`, 2026-07-28), re-added a
+few times as it grew, and finally untracked in `08b2f4d` ("Untrack the
+decision log, and fix a clean-tree false positive") at **2026-07-29
+12:38** -- about 3 hours before the last real cycle this file ever
+recorded (15:29:50 the same day). A `git rm --cached` never touches the
+working-tree file's bytes, so this doesn't fully explain why appends never
+resumed on any later day, but the exact timing match on the boundary date
+is hard to read as coincidence. Not chased further: it needs either
+git-reflog archaeology or catching it live, and the practical fix below
+matters more than nailing the exact historical trigger.
+
+FIX: extended `watchdog.py` (previously only checked `nifty_scan_*.log`'s
+mtime, which stayed healthy through this entire incident since it's a
+different write earlier in the same cycle) with `decision_log_check_once()`
+-- reads just the last line of both `decision_log.jsonl` and
+`decision_log_banknifty.jsonl` (efficient tail-read, doesn't load the
+15-25MB files) and warns loudly if the last recorded cycle is older than
+`STALE_THRESHOLD_SECONDS` (180s) during market hours. Whatever the root
+cause turns out to be, this converts a silent multi-week gap into a warning
+within minutes. `tests/test_watchdog.py` (10 tests) covers the tail-read
+(including a bug the tests themselves caught: the first version broke on a
+record spanning more than one 64KB read chunk) and the staleness logic for
+both indices independently.
+
+NEXT STEP: run `watchdog.py` during Monday's live session and confirm
+`decision_log.jsonl` is actually growing again -- if the untrack-adjacent
+timing really was the trigger, appends should resume cleanly now that git
+no longer touches the file at all. If it's STILL stale despite the write
+path testing clean in isolation, that's the strongest possible clue left
+(something specific to the live process's real execution environment, not
+the code) and worth live-debugging directly rather than guessing further.
+
 ## Bank Nifty directional spread: validated (4/5 independent years), added to start_trading.ps1 (added 2026-08-13)
 
 Third of the three Bank Nifty variants tested this session (momentum
