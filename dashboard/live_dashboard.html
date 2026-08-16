@@ -224,11 +224,6 @@
   <div id="price-action-container"></div>
 </div>
 
-<div class="panel" id="approvals-panel" style="display:none;">
-  <h2>Pending Approvals</h2>
-  <div id="approvals-container"></div>
-</div>
-
 <div class="panel">
   <h2>Recent Decision Activity</h2>
   <div id="activity-container"><div class="empty-state">No activity yet.</div></div>
@@ -286,6 +281,15 @@
 </div>
 
 </div><!-- /tab-panel-banknifty -->
+
+<!-- Shared across both tabs, not per-index -- condor/directional-spread breach
+     warnings and profit-target closes are staged into one file regardless of
+     which index triggered them, so this can't live inside a single tab
+     panel without hiding the other index's entries. -->
+<div class="panel" id="approvals-panel" style="display:none;">
+  <h2>Notices <span style="font-weight:400; color:var(--muted); font-size:12px;">— informational only; the tracker already acted, nothing here is waiting on you</span></h2>
+  <div id="approvals-container"></div>
+</div>
 
 <div class="footer-note">Read-only local view of main_live.py / main_live_banknifty.py's state &amp; logs. Refreshes every 8s. Nothing on this page can place, modify, or cancel anything.</div>
 
@@ -780,7 +784,7 @@ function renderDirectionalSpread(position, ageSeconds, pollIntervalSeconds, suff
       </div>
     </div>
     ${position.breach_staged ? `<div class="activity-detail" style="margin-top:8px; color: var(--amber);">
-      Breach warning was staged this position -- spot got close to the short strike. Does NOT auto-close; check approve_orders.py if action is wanted.
+      Breach warning: spot got close to the short strike. Informational only -- it does not auto-close the position.
     </div>` : ""}`;
 }
 
@@ -791,9 +795,9 @@ function renderApprovals(pending) {
   panel.style.display = "block";
   container.innerHTML = pending.map(p => `
     <div class="activity-row">
-      <span class="badge approved" style="background:rgba(224,165,38,0.15); color: var(--amber);">PENDING</span>
-      <span style="margin-left:8px;">${p.kind || "trade candidate"}: ${p.detail || (p.strike + " " + p.option_type)}</span>
-      <div class="activity-detail">Staged ${p.staged_at} — run approve_orders.py to review.</div>
+      <span class="badge notselected">${p.kind || "notice"}</span>
+      <span style="margin-left:8px;">${p.detail || (p.strike + " " + p.option_type)}</span>
+      <div class="activity-detail">${p.staged_at}</div>
     </div>
   `).join("");
 }
