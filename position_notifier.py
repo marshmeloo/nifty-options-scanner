@@ -26,6 +26,16 @@ A ping every 15 minutes on a flat day would just be noise you'd start
 ignoring, and defeats the point of a notification -- something you can
 trust means "look at this." If nothing is open, this stays silent.
 
+START/STOP MESSAGES
+--------------------
+run_forever() sends one Telegram message the moment it starts (proves
+delivery is actually working right now, market open or not -- useful
+exactly when you can't tell otherwise) and one on a clean Ctrl+C stop.
+The stop message can only fire on a graceful exit; a forceful kill
+(Windows' Stop-Process -Force, what stop_trading.ps1 uses) ends the
+process with zero code execution, so there's nothing to hook -- see
+run_forever()'s own docstring.
+
 SETUP
 -----
 Needs TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID -- see telegram_notifier.py's
@@ -175,8 +185,25 @@ def build_snapshot_message(state: dict = None):
     return "\n".join([header, ""] + sections + ["", footer])
 
 
+def _send_lifecycle_message(text: str):
+    """
+    Best-effort start/stop notice -- logs success or failure either way, so
+    the TERMINAL alone tells you whether Telegram delivery actually works,
+    without needing to go check the chat itself. Sent unconditionally
+    (unlike check_once()'s snapshots, which are market-hours-gated only):
+    the whole point is to prove connectivity right now, market open or not.
+    """
+    try:
+        telegram_notifier.send_message(text)
+        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] lifecycle message sent -- Telegram delivery is working.")
+    except Exception as e:
+        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] lifecycle message FAILED -- "
+                 f"Telegram delivery is NOT working, check TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID: {e}")
+
+
 def check_once():
     if not market_is_open():
+        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] market closed, skipping")
         return
     message = build_snapshot_message()
     if message is None:
@@ -190,10 +217,31 @@ def check_once():
 
 
 def run_forever(interval_seconds: int = CHECK_INTERVAL_SECONDS):
+    """
+    Sends a start message immediately (proves Telegram delivery works right
+    now, whether or not the market's open) and a stop message on a clean
+    Ctrl+C exit. NOTE on the stop message: it can only fire on a graceful
+    stop where Python code actually gets to run -- Ctrl+C (KeyboardInterrupt)
+    qualifies. A forceful kill does not: Windows' Stop-Process -Force (what
+    automation/start_trading.ps1's own stop_trading.ps1 uses) calls
+    TerminateProcess, which ends the process with zero code execution -- no
+    exception, no signal handler, nothing to hook. If this is ever added to
+    that automation, expect the start message but not a stop message when
+    it's cycled that way.
+    """
     log.info(f"position_notifier started -- checking every {interval_seconds}s during market hours.")
-    while True:
-        check_once()
-        time.sleep(interval_seconds)
+    _send_lifecycle_message(
+        f"position_notifier started -- checking positions every {interval_seconds}s during "
+        "market hours (stays silent when nothing is open). This message confirms Telegram "
+        "delivery is working right now."
+    )
+    try:
+        while True:
+            check_once()
+            time.sleep(interval_seconds)
+    except KeyboardInterrupt:
+        log.info("position_notifier stopping (Ctrl+C).")
+        _send_lifecycle_message("position_notifier stopped (Ctrl+C) -- no more position snapshots until it's restarted.")
 
 
 if __name__ == "__main__":

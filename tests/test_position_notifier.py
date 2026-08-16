@@ -253,3 +253,61 @@ def test_check_once_does_not_raise_when_send_fails(monkeypatch):
     monkeypatch.setattr(pn.telegram_notifier, "send_message", _boom)
 
     pn.check_once()  # must not raise
+
+
+def test_check_once_logs_when_market_closed(monkeypatch, caplog):
+    monkeypatch.setattr(pn, "market_is_open", lambda now=None: False)
+    with caplog.at_level("INFO", logger="position_notifier"):
+        pn.check_once()
+    assert "market closed" in caplog.text
+
+
+# --- lifecycle (start/stop) messages ------------------------------------------
+
+def test_lifecycle_message_sends_and_does_not_raise_on_success(monkeypatch):
+    sent = []
+    monkeypatch.setattr(pn.telegram_notifier, "send_message", lambda text, **kw: sent.append(text))
+    pn._send_lifecycle_message("hello")
+    assert sent == ["hello"]
+
+
+def test_lifecycle_message_does_not_raise_on_failure(monkeypatch, caplog):
+    def _boom(*a, **kw):
+        raise ConnectionError("bad token")
+    monkeypatch.setattr(pn.telegram_notifier, "send_message", _boom)
+    with caplog.at_level("INFO", logger="position_notifier"):
+        pn._send_lifecycle_message("hello")  # must not raise
+    assert "FAILED" in caplog.text
+
+
+def test_run_forever_sends_a_start_message_immediately_even_if_market_closed(monkeypatch):
+    lifecycle_calls = []
+    monkeypatch.setattr(pn, "_send_lifecycle_message", lambda text: lifecycle_calls.append(text))
+    monkeypatch.setattr(pn, "market_is_open", lambda now=None: False)  # market closed
+    monkeypatch.setattr(pn, "check_once", lambda: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    pn.run_forever(interval_seconds=1)
+
+    assert len(lifecycle_calls) >= 1
+    assert "started" in lifecycle_calls[0]
+
+
+def test_run_forever_sends_a_stop_message_on_keyboard_interrupt(monkeypatch):
+    lifecycle_calls = []
+    monkeypatch.setattr(pn, "_send_lifecycle_message", lambda text: lifecycle_calls.append(text))
+    monkeypatch.setattr(pn, "check_once", lambda: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    pn.run_forever(interval_seconds=1)  # must not raise -- KeyboardInterrupt is caught
+
+    assert len(lifecycle_calls) == 2
+    assert "started" in lifecycle_calls[0]
+    assert "stopped" in lifecycle_calls[1]
+
+
+def test_run_forever_returns_cleanly_on_keyboard_interrupt(monkeypatch):
+    """KeyboardInterrupt must be swallowed after the stop message, not
+    propagated -- a Ctrl+C exit should look clean, not dump a traceback."""
+    monkeypatch.setattr(pn, "_send_lifecycle_message", lambda text: None)
+    monkeypatch.setattr(pn, "check_once", lambda: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    pn.run_forever(interval_seconds=1)  # must return, not raise
