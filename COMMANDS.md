@@ -34,6 +34,34 @@ the backtested totals (see README/BACKLOG 2026-08-02 entries for what to expect)
 | `python3 premarket.py` | Generate today's pre-market brief | Before 9:15 AM |
 | `python3 dashboard_server.py` | Local live dashboard → http://127.0.0.1:8787 | Optional, separate terminal |
 | `python3 watchdog.py` | Warns if the scanner goes silent | Optional, separate terminal |
+| `python3 position_notifier.py` | Posts open positions to Telegram every 15 min (silent when flat) | Optional, separate terminal -- see below for one-time setup |
+
+### Telegram position notifier (optional, added 2026-08-16)
+
+Posts a snapshot of every currently open position (both indices, every
+strategy -- momentum, condor, directional spread, price action) to
+Telegram every 15 minutes during market hours, so positions are visible
+away from the screen. Only sends when something is actually open --
+silent on a flat day, not a ping every 15 minutes regardless. Reuses
+`dashboard_server.build_state()` directly, so it's never a second,
+possibly-drifted view of "what's open" from the live dashboard.
+
+**One-time setup** (see `telegram_notifier.py`'s own docstring for the
+exact steps): create a bot via @BotFather on Telegram to get
+`TELEGRAM_BOT_TOKEN`, message it once, then hit `getUpdates` to find your
+`TELEGRAM_CHAT_ID`. Set both as environment variables, same pattern as
+`DHAN_ACCESS_TOKEN`.
+
+**Not yet wired into `automation/start_trading.ps1`** -- run it by hand
+first (`python3 position_notifier.py --once` is a good one-shot test
+once you have a real open position) and confirm a message actually lands
+in your chat before adding it to the automated startup.
+
+| Command | Purpose | When |
+|---|---|---|
+| `python3 position_notifier.py` | Runs forever, checks every 15 min | Once Telegram credentials are set |
+| `python3 position_notifier.py --interval 300` | Same, but every 5 min | Useful while testing |
+| `python3 position_notifier.py --once` | Single check, then exit | Manual test that a real position actually reaches Telegram |
 
 ## Sentinel v1.1-dev (candidate, paper-tracking only — added 2026-08-15)
 
