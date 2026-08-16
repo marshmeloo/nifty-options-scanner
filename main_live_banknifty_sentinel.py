@@ -73,6 +73,7 @@ import snapshot_recorder
 import logic_version
 import workspace
 import market_regime
+import orderflow
 
 assert tt.JOURNAL_PATH.name == "trade_journal.jsonl", (
     "trade_tracker captured a non-default JOURNAL_PATH -- import order regressed, "
@@ -85,6 +86,12 @@ tt.BREAKEVEN_SHADOW_JOURNAL_PATH = tt.LOG_DIR / "breakeven_shadow_journal_bankni
 tt.DELAY_PROBE_JOURNAL_PATH = tt.LOG_DIR / "execution_delay_journal_banknifty_sentinel.jsonl"
 decision_log.LOG_PATH = Path(__file__).parent / "logs" / "decision_log_banknifty_sentinel.jsonl"
 market_regime.BASELINE_PATH = market_regime.STATE_DIR / "regime_baseline_banknifty_sentinel.json"
+# Shared with main_live_banknifty.py's own override, deliberately -- there is
+# only one Bank Nifty orderflow_feed_banknifty.py process; Anchor and
+# Sentinel both read the same live feed file (same pattern NIFTY's two
+# processes already use with orderflow.py's own unmodified default path).
+# Observability only, same as that file's own comment.
+orderflow.STATE_PATH = Path(__file__).parent / "state" / "orderflow_banknifty.json"
 
 POLL_INTERVAL_SECONDS = 30
 MARKET_OPEN = dtime(9, 15)

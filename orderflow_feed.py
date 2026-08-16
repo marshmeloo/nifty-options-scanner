@@ -109,7 +109,10 @@ def feed_url() -> str:
             f"&clientId={client_id}&authType=2")
 
 
-def select_contracts(expiry: str = None, strike_range_points: float = None) -> tuple:
+def select_contracts(expiry: str = None, strike_range_points: float = None,
+                     underlying: str = "NIFTY",
+                     underlying_scrip: int = dhan_source.NIFTY_UNDERLYING_SCRIP,
+                     underlying_seg: str = dhan_source.NIFTY_UNDERLYING_SEG) -> tuple:
     """
     The contracts worth subscribing to -- every strike within
     `strike_range_points` of spot on the given expiry -- and the spot
@@ -121,16 +124,23 @@ def select_contracts(expiry: str = None, strike_range_points: float = None) -> t
     from spot have thin, erratic books whose imbalance is noise, and
     including them would dilute any aggregate computed across the chain.
 
+    Defaults reproduce the exact original NIFTY-only behaviour; pass
+    underlying="BANKNIFTY" with dhan_source.BANKNIFTY_UNDERLYING_SCRIP/_SEG
+    for Bank Nifty (see orderflow_feed_banknifty.py).
+
     Returns (contracts, spot). Spot comes back because the spread
     recorder needs it to stamp each sample's distance from spot, and
     re-fetching it there would mean a second REST call for a number this
     function already has.
     """
-    expiry = expiry or dhan_source.get_nearest_expiry()
-    snapshot = dhan_source.get_nifty_snapshot(expiry=expiry)
+    expiry = expiry or dhan_source.get_nearest_expiry(underlying_scrip, underlying_seg)
+    snapshot = dhan_source.get_nifty_snapshot(
+        expiry=expiry, symbol=underlying,
+        underlying_scrip=underlying_scrip, underlying_seg=underlying_seg,
+    )
     reach = strike_range_points or getattr(config, "STRIKE_RANGE_POINTS", 800)
 
-    index = instrument_master.build_index()
+    index = instrument_master.build_index(underlying=underlying)
     selected = []
     for quote in snapshot.chain:
         if abs(quote.strike - snapshot.spot) > reach:

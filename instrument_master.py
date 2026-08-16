@@ -24,8 +24,13 @@ CACHING
 -------
 The detailed master is ~32 MB and covers every instrument Dhan lists.
 Downloading it per process per run would be wasteful and slow, so it is
-cached on disk and only the NIFTY option rows are retained -- a few
-thousand rows instead of a few hundred thousand.
+cached on disk and only one underlying's option rows are retained -- a
+few thousand rows instead of a few hundred thousand. Every function here
+takes an `underlying` parameter (default "NIFTY", so existing callers are
+unaffected); each underlying gets its own cache file
+(instrument_master_<underlying>.json) since NIFTY and Bank Nifty are
+fetched by separate processes (orderflow_feed.py / orderflow_feed_banknifty.py)
+that have no reason to share one.
 
 The cache is refreshed when it is older than CACHE_MAX_AGE_HOURS.
 Deliberately NOT "once per calendar day": new weekly expiries appear in
@@ -51,36 +56,43 @@ MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
 
 CACHE_DIR = Path(__file__).parent / "state"
 CACHE_DIR.mkdir(exist_ok=True)
-CACHE_PATH = CACHE_DIR / "instrument_master_nifty.json"
+CACHE_PATH = CACHE_DIR / "instrument_master_nifty.json"   # kept for back-compat; use _cache_path_for()
 
 CACHE_MAX_AGE_HOURS = 12
 DOWNLOAD_TIMEOUT_SECONDS = 180
 
 # What the WebSocket feed and marketfeed endpoints expect as
 # ExchangeSegment for NSE derivatives. The master spells the same thing
-# as EXCH_ID="NSE" + SEGMENT="D"; this is the API-side name for it.
+# as EXCH_ID="NSE" + SEGMENT="D"; this is the API-side name for it. Same
+# segment for every NSE index underlying (NIFTY, Bank Nifty, ...).
 NSE_FNO_SEGMENT = "NSE_FNO"
 
 UNDERLYING = "NIFTY"
+BANKNIFTY = "BANKNIFTY"
 INSTRUMENT_KIND = "OPTIDX"   # index options, as opposed to OPTSTK / FUTIDX
 
 
-def _cache_age_hours() -> float:
-    if not CACHE_PATH.exists():
+def _cache_path_for(underlying: str) -> Path:
+    return CACHE_DIR / f"instrument_master_{underlying.lower()}.json"
+
+
+def _cache_age_hours(underlying: str = UNDERLYING) -> float:
+    path = _cache_path_for(underlying)
+    if not path.exists():
         return float("inf")
-    return (time.time() - CACHE_PATH.stat().st_mtime) / 3600
+    return (time.time() - path.stat().st_mtime) / 3600
 
 
-def _parse_nifty_options(csv_text: str) -> list:
+def _parse_options(csv_text: str, underlying: str = UNDERLYING) -> list:
     """
-    Keep only NIFTY index-option rows, reduced to the fields anything
-    here actually needs. Rows with unparseable strike/expiry are skipped
-    rather than allowed through as zeros -- a strike of 0.0 would silently
-    match nothing forever.
+    Keep only `underlying`'s index-option rows, reduced to the fields
+    anything here actually needs. Rows with unparseable strike/expiry are
+    skipped rather than allowed through as zeros -- a strike of 0.0 would
+    silently match nothing forever.
     """
     out = []
     for row in csv.DictReader(io.StringIO(csv_text)):
-        if row.get("UNDERLYING_SYMBOL") != UNDERLYING:
+        if row.get("UNDERLYING_SYMBOL") != underlying:
             continue
         if row.get("INSTRUMENT") != INSTRUMENT_KIND:
             continue
@@ -105,10 +117,10 @@ def _parse_nifty_options(csv_text: str) -> list:
     return out
 
 
-def refresh(force: bool = False) -> list:
+def refresh(force: bool = False, underlying: str = UNDERLYING) -> list:
     """
-    Return the NIFTY option rows, downloading and re-caching if the cache
-    is missing or older than CACHE_MAX_AGE_HOURS.
+    Return `underlying`'s option rows, downloading and re-caching if that
+    underlying's cache is missing or older than CACHE_MAX_AGE_HOURS.
 
     On a download failure with a usable cache present, the STALE cache is
     returned with a warning rather than raising: a live loop losing its
@@ -117,47 +129,50 @@ def refresh(force: bool = False) -> list:
     change. With no cache at all there is nothing to fall back to and the
     error propagates.
     """
-    if not force and _cache_age_hours() <= CACHE_MAX_AGE_HOURS:
+    cache_path = _cache_path_for(underlying)
+    if not force and _cache_age_hours(underlying) <= CACHE_MAX_AGE_HOURS:
         try:
-            return json.loads(CACHE_PATH.read_text())["contracts"]
+            return json.loads(cache_path.read_text())["contracts"]
         except (json.JSONDecodeError, OSError, KeyError):
-            log.info("  [instrument master] cache unreadable, re-downloading")
+            log.info(f"  [instrument master] {underlying} cache unreadable, re-downloading")
 
     try:
         resp = requests.get(MASTER_URL, timeout=DOWNLOAD_TIMEOUT_SECONDS)
         resp.raise_for_status()
-        contracts = _parse_nifty_options(resp.text)
+        contracts = _parse_options(resp.text, underlying)
     except Exception as e:
-        if CACHE_PATH.exists():
-            age = _cache_age_hours()
-            log.info(f"  [instrument master] download failed ({e}); "
+        if cache_path.exists():
+            age = _cache_age_hours(underlying)
+            log.info(f"  [instrument master] {underlying} download failed ({e}); "
                      f"using stale cache ({age:.1f}h old)")
-            return json.loads(CACHE_PATH.read_text())["contracts"]
+            return json.loads(cache_path.read_text())["contracts"]
         raise
 
     if not contracts:
         # A structurally valid CSV that yields nothing means the schema
-        # moved (a renamed column, a changed UNDERLYING_SYMBOL spelling).
+        # moved (a renamed column, a changed UNDERLYING_SYMBOL spelling),
+        # or `underlying` itself doesn't match the master's own spelling.
         # Failing loudly beats caching an empty map that would make every
         # lookup return None and look like "no such contract".
         raise RuntimeError(
-            "Instrument master downloaded but contained no NIFTY option rows -- "
-            "the CSV schema has probably changed; check column names against "
-            "instrument_master._parse_nifty_options()"
+            f"Instrument master downloaded but contained no {underlying} option rows -- "
+            f"the CSV schema may have changed, or '{underlying}' doesn't match the master's "
+            f"UNDERLYING_SYMBOL spelling; check column names against "
+            f"instrument_master._parse_options()"
         )
 
-    CACHE_PATH.write_text(json.dumps({
+    cache_path.write_text(json.dumps({
         "fetched_at": time.time(),
         "count": len(contracts),
         "contracts": contracts,
     }))
-    log.info(f"  [instrument master] cached {len(contracts):,} NIFTY option contracts")
+    log.info(f"  [instrument master] cached {len(contracts):,} {underlying} option contracts")
     return contracts
 
 
-def build_index(contracts: list = None) -> dict:
+def build_index(contracts: list = None, underlying: str = UNDERLYING) -> dict:
     """{(strike, expiry, option_type): security_id} for O(1) lookup."""
-    contracts = contracts if contracts is not None else refresh()
+    contracts = contracts if contracts is not None else refresh(underlying=underlying)
     return {
         (c["strike"], c["expiry"], c["option_type"]): c["security_id"]
         for c in contracts
@@ -165,7 +180,7 @@ def build_index(contracts: list = None) -> dict:
 
 
 def security_id_for(strike: float, expiry: str, option_type: str,
-                    index: dict = None) -> int:
+                    index: dict = None, underlying: str = UNDERLYING) -> int:
     """
     Numeric security ID for one contract, or None if the master has no
     such row.
@@ -174,18 +189,19 @@ def security_id_for(strike: float, expiry: str, option_type: str,
     listed (far outside the traded range, or a just-added expiry not yet
     in the cached master) is a normal condition a caller should handle by
     skipping that contract, not an exception that kills a feed managing
-    several hundred subscriptions.
+    several hundred subscriptions. `underlying` is ignored when `index`
+    is passed explicitly -- it only affects the default refresh() call.
     """
-    index = index if index is not None else build_index()
+    index = index if index is not None else build_index(underlying=underlying)
     return index.get((float(strike), expiry[:10], option_type))
 
 
-def describe() -> str:
-    contracts = refresh()
+def describe(underlying: str = UNDERLYING) -> str:
+    contracts = refresh(underlying=underlying)
     expiries = sorted({c["expiry"] for c in contracts})
-    age = _cache_age_hours()
+    age = _cache_age_hours(underlying)
     lines = [
-        f"{len(contracts):,} NIFTY option contracts across {len(expiries)} expiries",
+        f"{len(contracts):,} {underlying} option contracts across {len(expiries)} expiries",
         f"cache age: {age:.1f}h (refreshes past {CACHE_MAX_AGE_HOURS}h)",
         f"nearest expiries: {', '.join(expiries[:4])}",
     ]
@@ -193,5 +209,6 @@ def describe() -> str:
 
 
 if __name__ == "__main__":
+    import sys
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    print(describe())
+    print(describe(sys.argv[1] if len(sys.argv) > 1 else UNDERLYING))

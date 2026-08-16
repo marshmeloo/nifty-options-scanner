@@ -55,16 +55,21 @@ other nine, no manual launch needed. Still fine to run either by hand
 | `python3 main_live_sentinel.py` | Sentinel, NIFTY | Runs automatically via `start_trading.ps1`; manual command for standalone testing |
 | `python3 main_live_banknifty_sentinel.py` | Sentinel, Bank Nifty | Runs automatically via `start_trading.ps1`; manual command for standalone testing. **Cluster-cap values are NIFTY-backtested only, not yet verified for Bank Nifty** — see that file's own module docstring. |
 
-## Order flow (optional, new 2026-08-02)
+## Order flow (optional, NIFTY added 2026-08-02, Bank Nifty added 2026-08-16)
 
 Not wired into any strategy's decisions yet — read-only market data,
 useful on its own for watching the live book and measuring real spreads.
+`decision_log.jsonl` records `book_imbalance`/`total_quantity_imbalance`
+for future research, never gates a trade decision. Two independent feed
+processes, one per index — each its own WebSocket connection, state file,
+and spread-recording directory; neither shares anything with the other.
 
 | Command | Purpose | When |
 |---|---|---|
-| `python3 orderflow_feed.py --strike-range 300` | WebSocket feed: live bid/ask book + spread recording | Optional, separate terminal, any time market is open |
-| `python3 orderflow.py` | One-line health check of the feed (LIVE/STALE, contracts receiving) | Anytime the feed is running |
-| `python3 spread_study.py` | Analyse a session's recorded spreads (by phase, by premium band) | After a session with the feed running |
+| `python3 orderflow_feed.py --strike-range 300` | WebSocket feed, NIFTY: live bid/ask book + spread recording | Optional, separate terminal, any time market is open |
+| `python3 orderflow_feed_banknifty.py --strike-range 600` | WebSocket feed, Bank Nifty: same, own state file. `--strike-range 600` is a first-pass estimate (double NIFTY's, matching Bank Nifty's wider strike spacing), not independently tuned | Optional, separate terminal, any time market is open |
+| `python3 orderflow.py` | One-line health check of the NIFTY feed (LIVE/STALE, contracts receiving) | Anytime the feed is running |
+| `python3 spread_study.py` | Analyse a session's recorded NIFTY spreads (by phase, by premium band) | After a session with the feed running |
 
 ## Reviewing / approving
 

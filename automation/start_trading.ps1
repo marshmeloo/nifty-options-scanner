@@ -9,7 +9,7 @@
   this project is analytics/paper-tracking only (see each script's own
   docstring), and dashboard_server.py is read-only (never writes state,
   never talks to Dhan/NSE itself). This just automates what you'd
-  otherwise do by opening eleven terminals by hand each morning.
+  otherwise do by opening twelve terminals by hand each morning.
 
   REQUIRES DHAN_ACCESS_TOKEN / DHAN_CLIENT_ID to already be set as
   PERSISTENT Windows USER environment variables (via `setx`, run in
@@ -94,6 +94,16 @@ if ($premarketExit -eq 0) {
 # being run manually before this automation existed -- narrower than
 # its own default (config.STRIKE_RANGE_POINTS, 800pts) if omitted.
 #
+# orderflow_feed_banknifty.py (added 2026-08-16): Bank Nifty's own feed
+# process -- orderflow_feed.py only ever subscribed to NIFTY strikes, so
+# Bank Nifty's book_imbalance/total_quantity_imbalance were structurally
+# guaranteed None forever (not "not enough data," zero coverage). Own
+# state file (state/orderflow_banknifty.json), own spread-recording
+# directory (logs/orderflow_banknifty/), own WebSocket connection --
+# never shares one with orderflow_feed.py's NIFTY instance. --strike-range
+# 600 is a first-pass estimate (double NIFTY's 300, matching Bank Nifty's
+# 100pt vs 50pt strike spacing), not independently tuned yet.
+#
 # main_live_sentinel.py / main_live_banknifty_sentinel.py (added
 # 2026-08-16): Sentinel v1.1-dev, the correlated-cluster-cap candidate
 # -- see STRATEGY_VERSIONS.md. Each is its own process with its own
@@ -106,6 +116,7 @@ if ($premarketExit -eq 0) {
 # CLUSTER_CAP_ENABLED stayed False).
 $scripts = @(
     @{ file = "orderflow_feed.py"; args = @("--strike-range", "300") },
+    @{ file = "orderflow_feed_banknifty.py"; args = @("--strike-range", "600") },
     @{ file = "main_live.py"; args = @() },
     @{ file = "main_live_sentinel.py"; args = @() },
     @{ file = "main_condor.py"; args = @() },

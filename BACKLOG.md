@@ -3,6 +3,64 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Bank Nifty order flow: own feed process built, closes the permanent book_imbalance gap (added 2026-08-16)
+
+Follow-up to the "decision_log staleness" entry directly below: while
+investigating it, found `orderflow_feed.py` had only ever subscribed to
+NIFTY strikes (confirmed via its live state file: tracked strikes
+24100-24650, never anything near Bank Nifty's ~50000+ range) -- no
+`--underlying`/`--symbol` argument existed at all. That meant Bank
+Nifty's `book_imbalance`/`total_quantity_imbalance` were structurally
+guaranteed None forever, a coverage gap no amount of waiting would fix
+(unlike NIFTY's own gap, which was about decision_log not growing).
+
+Built `orderflow_feed_banknifty.py` as a thin wrapper around the same
+`OrderFlowFeed` class (it already took `state_path` as a constructor
+argument -- nothing about the class itself was NIFTY-specific), pointed
+at `dhan_source.BANKNIFTY_UNDERLYING_SCRIP/_SEG`, its own state file
+(`state/orderflow_banknifty.json`), and its own spread-recording
+directory (`logs/orderflow_banknifty/`, via a per-process
+`orderflow_recorder.RECORD_DIR` override -- same pattern
+`trade_tracker.JOURNAL_PATH` already uses for every NIFTY/Bank Nifty
+pair). Also had to parameterize two modules that WERE genuinely
+NIFTY-hardcoded (unlike `dhan_source.get_nifty_snapshot`, which already
+took `underlying_scrip`/`underlying_seg`):
+
+  - `instrument_master.py`: `UNDERLYING = "NIFTY"` and a single
+    `instrument_master_nifty.json` cache were module constants, not
+    parameters. Every function now takes `underlying` (default "NIFTY",
+    so nothing about NIFTY's own behaviour changed), with a separate
+    cache file per underlying. Careful check: "BANKNIFTY" contains
+    "NIFTY" as a substring, so the underlying filter uses an exact match
+    against `UNDERLYING_SYMBOL`, not a substring test -- verified with a
+    test that puts both symbols in the same fake CSV and confirms no
+    cross-contamination.
+  - `main_live_banknifty.py` / `main_live_banknifty_sentinel.py`: added
+    `orderflow.STATE_PATH = .../orderflow_banknifty.json` alongside their
+    existing `tt.JOURNAL_PATH`-style per-process overrides --
+    `decision_log._candidate_record()` calls `orderflow.book_imbalance()`
+    with no explicit path, so without this it would keep silently
+    defaulting to NIFTY's own feed file. Observability only (recorded for
+    future research, never gates a decision -- see decision_log.py's own
+    comment on that field); confirmed via the same isolation check used
+    for Sentinel: importing main_live.py alone still resolves
+    `orderflow.STATE_PATH` to NIFTY's default, `config.STRATEGY_NAME`
+    stays "Anchor".
+
+Added to `automation/start_trading.ps1` (`orderflow_feed_banknifty.py
+--strike-range 600`) alongside NIFTY's own `--strike-range 300`. That
+600 is a first-pass estimate -- double NIFTY's, matching Bank Nifty's
+100pt vs 50pt strike spacing -- not independently tuned against real
+Bank Nifty book data yet.
+
+STILL NOT DONE: `orderflow.py`'s CLI health check and `spread_study.py`'s
+analysis both still only ever look at NIFTY's own state/recording paths
+(their own module defaults). Bank Nifty's spread data will accumulate in
+`logs/orderflow_banknifty/` starting whenever this process is first run,
+but nothing yet reads it back for analysis the way `spread_study.py`
+already does for NIFTY -- worth doing once there's a few days of Bank
+Nifty data to look at.
+
 ## decision_log.jsonl silently stopped growing for 2+ weeks -- watchdog extended, root cause only partly confirmed (added 2026-08-16)
 
 Investigating "do we have enough order-flow data to analyse book_imbalance"

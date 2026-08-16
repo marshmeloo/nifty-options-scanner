@@ -112,6 +112,7 @@ import snapshot_recorder
 import logic_version
 import workspace
 import market_regime
+import orderflow
 
 assert tt.JOURNAL_PATH.name == "trade_journal.jsonl", (
     "trade_tracker captured Nifty's JOURNAL_PATH -- import order regressed, "
@@ -126,6 +127,13 @@ snapshot_recorder.SNAPSHOT_DIR = Path(__file__).parent / "logs" / "snapshots_ban
 snapshot_recorder.SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 decision_log.LOG_PATH = Path(__file__).parent / "logs" / "decision_log_banknifty.jsonl"
 market_regime.BASELINE_PATH = market_regime.STATE_DIR / "regime_baseline_banknifty.json"
+# Without this, decision_log._candidate_record()'s orderflow.book_imbalance()/
+# total_quantity_imbalance() calls (made with no explicit state path) would
+# silently default to orderflow.STATE_PATH's own default -- NIFTY's own feed
+# file, which orderflow_feed_banknifty.py never writes to. Observability
+# only: recorded into decision_log for future research, never gates a
+# trade decision (see decision_log.py's own comment on that field).
+orderflow.STATE_PATH = Path(__file__).parent / "state" / "orderflow_banknifty.json"
 
 POLL_INTERVAL_SECONDS = 30
 MARKET_OPEN = dtime(9, 15)
