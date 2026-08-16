@@ -38,13 +38,29 @@ the backtested totals (see README/BACKLOG 2026-08-02 entries for what to expect)
 
 ### Telegram position notifier (optional, added 2026-08-16)
 
-Posts a snapshot of every currently open position (both indices, every
-strategy -- momentum, condor, directional spread, price action) to
-Telegram every 15 minutes during market hours, so positions are visible
-away from the screen. Only sends when something is actually open --
-silent on a flat day, not a ping every 15 minutes regardless. Reuses
-`dashboard_server.build_state()` directly, so it's never a second,
-possibly-drifted view of "what's open" from the live dashboard.
+Three message types, all via the same process:
+1. **Position snapshot**, every 15 minutes during market hours -- both
+   indices, every strategy (momentum, condor, directional spread, price
+   action). Only sends when something is actually open -- silent on a
+   flat day, not a ping every 15 minutes regardless. Reuses
+   `dashboard_server.build_state()` directly, so it's never a second,
+   possibly-drifted view of "what's open" from the live dashboard.
+2. **Pre-market summary**, once, right after the process starts -- a
+   condensed version of `premarket.py`'s brief (overall lean, expiry,
+   previous session, Bank Nifty divergence, smart money, PCR/max pain,
+   event/news flags). Reads `logs/premarket_brief_<date>.json`
+   (`premarket.py` now saves this alongside its markdown); skips
+   gracefully if that file isn't there yet.
+3. **Bias-shift alert**, whenever NIFTY's or Bank Nifty's market bias
+   label actually changes since the last check -- not on every cycle it
+   stays changed. See `_check_bias_shift()`'s own docstring for a real
+   noise pattern (bias flipping twice within 90 seconds around a PCR
+   threshold) found in recorded data before this was built, and how the
+   15-minute check cadence itself mostly filters it out.
+
+Uses emoji (🟢/🔴/⚪ for P&L sign per line and the total, 📈/📉/➖ for an
+index's own subtotal and for bias direction) -- explicit ask, not this
+project's usual style elsewhere.
 
 **One-time setup** (see `telegram_notifier.py`'s own docstring for the
 exact steps): create a bot via @BotFather on Telegram to get
@@ -52,14 +68,16 @@ exact steps): create a bot via @BotFather on Telegram to get
 `TELEGRAM_CHAT_ID`. Set both as environment variables, same pattern as
 `DHAN_ACCESS_TOKEN`.
 
-**Not yet wired into `automation/start_trading.ps1`** -- run it by hand
-first (`python3 position_notifier.py --once` is a good one-shot test
-once you have a real open position) and confirm a message actually lands
-in your chat before adding it to the automated startup.
+**Wired into `automation/start_trading.ps1` as of 2026-08-16** -- starts
+automatically every morning, after `premarket.py` (so the pre-market
+summary has something to read on its first cycle) and alongside the
+other twelve processes. Unlike the Dhan-credentials guard, missing
+Telegram credentials do NOT block the rest of automation -- it just logs
+failed-send lines to its own log file every cycle instead.
 
 | Command | Purpose | When |
 |---|---|---|
-| `python3 position_notifier.py` | Runs forever, checks every 15 min | Once Telegram credentials are set |
+| `python3 position_notifier.py` | Runs automatically via `start_trading.ps1`; manual command for standalone testing | Once Telegram credentials are set |
 | `python3 position_notifier.py --interval 300` | Same, but every 5 min | Useful while testing |
 | `python3 position_notifier.py --once` | Single check, then exit | Manual test that a real position actually reaches Telegram |
 

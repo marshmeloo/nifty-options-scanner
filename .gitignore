@@ -24,6 +24,7 @@ cmd-print-*.txt
 sample_data.csv
 state/*.json
 logs/premarket_brief_*.md
+logs/premarket_brief_*.json
 logs/condor_*.log
 logs/condor_journal.jsonl
 # Per-cycle audit trail: runtime data, ~5 MB/day. Was tracked, which made

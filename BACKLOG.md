@@ -3,6 +3,43 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Telegram notifications: positions, pre-market summary, bias shifts (added 2026-08-16)
+
+Built because positions weren't visible away from the screen. Three
+message types from one process (`position_notifier.py`, wired into
+`automation/start_trading.ps1`): a position snapshot every 15 min
+(silent when flat), a condensed pre-market summary once at startup, and
+an intraday bias-shift alert whenever NIFTY's or Bank Nifty's
+`market_bias` label actually changes.
+
+WORTH KNOWING for the bias-shift feature specifically: checked real
+recorded `decision_log_banknifty.jsonl` data before building this and
+found NIFTY's bias flipping `bearish -> neutral/range -> bearish` twice
+within 90 seconds on 2026-08-14, from PCR oscillating right at the
+bearish threshold (`compute_market_bias()`'s score boundary is an exact
++-1.0 cutoff, no hysteresis). The alert only fires on a change from the
+IMMEDIATELY PRIOR check (persisted in `state/position_notifier_bias.json`),
+sampled on the same 15-minute cadence as position snapshots -- not
+continuously -- so most flicker like that never even gets sampled. Not
+a full fix for the underlying noise (`compute_market_bias()` itself
+still has no hysteresis/debounce), just a mitigation at the
+notification layer. If this still turns out noisy in practice, the
+real fix belongs in `compute_market_bias()` itself (e.g. a small buffer
+around the +-1.0 threshold), not another layer of notifier-side
+patching.
+
+`premarket.py` now saves its brief as JSON (`logs/premarket_brief_<date>.json`)
+alongside the existing markdown, so `position_notifier.py` can reuse the
+real computed brief instead of re-running `build_brief()` a second time
+(duplicate Dhan/NSE/global-cues calls) or parsing markdown back apart.
+
+Uses emoji throughout (🟢/🔴/⚪, 📈/📉/➖) -- an explicit user request,
+not this project's usual style elsewhere; kept scoped to
+`position_notifier.py`'s own messages.
+
+50 tests across `position_notifier.py`, `telegram_notifier.py`, and the
+premarket JSON output.
+
 ## Bank Nifty order flow: own feed process built, closes the permanent book_imbalance gap (added 2026-08-16)
 
 Follow-up to the "decision_log staleness" entry directly below: while

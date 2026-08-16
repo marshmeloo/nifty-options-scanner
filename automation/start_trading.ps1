@@ -9,7 +9,7 @@
   this project is analytics/paper-tracking only (see each script's own
   docstring), and dashboard_server.py is read-only (never writes state,
   never talks to Dhan/NSE itself). This just automates what you'd
-  otherwise do by opening twelve terminals by hand each morning.
+  otherwise do by opening thirteen terminals by hand each morning.
 
   REQUIRES DHAN_ACCESS_TOKEN / DHAN_CLIENT_ID to already be set as
   PERSISTENT Windows USER environment variables (via `setx`, run in
@@ -114,6 +114,19 @@ if ($premarketExit -eq 0) {
 # processes are unaffected (confirmed by importing them in isolation
 # after the Sentinel files were added; STRATEGY_NAME stayed "Anchor",
 # CLUSTER_CAP_ENABLED stayed False).
+#
+# position_notifier.py (added 2026-08-16): posts open positions,
+# today's pre-market summary, and intraday bias-shift alerts to
+# Telegram -- see that file's own docstring. Deliberately started AFTER
+# this array's other entries would already have premarket.py's JSON
+# brief on disk (premarket.py above runs -Wait, blocking, before this
+# whole array starts), so its startup pre-market message has something
+# to read on the very first cycle. Needs TELEGRAM_BOT_TOKEN /
+# TELEGRAM_CHAT_ID to actually deliver anything -- unlike the Dhan-
+# credentials guard above, this is NOT required to start: if unset, it
+# just logs failed-send lines to its own log file every cycle instead
+# of blocking the other twelve processes, since this is a convenience
+# notifier, not something trading itself depends on.
 $scripts = @(
     @{ file = "orderflow_feed.py"; args = @("--strike-range", "300") },
     @{ file = "orderflow_feed_banknifty.py"; args = @("--strike-range", "600") },
@@ -126,7 +139,8 @@ $scripts = @(
     @{ file = "main_live_banknifty.py"; args = @() },
     @{ file = "main_live_banknifty_sentinel.py"; args = @() },
     @{ file = "main_directional_spread_banknifty.py"; args = @() },
-    @{ file = "dashboard_server.py"; args = @() }
+    @{ file = "dashboard_server.py"; args = @() },
+    @{ file = "position_notifier.py"; args = @() }
 )
 
 $tracked = @{}

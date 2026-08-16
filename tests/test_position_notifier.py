@@ -89,7 +89,7 @@ def test_single_nifty_momentum_trade_is_included():
     assert "162.8" in msg
     assert "+12.1%" in msg
     assert "R +0.80" in msg
-    assert "Total open P&L: Rs +1,320" in msg
+    assert "Total open P&L: ₹+1,320" in msg
 
 
 def test_bank_nifty_section_only_appears_when_it_has_something_open():
@@ -111,7 +111,7 @@ def test_both_indices_included_when_both_have_positions():
     assert "NIFTY" in msg and "Bank Nifty" in msg
     assert "24300CE" in msg
     assert "51200PE" in msg
-    assert "Total open P&L: Rs +450" in msg
+    assert "Total open P&L: ₹+450" in msg
 
 
 def test_condor_position_included_when_open():
@@ -121,7 +121,7 @@ def test_condor_position_included_when_open():
     assert "Condor" in msg
     assert "24300CE/24000PE" in msg
     assert "24500CE/23800PE" in msg
-    assert "Rs +850" in msg
+    assert "₹+850" in msg
 
 
 def test_closed_condor_position_excluded():
@@ -196,7 +196,7 @@ def test_total_includes_condor_and_spread_mtm_not_just_momentum():
 
     msg = pn.build_snapshot_message(state)
 
-    assert "Total open P&L: Rs -397" in msg
+    assert "Total open P&L: ₹-397" in msg
 
 
 def test_total_sums_every_category_across_both_indices():
@@ -208,7 +208,7 @@ def test_total_sums_every_category_across_both_indices():
 
     msg = pn.build_snapshot_message(state)
 
-    assert "Total open P&L: Rs +1,150" in msg
+    assert "Total open P&L: ₹+1,150" in msg
 
 
 # --- check_once --------------------------------------------------------------
@@ -283,6 +283,7 @@ def test_lifecycle_message_does_not_raise_on_failure(monkeypatch, caplog):
 def test_run_forever_sends_a_start_message_immediately_even_if_market_closed(monkeypatch):
     lifecycle_calls = []
     monkeypatch.setattr(pn, "_send_lifecycle_message", lambda text: lifecycle_calls.append(text))
+    monkeypatch.setattr(pn, "_send_premarket_summary", lambda: None)
     monkeypatch.setattr(pn, "market_is_open", lambda now=None: False)  # market closed
     monkeypatch.setattr(pn, "check_once", lambda: (_ for _ in ()).throw(KeyboardInterrupt()))
 
@@ -295,6 +296,7 @@ def test_run_forever_sends_a_start_message_immediately_even_if_market_closed(mon
 def test_run_forever_sends_a_stop_message_on_keyboard_interrupt(monkeypatch):
     lifecycle_calls = []
     monkeypatch.setattr(pn, "_send_lifecycle_message", lambda text: lifecycle_calls.append(text))
+    monkeypatch.setattr(pn, "_send_premarket_summary", lambda: None)
     monkeypatch.setattr(pn, "check_once", lambda: (_ for _ in ()).throw(KeyboardInterrupt()))
 
     pn.run_forever(interval_seconds=1)  # must not raise -- KeyboardInterrupt is caught
@@ -308,6 +310,242 @@ def test_run_forever_returns_cleanly_on_keyboard_interrupt(monkeypatch):
     """KeyboardInterrupt must be swallowed after the stop message, not
     propagated -- a Ctrl+C exit should look clean, not dump a traceback."""
     monkeypatch.setattr(pn, "_send_lifecycle_message", lambda text: None)
+    monkeypatch.setattr(pn, "_send_premarket_summary", lambda: None)
     monkeypatch.setattr(pn, "check_once", lambda: (_ for _ in ()).throw(KeyboardInterrupt()))
 
     pn.run_forever(interval_seconds=1)  # must return, not raise
+
+
+def test_run_forever_sends_premarket_summary_after_start_message(monkeypatch):
+    order = []
+    monkeypatch.setattr(pn, "_send_lifecycle_message", lambda text: order.append(("lifecycle", text)))
+    monkeypatch.setattr(pn, "_send_premarket_summary", lambda: order.append(("premarket",)))
+    monkeypatch.setattr(pn, "check_once", lambda: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    pn.run_forever(interval_seconds=1)
+
+    assert order[0] == ("lifecycle", order[0][1]) and "started" in order[0][1]
+    assert order[1] == ("premarket",)
+
+
+# --- icon helpers --------------------------------------------------------------
+
+def test_pnl_icon_positive_negative_zero_and_none():
+    assert pn._pnl_icon(100) == "\U0001f7e2"
+    assert pn._pnl_icon(-100) == "\U0001f534"
+    assert pn._pnl_icon(0) == "⚪"
+    assert pn._pnl_icon(None) == "⚪"
+
+
+def test_direction_icon_positive_negative_zero_and_none():
+    assert pn._direction_icon(100) == "\U0001f4c8"
+    assert pn._direction_icon(-100) == "\U0001f4c9"
+    assert pn._direction_icon(0) == "➖"
+    assert pn._direction_icon(None) == "➖"
+
+
+def test_bias_icon_matches_on_substring_not_exact_string():
+    assert pn._bias_icon("bullish") == "\U0001f4c8"
+    assert pn._bias_icon("leaning bullish (2/3 signals)") == "\U0001f4c8"
+    assert pn._bias_icon("bearish") == "\U0001f4c9"
+    assert pn._bias_icon("leaning bearish (3/4 signals) -- caveat: ...") == "\U0001f4c9"
+    assert pn._bias_icon("neutral/range") == "➖"
+    assert pn._bias_icon("mixed / neutral") == "➖"
+    assert pn._bias_icon(None) == "➖"
+    assert pn._bias_icon("") == "➖"
+
+
+# --- premarket summary -----------------------------------------------------------
+
+def _full_premarket_brief():
+    return {
+        "bias": "leaning bullish (2/3 signals)",
+        "expiry": {"expiry": "2026-08-18", "days_to_expiry": 4, "is_expiry_day": False},
+        "previous_session": {"close": 24395.85, "close_position_pct": 70.3},
+        "banknifty": {"divergence": {"read": "confirming", "detail": "..."}},
+        "smart_money": {"lean": "bearish"},
+        "chain_context": {"pcr": 0.83, "max_pain_strike": 24400.0},
+        "event_today": None,
+        "news": {"risk": {"level": "normal", "categories_hit": []}},
+    }
+
+
+def test_premarket_message_none_when_brief_empty():
+    assert pn.build_premarket_message({}) is None
+    assert pn.build_premarket_message(None) is None
+
+
+def test_premarket_message_includes_bias_and_expiry():
+    msg = pn.build_premarket_message(_full_premarket_brief())
+    assert "leaning bullish (2/3 signals)" in msg
+    assert "\U0001f4c8" in msg  # bullish icon
+    assert "2026-08-18" in msg
+    assert "4 day(s) away" in msg
+
+
+def test_premarket_message_flags_expiry_day():
+    brief = _full_premarket_brief()
+    brief["expiry"] = {"expiry": "2026-08-16", "days_to_expiry": 0, "is_expiry_day": True}
+    msg = pn.build_premarket_message(brief)
+    assert "TODAY IS EXPIRY DAY" in msg
+
+
+def test_premarket_message_shows_no_flags_when_nothing_flagged():
+    msg = pn.build_premarket_message(_full_premarket_brief())
+    assert "No event/news risk flagged today" in msg
+    assert "⚠️" not in msg
+
+
+def test_premarket_message_flags_event_and_elevated_news():
+    brief = _full_premarket_brief()
+    brief["event_today"] = "RBI Policy"
+    brief["news"] = {"risk": {"level": "elevated", "categories_hit": ["rbi_policy"]}}
+    msg = pn.build_premarket_message(brief)
+    assert "Event flagged: RBI Policy" in msg
+    assert "News risk: elevated (rbi_policy)" in msg
+    assert "No event/news risk flagged today" not in msg
+
+
+def test_premarket_message_omits_expiry_section_on_error():
+    brief = _full_premarket_brief()
+    brief["expiry"] = {"error": "network down"}
+    msg = pn.build_premarket_message(brief)
+    assert "Expiry:" not in msg
+
+
+def test_premarket_message_omits_smart_money_when_unavailable():
+    brief = _full_premarket_brief()
+    brief["smart_money"] = {"lean": "unavailable", "detail": "no report"}
+    msg = pn.build_premarket_message(brief)
+    assert "Smart money" not in msg
+
+
+def test_send_premarket_summary_skips_when_file_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(pn.premarket, "brief_json_path", lambda: tmp_path / "absent.json")
+    sent = []
+    monkeypatch.setattr(pn.telegram_notifier, "send_message", lambda *a, **kw: sent.append(a))
+    pn._send_premarket_summary()  # must not raise
+    assert sent == []
+
+
+def test_send_premarket_summary_sends_when_file_present(tmp_path, monkeypatch):
+    import json as jsonlib
+    path = tmp_path / "brief.json"
+    path.write_text(jsonlib.dumps(_full_premarket_brief()))
+    monkeypatch.setattr(pn.premarket, "brief_json_path", lambda: path)
+    sent = []
+    monkeypatch.setattr(pn.telegram_notifier, "send_message", lambda text, **kw: sent.append(text))
+    pn._send_premarket_summary()
+    assert len(sent) == 1
+    assert "leaning bullish" in sent[0]
+
+
+def test_send_premarket_summary_does_not_raise_on_malformed_json(tmp_path, monkeypatch):
+    path = tmp_path / "brief.json"
+    path.write_text("not valid json{{{")
+    monkeypatch.setattr(pn.premarket, "brief_json_path", lambda: path)
+    sent = []
+    monkeypatch.setattr(pn.telegram_notifier, "send_message", lambda *a, **kw: sent.append(a))
+    pn._send_premarket_summary()  # must not raise
+    assert sent == []
+
+
+# --- bias-shift alerts -----------------------------------------------------------
+
+def test_bias_shift_first_sighting_records_but_does_not_alert():
+    """No prior memory of this index yet (fresh install / just restarted)
+    must not be treated as a "shift from nothing" -- that would false-alarm
+    on every single restart."""
+    state = {}
+    bias = {"label": "bullish", "score": 1.5, "reasons": ["Trend: uptrend"]}
+    result = pn._check_bias_shift("NIFTY", "NIFTY", bias, state)
+    assert result is None
+    assert state["NIFTY"]["label"] == "bullish"
+
+
+def test_bias_shift_same_label_no_alert():
+    state = {"NIFTY": {"label": "bullish", "since": "10:00"}}
+    bias = {"label": "bullish", "score": 1.2, "reasons": []}
+    result = pn._check_bias_shift("NIFTY", "NIFTY", bias, state)
+    assert result is None
+
+
+def test_bias_shift_real_change_produces_a_message():
+    state = {"NIFTY": {"label": "neutral/range", "since": "10:15"}}
+    bias = {"label": "bullish", "score": 1.5, "reasons": ["Trend: uptrend (higher highs)", "ROC +0.62%"]}
+    result = pn._check_bias_shift("NIFTY", "NIFTY", bias, state)
+    assert result is not None
+    assert "NIFTY" in result
+    assert "neutral/range" in result and "bullish" in result
+    assert "score +1.50" in result
+    assert "Trend: uptrend (higher highs)" in result
+    assert "since 10:15" in result
+    assert state["NIFTY"]["label"] == "bullish"
+
+
+def test_bias_shift_missing_label_is_a_no_op():
+    state = {"NIFTY": {"label": "bullish", "since": "10:00"}}
+    result = pn._check_bias_shift("NIFTY", "NIFTY", {}, state)
+    assert result is None
+    assert state["NIFTY"]["label"] == "bullish"   # unchanged
+
+
+def test_check_and_alert_bias_shifts_covers_both_indices_independently(tmp_path, monkeypatch):
+    monkeypatch.setattr(pn, "BIAS_STATE_PATH", tmp_path / "bias.json")
+    state = {
+        "latest_cycle": {"market_bias": {"label": "bullish", "score": 1.5, "reasons": []}},
+        "banknifty": {"latest_cycle": {"market_bias": {"label": "bearish", "score": -1.2, "reasons": []}}},
+    }
+    # seed prior state so both count as real shifts
+    pn.atomic_write_json(pn.BIAS_STATE_PATH, {
+        "NIFTY": {"label": "neutral/range", "since": "10:00"},
+        "BANKNIFTY": {"label": "neutral/range", "since": "10:00"},
+    })
+
+    sent = []
+    monkeypatch.setattr(pn.telegram_notifier, "send_message", lambda text, **kw: sent.append(text))
+
+    pn._check_and_alert_bias_shifts(state)
+
+    assert len(sent) == 2
+    assert any("NIFTY" in m and "Bank Nifty" not in m for m in sent)
+    assert any("Bank Nifty" in m for m in sent)
+
+    saved = pn._load_bias_state()
+    assert saved["NIFTY"]["label"] == "bullish"
+    assert saved["BANKNIFTY"]["label"] == "bearish"
+
+
+def test_check_and_alert_bias_shifts_persists_state_to_disk(tmp_path, monkeypatch):
+    monkeypatch.setattr(pn, "BIAS_STATE_PATH", tmp_path / "bias.json")
+    state = {"latest_cycle": {"market_bias": {"label": "bullish", "score": 1.0, "reasons": []}}}
+    monkeypatch.setattr(pn.telegram_notifier, "send_message", lambda *a, **kw: None)
+
+    pn._check_and_alert_bias_shifts(state)
+
+    assert pn.BIAS_STATE_PATH.exists()
+    assert pn._load_bias_state()["NIFTY"]["label"] == "bullish"
+
+
+def test_check_and_alert_bias_shifts_does_not_raise_when_send_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(pn, "BIAS_STATE_PATH", tmp_path / "bias.json")
+    pn.atomic_write_json(pn.BIAS_STATE_PATH, {"NIFTY": {"label": "neutral/range", "since": "10:00"}})
+    state = {"latest_cycle": {"market_bias": {"label": "bullish", "score": 1.0, "reasons": []}}}
+
+    def _boom(*a, **kw):
+        raise ConnectionError("network down")
+    monkeypatch.setattr(pn.telegram_notifier, "send_message", _boom)
+
+    pn._check_and_alert_bias_shifts(state)  # must not raise
+
+
+def test_check_once_also_checks_bias_shifts(monkeypatch, tmp_path):
+    monkeypatch.setattr(pn, "market_is_open", lambda now=None: True)
+    monkeypatch.setattr(pn.dashboard_server, "build_state", lambda: _flat_state())
+    monkeypatch.setattr(pn.telegram_notifier, "send_message", lambda *a, **kw: None)
+    calls = []
+    monkeypatch.setattr(pn, "_check_and_alert_bias_shifts", lambda state: calls.append(state))
+
+    pn.check_once()
+
+    assert len(calls) == 1

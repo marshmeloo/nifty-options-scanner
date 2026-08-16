@@ -1,47 +1,41 @@
 """
-Posts a snapshot of every currently open position (both indices, every
-strategy) to Telegram on a fixed interval during market hours -- built
-2026-08-16 so open positions are visible away from the screen, not just
-on the live dashboard.
+Posts to Telegram so open positions, today's pre-market lean, and
+intraday bias shifts are visible away from the screen, not just on the
+live dashboard. Built 2026-08-16.
 
-WHAT COUNTS AS "OPEN"
-----------------------
+THREE MESSAGE TYPES
+--------------------
+1. Position snapshot, every CHECK_INTERVAL_SECONDS during market hours.
+   Only sends when something is actually open -- a ping every 15 minutes
+   on a flat day would just be noise you'd start ignoring.
+2. Pre-market summary, once, right after run_forever() starts (reads
+   today's premarket.py JSON output -- see brief_json_path()).
+3. Bias-shift alert, whenever NIFTY's or Bank Nifty's market_bias label
+   actually changes since the last check (not on every cycle it stays
+   changed -- see _check_bias_shift()'s own docstring on why, including
+   a real noise pattern found in recorded data before this was built).
+
+WHAT COUNTS AS "OPEN" (message type 1)
+----------------------------------------
 Reuses dashboard_server.build_state() -- the exact same function that
 feeds the live dashboard -- so this is never a second, possibly-drifted
 implementation of "what's open." Covers, per index (NIFTY and Bank
-Nifty):
-  - Momentum (Anchor) open trades
-  - Iron condor position (if status == OPEN)
-  - Directional spread position (if status == OPEN)
-  - Price-action open trades
-
-NOT covered yet: Sentinel's own positions (main_live_sentinel.py /
-main_live_banknifty_sentinel.py). The live dashboard itself doesn't
-surface those either (only the /pnl historical dashboard does), so this
-matches what checking the live dashboard right now would show you.
-
-ONLY SENDS WHEN SOMETHING IS ACTUALLY OPEN
---------------------------------------------
-A ping every 15 minutes on a flat day would just be noise you'd start
-ignoring, and defeats the point of a notification -- something you can
-trust means "look at this." If nothing is open, this stays silent.
+Nifty): momentum (Anchor) open trades, iron condor (if OPEN), directional
+spread (if OPEN), price-action open trades. NOT covered yet: Sentinel's
+own positions -- the live dashboard itself doesn't surface those either.
 
 START/STOP MESSAGES
 --------------------
-run_forever() sends one Telegram message the moment it starts (proves
-delivery is actually working right now, market open or not -- useful
-exactly when you can't tell otherwise) and one on a clean Ctrl+C stop.
-The stop message can only fire on a graceful exit; a forceful kill
-(Windows' Stop-Process -Force, what stop_trading.ps1 uses) ends the
-process with zero code execution, so there's nothing to hook -- see
-run_forever()'s own docstring.
+run_forever() also sends one Telegram message the moment it starts
+(proves delivery is actually working right now, market open or not) and
+one on a clean Ctrl+C stop. The stop message can only fire on a graceful
+exit -- see run_forever()'s own docstring on why a forceful kill can't
+trigger it.
 
 SETUP
 -----
 Needs TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID -- see telegram_notifier.py's
-own docstring for how to get them. Not yet wired into
-automation/start_trading.ps1 -- run it by hand first and confirm a real
-message actually lands in your chat before adding it there.
+own docstring for how to get them.
 
 Run:
     python3 position_notifier.py                  # every 15 min, market hours only
@@ -50,12 +44,16 @@ Run:
 """
 
 import argparse
+import json
 import logging
 import time
 from datetime import datetime, time as dtime
+from pathlib import Path
 
 import dashboard_server
+import premarket
 import telegram_notifier
+from atomic_state import atomic_write_json
 
 log = logging.getLogger("position_notifier")
 
@@ -69,12 +67,41 @@ MARKET_CLOSE = dtime(15, 40)
 
 CHECK_INTERVAL_SECONDS = 900   # 15 minutes
 
+BIAS_STATE_PATH = Path(__file__).parent / "state" / "position_notifier_bias.json"
+
 
 def market_is_open(now: datetime = None) -> bool:
     now = now or datetime.now()
     if now.weekday() >= 5:
         return False
     return MARKET_OPEN <= now.time() <= MARKET_CLOSE
+
+
+def _pnl_icon(value) -> str:
+    """Green/red/white circle by sign -- None (unavailable) and exactly 0
+    both read as white, since neither one is a directional read."""
+    if value is None or value == 0:
+        return "⚪"       # ⚪
+    return "\U0001f7e2" if value > 0 else "\U0001f534"   # 🟢 / 🔴
+
+
+def _direction_icon(value) -> str:
+    """Chart-up/chart-down/flat by sign -- used where the number is a
+    trend-like read (an index's subtotal, a bias label) rather than a
+    single line's own P&L."""
+    if value is None or value == 0:
+        return "➖"       # ➖
+    return "\U0001f4c8" if value > 0 else "\U0001f4c9"   # 📈 / 📉
+
+
+def _bias_icon(label) -> str:
+    if not label:
+        return "➖"
+    if "bullish" in label:
+        return "\U0001f4c8"
+    if "bearish" in label:
+        return "\U0001f4c9"
+    return "➖"
 
 
 def _momentum_lines(trades: list) -> tuple:
@@ -90,8 +117,8 @@ def _momentum_lines(trades: list) -> tuple:
         pnl_pct = t.get("running_pnl_pct", 0) or 0
         subtotal += pnl
         lines.append(
-            f"  {t['strike']:.0f}{t['option_type']}  entry {t['entry']} -> now {t.get('current_ltp', '?')}  "
-            f"{pnl_pct:+.1f}% (Rs {pnl:+,.0f}){r_note}"
+            f"  {_pnl_icon(pnl)} {t['strike']:.0f}{t['option_type']}  entry {t['entry']} → now {t.get('current_ltp', '?')}  "
+            f"{pnl_pct:+.1f}% (₹{pnl:+,.0f}){r_note}"
         )
     return lines, subtotal
 
@@ -104,8 +131,8 @@ def _condor_line(position: dict) -> tuple:
         return None, 0
     plan = position.get("plan") or {}
     mtm = position.get("current_mtm_pnl_inr")
-    mtm_note = f"Rs {mtm:+,.0f}" if mtm is not None else "MTM unavailable"
-    line = (f"  Condor: short {plan.get('short_ce_strike')}CE/{plan.get('short_pe_strike')}PE, "
+    mtm_note = f"₹{mtm:+,.0f}" if mtm is not None else "MTM unavailable"
+    line = (f"  {_pnl_icon(mtm)} Condor: short {plan.get('short_ce_strike')}CE/{plan.get('short_pe_strike')}PE, "
             f"hedge {plan.get('hedge_ce_strike')}CE/{plan.get('hedge_pe_strike')}PE  {mtm_note}")
     return line, (mtm or 0)
 
@@ -115,9 +142,9 @@ def _spread_line(position: dict) -> tuple:
         return None, 0
     plan = position.get("plan") or {}
     mtm = position.get("current_mtm_pnl_inr")
-    mtm_note = f"Rs {mtm:+,.0f}" if mtm is not None else "MTM unavailable"
+    mtm_note = f"₹{mtm:+,.0f}" if mtm is not None else "MTM unavailable"
     direction = "Bull put" if plan.get("direction") == "PE" else "Bear call"
-    line = f"  Directional spread: {direction} {plan.get('short_strike')}/{plan.get('hedge_strike')}  {mtm_note}"
+    line = f"  {_pnl_icon(mtm)} Directional spread: {direction} {plan.get('short_strike')}/{plan.get('hedge_strike')}  {mtm_note}"
     return line, (mtm or 0)
 
 
@@ -151,7 +178,7 @@ def _index_section(label: str, momentum_trades: list, condor_position: dict,
 
     if not body:
         return [], 0
-    return [label] + body, subtotal
+    return [f"{_direction_icon(subtotal)} {label}"] + body, subtotal
 
 
 def build_snapshot_message(state: dict = None):
@@ -180,10 +207,164 @@ def build_snapshot_message(state: dict = None):
     # spread positions were open with real non-zero MTM, but totals showed
     # Rs 0 since no momentum trade happened to be open at the same time).
     total_pnl = nifty_pnl + bn_pnl
-    header = f"Live positions -- {datetime.now().strftime('%H:%M:%S')}"
-    footer = f"Total open P&L: Rs {total_pnl:+,.0f}"
+    header = f"\U0001f4ca Live Positions — {datetime.now().strftime('%H:%M:%S')}"
+    footer = f"{_pnl_icon(total_pnl)} Total open P&L: ₹{total_pnl:+,.0f}"
     return "\n".join([header, ""] + sections + ["", footer])
 
+
+# --- pre-market summary -------------------------------------------------------
+
+def build_premarket_message(brief: dict):
+    """Condensed version of premarket.py's full brief -- the real thing runs
+    to a dozen sections, too much for a phone glance. Returns None only if
+    the brief itself is empty (should not normally happen)."""
+    if not brief:
+        return None
+
+    bias = brief.get("bias") or "unavailable"
+    lines = ["\U0001f305 Pre-Market Brief", "", f"{_bias_icon(bias)} Overall lean: {bias}"]
+
+    expiry = brief.get("expiry") or {}
+    if "error" not in expiry and expiry.get("expiry"):
+        note = f"\U0001f4c5 Expiry: {expiry['expiry']} ({expiry.get('days_to_expiry')} day(s) away)"
+        if expiry.get("is_expiry_day"):
+            note += " — TODAY IS EXPIRY DAY"
+        lines.append(note)
+
+    prev = brief.get("previous_session") or {}
+    if prev.get("close") is not None:
+        pos_pct = prev.get("close_position_pct")
+        pos_note = f", {pos_pct:.1f}% of day's range" if pos_pct is not None else ""
+        lines.append(f"Previous session: closed {prev['close']}{pos_note}")
+
+    bn_divergence = (brief.get("banknifty") or {}).get("divergence") or {}
+    if bn_divergence.get("read"):
+        lines.append(f"\U0001f3e6 Bank Nifty: {bn_divergence['read']}")
+
+    smart_money = brief.get("smart_money") or {}
+    if smart_money.get("lean") and smart_money["lean"] != "unavailable":
+        lines.append(f"\U0001f9e0 Smart money: {smart_money['lean']}")
+
+    chain_ctx = brief.get("chain_context") or {}
+    if "error" not in chain_ctx and chain_ctx.get("pcr") is not None:
+        pcr_line = f"⚖️ PCR {chain_ctx['pcr']}"
+        if chain_ctx.get("max_pain_strike") is not None:
+            pcr_line += f" | Max pain {chain_ctx['max_pain_strike']}"
+        lines.append(pcr_line)
+
+    event = brief.get("event_today")
+    news_risk = (brief.get("news") or {}).get("risk") or {}
+    news_elevated = news_risk.get("level") == "elevated"
+    if event:
+        lines.append(f"⚠️ Event flagged: {event} — expect elevated volatility/whipsaw")
+    if news_elevated:
+        cats = ", ".join(news_risk.get("categories_hit") or [])
+        lines.append(f"⚠️ News risk: elevated ({cats})")
+    if not event and not news_elevated:
+        lines.append("✅ No event/news risk flagged today")
+
+    return "\n".join(lines)
+
+
+def _send_premarket_summary():
+    """Best-effort -- if today's JSON brief doesn't exist yet (premarket.py
+    hasn't been run, or hasn't finished), logs and moves on rather than
+    blocking or erroring. In the intended automated flow
+    (start_trading.ps1 runs premarket.py to completion BEFORE starting
+    this process), the file is already there by the time this runs."""
+    path = premarket.brief_json_path()
+    if not path.exists():
+        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] no premarket brief found at {path.name}, skipping")
+        return
+    try:
+        brief = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] premarket brief unreadable, skipping: {e}")
+        return
+    message = build_premarket_message(brief)
+    if message is None:
+        return
+    try:
+        telegram_notifier.send_message(message)
+        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] premarket summary sent")
+    except Exception as e:
+        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] premarket summary send failed: {e}")
+
+
+# --- bias-shift alerts ---------------------------------------------------------
+
+def _load_bias_state() -> dict:
+    if BIAS_STATE_PATH.exists():
+        try:
+            return json.loads(BIAS_STATE_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _check_bias_shift(label: str, index_key: str, bias: dict, bias_state: dict):
+    """
+    Returns an alert message if `bias`'s label differs from what was
+    recorded at the LAST check for this index, else None. Always updates
+    bias_state in place when a label is available -- including the first
+    time an index is ever seen, which deliberately does NOT alert (no real
+    "shift" from nothing, just no prior memory yet, e.g. right after a
+    restart or on a fresh install).
+
+    WHY "differs from the last CHECK", not "differs from the last ALERT":
+    checked real recorded decision_log data (2026-08-16) and found NIFTY's
+    bias flipping bearish -> neutral/range -> bearish twice within 90
+    seconds, from PCR oscillating right at the bearish threshold. This
+    runs on the same CHECK_INTERVAL_SECONDS cadence as position snapshots
+    (default 15 min), not continuously, so most flicker like that is never
+    even sampled -- and because each check only compares against the
+    single immediately-prior check, a shift that reverses itself inside
+    one interval produces at most one message, not an escalating stream.
+    """
+    current_label = (bias or {}).get("label")
+    if not current_label:
+        return None
+    now_str = datetime.now().strftime("%H:%M")
+    prev = bias_state.get(index_key)
+    if prev is None:
+        bias_state[index_key] = {"label": current_label, "since": now_str}
+        return None
+    if prev.get("label") == current_label:
+        return None
+
+    old_icon, new_icon = _bias_icon(prev.get("label")), _bias_icon(current_label)
+    score = bias.get("score")
+    score_note = f"  (score {score:+.2f})" if score is not None else ""
+    reasons = bias.get("reasons") or []
+    reasons_line = " · ".join(reasons) if reasons else "no strong signal"
+    message = (
+        f"\U0001f504 Bias Shift — {label} — {datetime.now().strftime('%H:%M:%S')}\n\n"
+        f"{old_icon} {prev.get('label')} → {new_icon} {current_label}{score_note}\n"
+        f"{reasons_line}\n\n"
+        f"(was {prev.get('label')} since {prev.get('since', '?')})"
+    )
+    bias_state[index_key] = {"label": current_label, "since": now_str}
+    return message
+
+
+def _check_and_alert_bias_shifts(state: dict):
+    bias_state = _load_bias_state()
+    checks = (
+        ("NIFTY", "NIFTY", (state.get("latest_cycle") or {}).get("market_bias")),
+        ("Bank Nifty", "BANKNIFTY", ((state.get("banknifty") or {}).get("latest_cycle") or {}).get("market_bias")),
+    )
+    for label, key, bias in checks:
+        message = _check_bias_shift(label, key, bias, bias_state)
+        if message:
+            try:
+                telegram_notifier.send_message(message)
+                log.info(f"[{datetime.now().strftime('%H:%M:%S')}] bias shift alert sent for {label}")
+            except Exception as e:
+                log.info(f"[{datetime.now().strftime('%H:%M:%S')}] bias shift alert FAILED for {label}: {e}")
+    atomic_write_json(BIAS_STATE_PATH, bias_state)
+
+
+# --- lifecycle -------------------------------------------------------------------
 
 def _send_lifecycle_message(text: str):
     """
@@ -205,23 +386,28 @@ def check_once():
     if not market_is_open():
         log.info(f"[{datetime.now().strftime('%H:%M:%S')}] market closed, skipping")
         return
-    message = build_snapshot_message()
+    state = dashboard_server.build_state()
+
+    message = build_snapshot_message(state)
     if message is None:
         log.info(f"[{datetime.now().strftime('%H:%M:%S')}] nothing open, skipping")
-        return
-    try:
-        telegram_notifier.send_message(message)
-        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] snapshot sent")
-    except Exception as e:
-        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] send failed, will retry next cycle: {e}")
+    else:
+        try:
+            telegram_notifier.send_message(message)
+            log.info(f"[{datetime.now().strftime('%H:%M:%S')}] snapshot sent")
+        except Exception as e:
+            log.info(f"[{datetime.now().strftime('%H:%M:%S')}] send failed, will retry next cycle: {e}")
+
+    _check_and_alert_bias_shifts(state)
 
 
 def run_forever(interval_seconds: int = CHECK_INTERVAL_SECONDS):
     """
     Sends a start message immediately (proves Telegram delivery works right
-    now, whether or not the market's open) and a stop message on a clean
-    Ctrl+C exit. NOTE on the stop message: it can only fire on a graceful
-    stop where Python code actually gets to run -- Ctrl+C (KeyboardInterrupt)
+    now, whether or not the market's open), then today's pre-market summary
+    if it's available yet, then a stop message on a clean Ctrl+C exit.
+    NOTE on the stop message: it can only fire on a graceful stop where
+    Python code actually gets to run -- Ctrl+C (KeyboardInterrupt)
     qualifies. A forceful kill does not: Windows' Stop-Process -Force (what
     automation/start_trading.ps1's own stop_trading.ps1 uses) calls
     TerminateProcess, which ends the process with zero code execution -- no
@@ -231,17 +417,20 @@ def run_forever(interval_seconds: int = CHECK_INTERVAL_SECONDS):
     """
     log.info(f"position_notifier started -- checking every {interval_seconds}s during market hours.")
     _send_lifecycle_message(
-        f"position_notifier started -- checking positions every {interval_seconds}s during "
+        f"\U0001f7e2 position_notifier started — checking positions every {interval_seconds}s during "
         "market hours (stays silent when nothing is open). This message confirms Telegram "
         "delivery is working right now."
     )
+    _send_premarket_summary()
     try:
         while True:
             check_once()
             time.sleep(interval_seconds)
     except KeyboardInterrupt:
         log.info("position_notifier stopping (Ctrl+C).")
-        _send_lifecycle_message("position_notifier stopped (Ctrl+C) -- no more position snapshots until it's restarted.")
+        _send_lifecycle_message(
+            "\U0001f534 position_notifier stopped (Ctrl+C) — no more position snapshots until it's restarted."
+        )
 
 
 if __name__ == "__main__":

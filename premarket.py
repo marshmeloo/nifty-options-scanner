@@ -21,9 +21,16 @@ which this module doesn't touch.
 
 Run:
     python3 premarket.py
-Writes logs/premarket_brief_YYYYMMDD.md and prints the same to console.
+Writes logs/premarket_brief_YYYYMMDD.md (human-readable) and
+logs/premarket_brief_YYYYMMDD.json (the structured brief dict build_brief()
+returns, before rendering) and prints the markdown to console. The JSON
+exists so a downstream reader (position_notifier.py's condensed Telegram
+summary) can reuse the real computed brief instead of either re-running
+build_brief() a second time (duplicate Dhan/NSE/global-cues calls) or
+parsing the rendered markdown back apart.
 """
 
+import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -400,6 +407,11 @@ def render_markdown(brief: dict) -> str:
     return "\n".join(lines)
 
 
+def brief_json_path(date: datetime = None) -> Path:
+    date = date or datetime.now()
+    return LOG_DIR / f"premarket_brief_{date.strftime('%Y%m%d')}.json"
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     brief = build_brief()
@@ -407,6 +419,9 @@ def main():
 
     out_path = LOG_DIR / f"premarket_brief_{datetime.now().strftime('%Y%m%d')}.md"
     out_path.write_text(markdown)
+
+    json_path = brief_json_path()
+    json_path.write_text(json.dumps(brief, default=str, indent=2))
 
     print(markdown)
     print(f"\n[saved to {out_path}]")
