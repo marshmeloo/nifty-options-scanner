@@ -277,9 +277,9 @@ def test_profit_target_ignored_when_mtm_unavailable(state_paths, monkeypatch):
     assert position["status"] == "OPEN"
 
 
-def test_profit_milestone_stats_empty_journal():
+def test_profit_milestone_stats_empty_journal(state_paths):
     assert ct.profit_milestone_stats() == {"sample": 0, "milestones": []}
 
 
-def test_summarize_profit_milestones_with_no_history():
+def test_summarize_profit_milestones_with_no_history(state_paths):
     assert "none yet" in ct.summarize_profit_milestones()

@@ -465,7 +465,7 @@ def test_capture_efficiency_reflects_a_real_giveback(state_paths, monkeypatch):
     assert closed["capture_efficiency_pct"] < 100.0
 
 
-def test_profit_milestone_stats_empty_journal():
+def test_profit_milestone_stats_empty_journal(state_paths):
     stats = dst.profit_milestone_stats()
     assert stats["sample"] == 0
     assert stats["milestones"] == []
@@ -500,7 +500,7 @@ def test_profit_milestone_stats_excludes_entries_predating_the_tracking(state_pa
     assert stats["sample"] == 1
 
 
-def test_summarize_profit_milestones_with_no_history():
+def test_summarize_profit_milestones_with_no_history(state_paths):
     assert "none yet" in dst.summarize_profit_milestones()
 
 
