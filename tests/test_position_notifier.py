@@ -549,3 +549,127 @@ def test_check_once_also_checks_bias_shifts(monkeypatch, tmp_path):
     pn.check_once()
 
     assert len(calls) == 1
+
+
+# --- radar (top-scored candidate) -------------------------------------------------
+
+def _candidate(strike=24400.0, option_type="CE", raw_score=4.8, adjusted_score=4.2,
+              conviction_bar=5.0, final_decision="NOT_SELECTED"):
+    return {"strike": strike, "option_type": option_type, "raw_score": raw_score,
+            "adjusted_score": adjusted_score, "conviction_bar": conviction_bar,
+            "final_decision": final_decision}
+
+
+def test_radar_line_none_when_no_candidates():
+    assert pn._radar_line("NIFTY", []) is None
+
+
+def test_radar_line_uses_the_first_candidate_only():
+    candidates = [_candidate(strike=24400.0), _candidate(strike=24000.0, raw_score=3.0)]
+    line = pn._radar_line("NIFTY", candidates)
+    assert "24400CE" in line
+    assert "24000" not in line
+
+
+def test_radar_line_shows_raw_and_adjusted_when_they_differ():
+    line = pn._radar_line("NIFTY", [_candidate(raw_score=4.8, adjusted_score=4.2)])
+    assert "4.8 → 4.2" in line
+
+
+def test_radar_line_shows_just_one_score_when_unadjusted():
+    line = pn._radar_line("NIFTY", [_candidate(raw_score=5.0, adjusted_score=5.0)])
+    assert "5.0 → 5.0" not in line
+    assert "score 5.0" in line
+
+
+def test_radar_line_includes_bar_and_decision():
+    line = pn._radar_line("NIFTY", [_candidate(conviction_bar=5.0, final_decision="REJECTED_RISK")])
+    assert "bar 5.0" in line
+    assert "REJECTED_RISK" in line
+
+
+def test_radar_section_empty_when_neither_index_has_candidates():
+    assert pn._radar_section({}) == []
+
+
+def test_radar_section_includes_both_indices_independently():
+    state = {
+        "latest_cycle": {"candidates": [_candidate(strike=24400.0)]},
+        "banknifty": {"latest_cycle": {"candidates": [_candidate(strike=51300.0, option_type="PE")]}},
+    }
+    lines = pn._radar_section(state)
+    assert "On the radar" in lines[0]
+    joined = "\n".join(lines)
+    assert "NIFTY: 24400CE" in joined
+    assert "Bank Nifty: 51300PE" in joined
+
+
+def test_radar_section_only_nifty_when_banknifty_has_no_candidates():
+    state = {"latest_cycle": {"candidates": [_candidate()]}}
+    lines = pn._radar_section(state)
+    joined = "\n".join(lines)
+    assert "NIFTY:" in joined
+    assert "Bank Nifty:" not in joined
+
+
+# --- build_full_message ------------------------------------------------------------
+
+def test_full_message_none_when_flat_and_no_candidates():
+    assert pn.build_full_message(_flat_state()) is None
+
+
+def test_full_message_sends_with_only_radar_when_flat(monkeypatch):
+    """The behavior change from build_snapshot_message() alone: nothing
+    open, but a candidate exists this cycle -> still sends."""
+    state = _flat_state()
+    state["latest_cycle"] = {"candidates": [_candidate()]}
+    msg = pn.build_full_message(state)
+    assert msg is not None
+    assert "On the radar" in msg
+    assert "no open positions right now" in msg
+
+
+def test_full_message_includes_both_positions_and_radar(monkeypatch):
+    state = _flat_state()
+    state["open_trades"] = [_momentum_trade()]
+    state["latest_cycle"] = {"candidates": [_candidate()]}
+    msg = pn.build_full_message(state)
+    assert "24300CE" in msg          # the open position
+    assert "On the radar" in msg
+    assert "no open positions right now" not in msg
+    assert "Total open P&L" in msg
+
+
+def test_full_message_positions_only_when_no_candidates_this_cycle():
+    state = _flat_state()
+    state["open_trades"] = [_momentum_trade()]
+    msg = pn.build_full_message(state)
+    assert "On the radar" not in msg
+    assert "Total open P&L" in msg
+
+
+def test_check_once_sends_even_when_flat_if_a_candidate_exists(monkeypatch):
+    """The actual behavior change, exercised through check_once() rather
+    than build_full_message() directly."""
+    monkeypatch.setattr(pn, "market_is_open", lambda now=None: True)
+    state = _flat_state()
+    state["latest_cycle"] = {"candidates": [_candidate()]}
+    monkeypatch.setattr(pn.dashboard_server, "build_state", lambda: state)
+    sent = []
+    monkeypatch.setattr(pn.telegram_notifier, "send_message", lambda text, **kw: sent.append(text))
+
+    pn.check_once()
+
+    assert len(sent) == 1
+    assert "On the radar" in sent[0]
+
+
+def test_check_once_still_silent_when_flat_and_no_candidates(monkeypatch):
+    monkeypatch.setattr(pn, "market_is_open", lambda now=None: True)
+    monkeypatch.setattr(pn.dashboard_server, "build_state", lambda: _flat_state())
+    sent = []
+    monkeypatch.setattr(pn.telegram_notifier, "send_message", lambda *a, **kw: sent.append(a))
+
+    pn.check_once()
+
+    assert sent == []

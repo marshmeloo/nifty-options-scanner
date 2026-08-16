@@ -38,25 +38,35 @@ the backtested totals (see README/BACKLOG 2026-08-02 entries for what to expect)
 
 ### Telegram position notifier (optional, added 2026-08-16)
 
-Three message types, all via the same process:
-1. **Position snapshot**, every 15 minutes during market hours -- both
-   indices, every strategy (momentum, condor, directional spread, price
-   action). Only sends when something is actually open -- silent on a
-   flat day, not a ping every 15 minutes regardless. Reuses
+Three message types, all via the same process, combined into ONE
+message per 15-min check (`build_full_message()`):
+1. **Position snapshot** -- both indices, every strategy (momentum,
+   condor, directional spread, price action). Reuses
    `dashboard_server.build_state()` directly, so it's never a second,
    possibly-drifted view of "what's open" from the live dashboard.
-2. **Pre-market summary**, once, right after the process starts -- a
-   condensed version of `premarket.py`'s brief (overall lean, expiry,
-   previous session, Bank Nifty divergence, smart money, PCR/max pain,
-   event/news flags). Reads `logs/premarket_brief_<date>.json`
-   (`premarket.py` now saves this alongside its markdown); skips
-   gracefully if that file isn't there yet.
-3. **Bias-shift alert**, whenever NIFTY's or Bank Nifty's market bias
-   label actually changes since the last check -- not on every cycle it
-   stays changed. See `_check_bias_shift()`'s own docstring for a real
-   noise pattern (bias flipping twice within 90 seconds around a PCR
-   threshold) found in recorded data before this was built, and how the
-   15-minute check cadence itself mostly filters it out.
+2. **On the radar** (added 2026-08-16) -- each index's #1-scored
+   candidate this cycle (`decision_log`'s already-sorted `candidates[0]`),
+   always shown, no score floor. This is why the message no longer stays
+   silent on a flat day: since there's almost always some top candidate
+   during market hours, the combined message now sends on essentially
+   every 15-min check, not only when something's open -- a deliberate
+   change from the original design, made on explicit request. Genuinely
+   silent only when there's neither an open position NOR any candidate
+   at all this cycle (rare, mostly right at session start).
+3. **Bias-shift alert** (own message, not folded into the above) --
+   whenever NIFTY's or Bank Nifty's market bias label actually changes
+   since the last check, not on every cycle it stays changed. See
+   `_check_bias_shift()`'s own docstring for a real noise pattern (bias
+   flipping twice within 90 seconds around a PCR threshold) found in
+   recorded data before this was built, and how the 15-minute check
+   cadence itself mostly filters it out.
+
+Pre-market summary is sent once, right after the process starts -- a
+condensed version of `premarket.py`'s brief (overall lean, expiry,
+previous session, Bank Nifty divergence, smart money, PCR/max pain,
+event/news flags). Reads `logs/premarket_brief_<date>.json`
+(`premarket.py` now saves this alongside its markdown); skips
+gracefully if that file isn't there yet.
 
 Uses emoji (🟢/🔴/⚪ for P&L sign per line and the total, 📈/📉/➖ for an
 index's own subtotal and for bias direction) -- explicit ask, not this

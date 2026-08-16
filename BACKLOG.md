@@ -3,6 +3,35 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Telegram "On the radar": reversed the silent-when-flat design, on explicit request (added 2026-08-16)
+
+Follow-up to the Telegram notifications entry directly below. User
+asked to see "the highest or latest strike price... 1st in row in
+momentum," clarified (after I initially misread it as sort order for
+OPEN trades) to mean the scanner's top-SCORED CANDIDATE each cycle --
+"on the radar," not a live/open position.
+
+Added `_radar_line()`/`_radar_section()`: shows each index's `candidates[0]`
+(main_live.py already sorts by raw score descending before logging, so
+the first entry IS the top one -- no re-sort needed) with raw score,
+adjusted score if different, the conviction bar, and why it did/didn't
+open. Explicitly no score floor, per direct instruction ("only #1",
+declined the score-cutoff option offered).
+
+REAL BEHAVIOR CHANGE, confirmed with the user before pushing (showed
+actual rendered sample output first): `build_full_message()` now sends
+whenever there's EITHER an open position OR a candidate this cycle,
+combined into one message. Since the scanner almost always produces
+some top candidate during market hours, this means the notifier no
+longer stays silent on a flat day -- it was originally built that way
+deliberately ("a ping every 15 minutes on a flat day would just be
+noise"), and this change reverses that specifically for this reason,
+by explicit request. `build_snapshot_message()` (positions only, still
+silent when flat) is kept as its own function for any future use that
+wants the old behavior.
+
+44 new/updated tests.
+
 ## Telegram notifications: positions, pre-market summary, bias shifts (added 2026-08-16)
 
 Built because positions weren't visible away from the screen. Three

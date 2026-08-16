@@ -181,11 +181,11 @@ def _index_section(label: str, momentum_trades: list, condor_position: dict,
     return [f"{_direction_icon(subtotal)} {label}"] + body, subtotal
 
 
-def build_snapshot_message(state: dict = None):
-    """Returns the message text, or None if nothing is currently open."""
-    state = state if state is not None else dashboard_server.build_state()
+def _position_lines_and_total(state: dict) -> tuple:
+    """(lines across both indices, combined pnl total) -- shared by
+    build_snapshot_message() and build_full_message() so there's exactly
+    one place that assembles "what's open," not two that could drift."""
     bn = state.get("banknifty") or {}
-
     nifty_lines, nifty_pnl = _index_section(
         "NIFTY", state.get("open_trades") or [], state.get("condor_position"),
         state.get("directional_spread_position"), state.get("price_action_trades") or [],
@@ -194,8 +194,16 @@ def build_snapshot_message(state: dict = None):
         "Bank Nifty", bn.get("open_trades") or [], bn.get("condor_position"),
         bn.get("directional_spread_position"), bn.get("price_action_trades") or [],
     )
+    return nifty_lines + bn_lines, nifty_pnl + bn_pnl
 
-    sections = nifty_lines + bn_lines
+
+def build_snapshot_message(state: dict = None):
+    """Positions only, no radar section. Returns the message text, or None
+    if nothing is currently open. Kept as its own function (build_full_message()
+    below is what check_once() actually sends) since "what's open" is a
+    useful thing to be able to ask for on its own."""
+    state = state if state is not None else dashboard_server.build_state()
+    sections, total_pnl = _position_lines_and_total(state)
     if not sections:
         return None
 
@@ -206,10 +214,85 @@ def build_snapshot_message(state: dict = None):
     # open (caught by testing this against real dev data: condor and
     # spread positions were open with real non-zero MTM, but totals showed
     # Rs 0 since no momentum trade happened to be open at the same time).
-    total_pnl = nifty_pnl + bn_pnl
     header = f"\U0001f4ca Live Positions — {datetime.now().strftime('%H:%M:%S')}"
     footer = f"{_pnl_icon(total_pnl)} Total open P&L: ₹{total_pnl:+,.0f}"
     return "\n".join([header, ""] + sections + ["", footer])
+
+
+# --- radar (top-scored candidate, whether or not it opened) --------------------
+
+def _radar_line(label: str, candidates: list):
+    """
+    The scanner's #1-ranked candidate this cycle -- candidates[0], not a
+    re-sort here: main_live.py already sorts results by raw score
+    descending before truncating to top_n and logging (see decision_log.log_cycle()),
+    so the first entry in the list IS the highest-scored one. Returns None
+    if this cycle produced no candidates at all (rare during market hours,
+    but possible right at the very start of a session).
+    """
+    if not candidates:
+        return None
+    c = candidates[0]
+    raw = c.get("raw_score")
+    adjusted = c.get("adjusted_score")
+    score_note = f"{raw}" if raw is not None else "?"
+    if adjusted is not None and adjusted != raw:
+        score_note += f" → {adjusted}"
+    bar = c.get("conviction_bar")
+    bar_note = f" (bar {bar})" if bar is not None else ""
+    decision = c.get("final_decision") or "?"
+    strike = c.get("strike")
+    strike_note = f"{strike:.0f}" if strike is not None else "?"
+    return f"  {label}: {strike_note}{c.get('option_type', '')} — score {score_note}{bar_note} — {decision}"
+
+
+def _radar_section(state: dict) -> list:
+    lines = []
+    nifty_line = _radar_line("NIFTY", (state.get("latest_cycle") or {}).get("candidates") or [])
+    if nifty_line:
+        lines.append(nifty_line)
+    bn_cycle = (state.get("banknifty") or {}).get("latest_cycle") or {}
+    bn_line = _radar_line("Bank Nifty", bn_cycle.get("candidates") or [])
+    if bn_line:
+        lines.append(bn_line)
+    if not lines:
+        return []
+    return ["\U0001f4e1 On the radar"] + lines
+
+
+def build_full_message(state: dict = None):
+    """
+    Position snapshot + "On the radar" (each index's #1-scored candidate
+    this cycle, always shown -- not gated by any score threshold, per
+    explicit request) combined into one message.
+
+    UNLIKE build_snapshot_message() ALONE, this sends even when nothing is
+    open, as long as the scanner produced at least one candidate this
+    cycle -- which is true almost every cycle during market hours. This is
+    a deliberate change from the original silent-when-nothing-open design:
+    radar visibility is most useful exactly when nothing's open yet, and
+    showing the #1 candidate unconditionally (no score floor) means this
+    now fires on essentially every 15-minute check during market hours,
+    not only when a position exists.
+    """
+    state = state if state is not None else dashboard_server.build_state()
+    position_lines, total_pnl = _position_lines_and_total(state)
+    radar_lines = _radar_section(state)
+
+    if not position_lines and not radar_lines:
+        return None
+
+    header = f"\U0001f4ca Live Positions — {datetime.now().strftime('%H:%M:%S')}"
+    blocks = [header]
+    if position_lines:
+        blocks.append("\n".join(position_lines))
+    if radar_lines:
+        blocks.append("\n".join(radar_lines))
+    blocks.append(
+        f"{_pnl_icon(total_pnl)} Total open P&L: ₹{total_pnl:+,.0f}" if position_lines
+        else "(no open positions right now)"
+    )
+    return "\n\n".join(blocks)
 
 
 # --- pre-market summary -------------------------------------------------------
@@ -388,9 +471,9 @@ def check_once():
         return
     state = dashboard_server.build_state()
 
-    message = build_snapshot_message(state)
+    message = build_full_message(state)
     if message is None:
-        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] nothing open, skipping")
+        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] nothing to report, skipping")
     else:
         try:
             telegram_notifier.send_message(message)
