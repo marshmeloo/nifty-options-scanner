@@ -111,3 +111,90 @@ def test_file_exists_error_still_treated_as_contention(monkeypatch):
     monkeypatch.setattr(drl.os, "open", _raise_file_exists)
 
     assert drl._try_acquire_lock() is False
+
+
+# --------------------------------------------------------------------------
+# Contention fallback: the 2026-08-17 thundering-herd fix
+# --------------------------------------------------------------------------
+
+def test_contended_lock_still_spaces_the_request(monkeypatch):
+    """The core fix. Before 2026-08-17 a lock timeout meant `return` --
+    rate limiting abandoned entirely, so every process fired at once. It
+    must now still space the request, even without the lock."""
+    monkeypatch.setattr(drl, "MAX_ACQUIRE_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(drl, "MIN_INTERVAL_SECONDS", 0.2)
+    monkeypatch.setattr(drl, "_try_acquire_lock", lambda: False)   # permanently contended
+    drl.STATE_PATH.write_text(json.dumps({"last_request_at": time.time()}))
+
+    started = time.monotonic()
+    drl.wait_for_slot()
+    elapsed = time.monotonic() - started
+
+    # Waited out the interval rather than returning immediately. Lower
+    # bound only: jitter adds an unpredictable amount on top.
+    assert elapsed >= 0.2
+
+
+def test_contended_fallback_records_its_request(monkeypatch):
+    """A request that goes out via the fallback path must still update
+    last_request_at -- otherwise the NEXT caller thinks the account has
+    been idle and fires immediately."""
+    monkeypatch.setattr(drl, "MAX_ACQUIRE_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(drl, "MIN_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(drl, "_try_acquire_lock", lambda: False)
+    drl.STATE_PATH.write_text(json.dumps({"last_request_at": 0.0}))
+
+    drl.wait_for_slot()
+
+    recorded = json.loads(drl.STATE_PATH.read_text())["last_request_at"]
+    assert recorded > 0.0
+
+
+def test_contended_fallback_survives_an_unwritable_state_file(monkeypatch):
+    """Recording is observability -- it must never block the request."""
+    monkeypatch.setattr(drl, "MAX_ACQUIRE_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(drl, "MIN_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(drl, "_try_acquire_lock", lambda: False)
+
+    class _Unwritable(type(drl.STATE_PATH)):
+        def write_text(self, *a, **kw):
+            raise OSError("disk full")
+
+    monkeypatch.setattr(drl, "STATE_PATH", _Unwritable(drl.STATE_PATH))
+    drl.wait_for_slot()   # must not raise
+
+
+def test_real_concurrent_processes_are_actually_spaced(monkeypatch):
+    """No mocking of the lock: run many threads through the real
+    acquire/fallback paths at once -- the shape of 11 live processes
+    competing -- and measure the ACTUAL spacing between the request times
+    they record. The old code produced a stampede here; this asserts the
+    result is spread out, not simultaneous.
+    """
+    import threading
+
+    monkeypatch.setattr(drl, "MIN_INTERVAL_SECONDS", 0.1)
+    monkeypatch.setattr(drl, "MAX_ACQUIRE_WAIT_SECONDS", 0.3)
+    drl.STATE_PATH.write_text(json.dumps({"last_request_at": 0.0}))
+
+    fire_times = []
+    lock = threading.Lock()
+
+    def _one_request():
+        drl.wait_for_slot()
+        with lock:
+            fire_times.append(time.monotonic())
+
+    threads = [threading.Thread(target=_one_request) for _ in range(11)]
+    start = time.monotonic()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    span = time.monotonic() - start
+
+    assert len(fire_times) == 11
+    # 11 requests at a 0.1s floor cannot legitimately complete instantly.
+    # The old "proceed without it" path finished all 11 in ~0.3s (just the
+    # acquire timeout); real spacing has to take meaningfully longer.
+    assert span >= 0.5, f"11 requests completed in {span:.2f}s -- not actually spaced"

@@ -54,6 +54,7 @@ rate-limited by our own combined traffic.
 import os
 import time
 import json
+import random
 import logging
 from pathlib import Path
 
@@ -84,6 +85,13 @@ STALE_LOCK_SECONDS = 10.0
 # point rather than let rate-limit coordination become a bigger outage
 # than the 429s it exists to prevent.
 MAX_ACQUIRE_WAIT_SECONDS = 8.0
+
+# Ceiling on the unlocked fallback's own queueing (see
+# _respect_interval_unlocked). Bounded so a trading loop can never be
+# held here indefinitely, but generous enough to actually let several
+# waiters take turns rather than firing together -- with 11 processes
+# competing, the whole point is that they queue.
+UNLOCKED_SPACING_MAX_WAIT_SECONDS = 15.0
 
 
 def _try_acquire_lock() -> bool:
@@ -136,15 +144,70 @@ def _read_last_request_at() -> float:
         return 0.0
 
 
+def _respect_interval_unlocked(min_interval: float):
+    """
+    Best-effort spacing WITHOUT holding the lock, for when acquisition
+    times out under heavy contention.
+
+    Rewritten 2026-08-17. The old behaviour here was a bare `return` --
+    "proceed without it this cycle" -- which abandoned rate limiting
+    entirely at exactly the moment it was most needed. That turned a
+    queueing problem into a thundering herd: with demand above the
+    limiter's budget every process eventually times out, and they then
+    all fire at once. Measured in one real session: 2,209 timeouts
+    across the process group, 53 genuine 429s on NIFTY alone, and 171
+    cycles with NO chain data from either source (79 of them while real
+    positions were open).
+
+    Reading last_request_at without the lock can race -- two processes
+    may compute the same slot and both fire. That is strictly better
+    than the old behaviour, where ALL of them fired immediately: an
+    occasional double is a small overshoot, a stampede is an outage.
+    The jitter spreads out processes that timed out together, so they
+    don't re-collide on the very next attempt.
+    """
+    # Re-check in a loop rather than sleeping once and firing. Every
+    # waiter that reaches here read the SAME last_request_at, so a single
+    # "sleep out the remainder" would have them all wake and fire
+    # together -- measurably barely better than the old bare `return`
+    # (11 concurrent waiters finished in 0.40s vs 0.30s in a test that
+    # caught exactly this). Looping means each one re-reads the timestamp
+    # the previous one wrote and queues behind it properly.
+    deadline = time.monotonic() + UNLOCKED_SPACING_MAX_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        elapsed = time.time() - _read_last_request_at()
+        if elapsed >= min_interval:
+            break
+        # Jittered re-check so waiters don't march in lockstep and
+        # re-collide on the same tick.
+        time.sleep(min(min_interval - elapsed, min_interval / 4) + random.uniform(0.0, min_interval / 4))
+
+    try:
+        STATE_PATH.write_text(json.dumps({"last_request_at": time.time()}))
+    except OSError:
+        pass  # observability only -- never block the request on this
+
+
 def wait_for_slot(min_interval: float = None):
     """
     Block until it's this process's turn to make a Dhan request,
     coordinating with every other process sharing this account. Call
     immediately before every Dhan HTTP request.
 
-    Fails safe in every direction: if the lock can't be acquired within
-    MAX_ACQUIRE_WAIT_SECONDS, proceeds without it rather than blocking a
-    trading loop forever over a coordination mechanism.
+    Never blocks a trading loop indefinitely: if the lock can't be
+    acquired within MAX_ACQUIRE_WAIT_SECONDS, falls back to best-effort
+    unlocked spacing (see _respect_interval_unlocked) rather than either
+    waiting forever OR firing unthrottled.
+
+    IMPORTANT, and not something this function can fix on its own: it
+    can only SHAPE demand, never create capacity. Measured 2026-08-17
+    with 11 live processes sharing one account -- roughly 58 chain
+    requests/min while trades are open against a ~17/min budget at
+    MIN_INTERVAL_SECONDS=3.5 (itself already above Dhan's documented
+    20/min). Sustained 3.4x oversubscription means requests queue and
+    some cycles will still be slow or fail no matter how fair the
+    queueing is. The durable fix is fewer/cheaper requests -- see
+    BACKLOG.md.
     """
     min_interval = min_interval if min_interval is not None else MIN_INTERVAL_SECONDS
     acquire_deadline = time.monotonic() + MAX_ACQUIRE_WAIT_SECONDS
@@ -155,10 +218,13 @@ def wait_for_slot(min_interval: float = None):
             acquired = True
             break
         _clear_stale_lock()
-        time.sleep(0.05)
+        # Jittered poll: a fixed sleep marches every waiter in lockstep,
+        # so they keep colliding on the same retry tick.
+        time.sleep(random.uniform(0.02, 0.08))
 
     if not acquired:
-        log.info("  [rate limiter] could not acquire lock in time, proceeding without it this cycle")
+        log.info("  [rate limiter] lock contended, spacing this request without it")
+        _respect_interval_unlocked(min_interval)
         return
 
     try:

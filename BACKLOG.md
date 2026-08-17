@@ -3,6 +3,75 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Dhan request demand is ~3.4x the rate limit -- limiter hardened, but the real fix is fewer requests (added 2026-08-17)
+
+The limiter's thundering-herd bug is FIXED (see below). The underlying
+capacity problem is NOT, and no amount of limiter tuning can fix it.
+
+MEASURED DEMAND, 11 live processes sharing one Dhan account:
+
+    momentum full cycles   4 processes x 30s   =  8.0 req/min
+    momentum fast checks   4 processes x  5s   = 48.0 req/min  (while a trade is open)
+    directional spread     2 processes x 90s   =  1.3 req/min
+    condor                 1 process x 300s    =  0.2 req/min
+    price action           2 processes x 300s  =  0.4 req/min
+                                          idle =  9.9 req/min
+                                 trades open   = 57.9 req/min
+
+    limiter budget at MIN_INTERVAL_SECONDS=3.5 = 17.1 req/min
+    Dhan's documented limit (1 per 3s)         = 20.0 req/min
+
+So with trades open the process group wants ~3.4x what the limiter can
+issue, and ~2.9x Dhan's own documented ceiling. Consequences measured in
+that one session: 2,209 lock-acquire timeouts across the group, 53 real
+429s on NIFTY alone, and 171 cycles with NO chain data from either
+source -- 79 of them while real positions were open. Nothing was
+mispriced that day, but a stop/target check silently not running during
+a real approach is exactly the risk this whole limiter exists to
+prevent.
+
+The 5s fast check is the dominant cost by far: 48 of the 58 req/min.
+It re-fetches the FULL option chain just to re-price open trades.
+
+OPTIONS, none adopted yet (each is a real trade-off and at least the
+first two change what Anchor sees, so they need a decision, not a
+guess):
+  1. Fast check uses Dhan's lightweight /marketfeed/ltp endpoint with
+     the tracked security IDs instead of the whole chain (instrument_master.py
+     already exists for exactly this and its docstring names this use).
+     Much cheaper per call; needs the endpoint verified live.
+  2. Share one chain fetch between each index's Anchor and Sentinel
+     processes via a short-TTL file cache -- they fetch identical data
+     seconds apart. Halves momentum demand. Makes one of them read
+     data up to a few seconds staler than it does today.
+  3. Widen FAST_CHECK_INTERVAL_SECONDS from 5s. Simplest, but directly
+     reduces how promptly a stop/target is noticed -- the opposite of
+     what the fast check is for.
+
+## Rate limiter abandoned rate limiting under contention -- thundering herd (added 2026-08-17)
+
+`wait_for_slot()`'s lock-acquire timeout used to be a bare `return`:
+"could not acquire lock in time, proceeding without it this cycle." That
+abandoned rate limiting entirely at exactly the moment it mattered most.
+With demand above budget (see above) every process eventually times out,
+so they all fired simultaneously -- a queueing problem turned into a
+stampede, 2,209 times in one session.
+
+Fixed: on timeout it now falls back to best-effort spacing WITHOUT the
+lock (`_respect_interval_unlocked`), re-reading `last_request_at` in a
+jittered loop so waiters queue behind each other instead of all waking
+and firing together. Bounded by `UNLOCKED_SPACING_MAX_WAIT_SECONDS` so a
+trading loop can never be held indefinitely.
+
+Measured with 11 concurrent waiters, old vs new: requests firing
+near-simultaneously dropped from 7/10 to 2/10, total span 0.37s -> 0.90s.
+A first attempt at this fix (sleep once, then fire) was barely better
+than the old behaviour -- every waiter read the same timestamp and woke
+together -- which a concurrency test caught before it shipped; the
+re-check loop is what actually queues them.
+
+Reduces 429s. Does NOT create capacity -- see the entry above.
+
 ## Telegram "On the radar": reversed the silent-when-flat design, on explicit request (added 2026-08-16)
 
 Follow-up to the Telegram notifications entry directly below. User
