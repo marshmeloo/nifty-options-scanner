@@ -420,6 +420,13 @@ def force_close_all(state: dict, expiry: str, last_snapshot=None):
 
 
 def check_open_trades_fast(state: dict, expiry: str):
+    """
+    NOT CALLED as of 2026-08-17 -- Sentinel deliberately runs no fast
+    check; see the comment in run_forever()'s loop for why and what it
+    costs. Kept (rather than deleted) so this file stays structurally
+    parallel to main_live.py and re-enabling is a one-line change if the
+    Dhan request-demand problem is solved another way.
+    """
     if not state["trades"]:
         return
     try:
@@ -513,11 +520,25 @@ def run_forever():
                 except Exception as e:
                     log.info(f"  Error this cycle (will retry next cycle): {e}")
                 last_full_cycle_at = now
-            else:
-                try:
-                    check_open_trades_fast(state, expiry)
-                except Exception as e:
-                    log.info(f"  [fast check] error (will retry next fast check): {e}")
+            # NO FAST CHECK HERE, deliberately (2026-08-17). Anchor's own
+            # process runs one every FAST_CHECK_INTERVAL_SECONDS while a
+            # trade is open; Sentinel does not, to cut Dhan request demand
+            # -- the fast check was measured as 48 of ~58 req/min with
+            # trades open, against a ~17/min budget (see BACKLOG.md).
+            # Dropping it here halves the momentum fast-check load.
+            #
+            # KNOWN COST, stated rather than buried: Sentinel now notices
+            # a stop/target up to POLL_INTERVAL_SECONDS late instead of
+            # FAST_CHECK_INTERVAL_SECONDS late. On 2026-08-17, 5 of
+            # Sentinel's 23 exits were caught by the fast check, so this
+            # is not hypothetical -- those would have exited later, at
+            # whatever price the market had moved to.
+            #
+            # THIS WEAKENS THE ANCHOR-vs-SENTINEL COMPARISON. The two now
+            # differ in exit-detection latency as well as the cluster cap,
+            # so a P&L gap between them can no longer be attributed to the
+            # cap alone. Weigh that before promoting or rejecting Sentinel
+            # on live evidence (see STRATEGY_VERSIONS.md's promotion policy).
             was_open_last_cycle = True
         else:
             if was_open_last_cycle and state["trades"]:

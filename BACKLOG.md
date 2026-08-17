@@ -8,45 +8,58 @@ phase, but worth revisiting before real money is on the line.
 The limiter's thundering-herd bug is FIXED (see below). The underlying
 capacity problem is NOT, and no amount of limiter tuning can fix it.
 
-MEASURED DEMAND, 11 live processes sharing one Dhan account:
+MEASURED DEMAND as of the 2026-08-17 session, 11 live processes sharing
+one Dhan account. Note the fast check only runs while that process has a
+position OPEN (it returns before fetching otherwise), so the top figure
+is a worst case, not a constant:
 
     momentum full cycles   4 processes x 30s   =  8.0 req/min
-    momentum fast checks   4 processes x  5s   = 48.0 req/min  (while a trade is open)
+    momentum fast checks   4 processes x  5s   = 48.0 req/min  (only while a trade is open)
     directional spread     2 processes x 90s   =  1.3 req/min
     condor                 1 process x 300s    =  0.2 req/min
     price action           2 processes x 300s  =  0.4 req/min
                                           idle =  9.9 req/min
-                                 trades open   = 57.9 req/min
+                       all 4 holding positions = 57.9 req/min
 
     limiter budget at MIN_INTERVAL_SECONDS=3.5 = 17.1 req/min
     Dhan's documented limit (1 per 3s)         = 20.0 req/min
 
-So with trades open the process group wants ~3.4x what the limiter can
-issue, and ~2.9x Dhan's own documented ceiling. Consequences measured in
-that one session: 2,209 lock-acquire timeouts across the group, 53 real
-429s on NIFTY alone, and 171 cycles with NO chain data from either
-source -- 79 of them while real positions were open. Nothing was
-mispriced that day, but a stop/target check silently not running during
-a real approach is exactly the risk this whole limiter exists to
-prevent.
+Scaling by how many momentum processes actually hold a position:
+0 -> ~10/min (fine), 1 -> ~22, 2 -> ~34, 4 -> ~58. So the account only
+goes over the limit WHILE HOLDING POSITIONS -- precisely when a missed
+stop/target check matters most. That matched the logs: 79 of the day's
+171 blind cycles fell inside the 36-minute window NIFTY held 4 trades.
 
-The 5s fast check is the dominant cost by far: 48 of the 58 req/min.
-It re-fetches the FULL option chain just to re-price open trades.
+Consequences measured that session: 2,209 lock-acquire timeouts across
+the group, 53 real 429s on NIFTY alone, 171 cycles with NO chain data
+from either source. Nothing was mispriced, but a stop/target check
+silently not running during a real approach is exactly the risk this
+limiter exists to prevent.
 
-OPTIONS, none adopted yet (each is a real trade-off and at least the
-first two change what Anchor sees, so they need a decision, not a
-guess):
+PARTIALLY ADDRESSED 2026-08-17: Sentinel's two processes no longer run a
+fast check at all (see main_live_sentinel.py's loop comment). That
+removes 24 of the 48 fast-check req/min -- worst case drops ~58 -> ~34.
+Anchor's fast check is untouched. The cost is real and recorded there:
+Sentinel now notices exits up to POLL_INTERVAL_SECONDS late rather than
+FAST_CHECK_INTERVAL_SECONDS late (5 of its 23 exits that day were caught
+by the fast check), and Anchor-vs-Sentinel now differ in exit latency as
+well as the cluster cap, which weakens that comparison.
+
+STILL OVER BUDGET at ~34 req/min vs ~17. Remaining options, none
+adopted, both of which change what Anchor sees and so need a decision
+rather than a guess:
   1. Fast check uses Dhan's lightweight /marketfeed/ltp endpoint with
-     the tracked security IDs instead of the whole chain (instrument_master.py
-     already exists for exactly this and its docstring names this use).
-     Much cheaper per call; needs the endpoint verified live.
+     the tracked security IDs instead of the whole chain
+     (instrument_master.py already exists for exactly this and its
+     docstring names this use). Much cheaper per call; needs the
+     endpoint verified live. Best option -- keeps 5s latency AND cuts
+     cost, rather than trading one for the other.
   2. Share one chain fetch between each index's Anchor and Sentinel
      processes via a short-TTL file cache -- they fetch identical data
-     seconds apart. Halves momentum demand. Makes one of them read
-     data up to a few seconds staler than it does today.
-  3. Widen FAST_CHECK_INTERVAL_SECONDS from 5s. Simplest, but directly
-     reduces how promptly a stop/target is noticed -- the opposite of
-     what the fast check is for.
+     seconds apart. Makes one of them read data slightly staler.
+  3. Widen FAST_CHECK_INTERVAL_SECONDS from 5s for Anchor too. Simplest,
+     but directly reduces how promptly a stop/target is noticed -- the
+     opposite of what the fast check is for.
 
 ## Rate limiter abandoned rate limiting under contention -- thundering herd (added 2026-08-17)
 

@@ -401,6 +401,10 @@ def force_close_all(state: dict, expiry: str, last_snapshot=None):
 
 
 def check_open_trades_fast(state: dict, expiry: str):
+    """
+    NOT CALLED as of 2026-08-17 -- same as main_live_sentinel.py's own
+    copy; see that file's docstring and run_forever()'s loop comment.
+    """
     if not state["trades"]:
         return
     try:
@@ -491,11 +495,11 @@ def run_forever():
                 except Exception as e:
                     log.info(f"  Error this cycle (will retry next cycle): {e}")
                 last_full_cycle_at = now
-            else:
-                try:
-                    check_open_trades_fast(state, expiry)
-                except Exception as e:
-                    log.info(f"  [fast check] error (will retry next fast check): {e}")
+            # NO FAST CHECK HERE, deliberately (2026-08-17) -- same
+            # reasoning, cost and caveat as main_live_sentinel.py's own
+            # comment at this point in its loop; see that file and
+            # BACKLOG.md's Dhan-demand entry. Anchor's Bank Nifty process
+            # still runs its fast check normally.
             was_open_last_cycle = True
         else:
             if was_open_last_cycle and state["trades"]:
