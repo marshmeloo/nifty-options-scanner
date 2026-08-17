@@ -87,11 +87,33 @@ MAX_ACQUIRE_WAIT_SECONDS = 8.0
 
 
 def _try_acquire_lock() -> bool:
+    """
+    True if this process now holds the lock, False if someone else does.
+
+    Catches PermissionError alongside FileExistsError, added 2026-08-17
+    after it took down a live process. On Windows, O_CREAT|O_EXCL against
+    a path another process is concurrently creating/deleting raises
+    PermissionError (WinError 5), not FileExistsError -- same "someone
+    else has it" condition, different exception. That escaped this
+    handler, propagated all the way out of wait_for_slot(), and killed
+    orderflow_feed_banknifty.py outright at startup that morning: the
+    Bank Nifty order-flow feed never subscribed to a single contract
+    all session, so every Bank Nifty book_imbalance reading stayed None
+    for the whole day. "Lock is contended" must never be able to crash
+    a caller -- the whole design already treats failure to acquire as
+    survivable (see wait_for_slot's MAX_ACQUIRE_WAIT_SECONDS fallback).
+
+    OSError is the catch-all parent of both, used deliberately rather
+    than naming the two: any filesystem-level reason the lock can't be
+    taken right now is the same answer to the caller ("not yours, retry
+    or proceed"), and a rate-limit coordination helper must not be the
+    thing that takes down a trading process.
+    """
     try:
         fd = os.open(str(LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.close(fd)
         return True
-    except FileExistsError:
+    except OSError:
         return False
 
 

@@ -390,8 +390,13 @@ def correlated_cluster_blocked(setup, positions: list, ts, policy: Policy) -> bo
         open_same_direction = [p for p in open_same_direction if p["opened_ts"] >= cutoff]
     if policy.max_open_per_direction is not None and len(open_same_direction) >= policy.max_open_per_direction:
         return True
+    # Inclusive (`<=`), fixed 2026-08-17 to match the live gate -- see
+    # trade_tracker.cluster_cap_blocks()'s own docstring for why the
+    # exact-boundary case is the TYPICAL one for Bank Nifty rather than an
+    # edge case. Backtest numbers recorded in STRATEGY_VERSIONS.md before
+    # this date were produced with the old exclusive comparison.
     if policy.strike_adjacency_band_points is not None and any(
-        abs(p["key"][0] - setup.strike) < policy.strike_adjacency_band_points
+        abs(p["key"][0] - setup.strike) <= policy.strike_adjacency_band_points
         for p in open_same_direction
     ):
         return True

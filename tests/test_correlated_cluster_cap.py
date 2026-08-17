@@ -107,12 +107,27 @@ def test_adjacency_ignores_the_opposite_direction_regardless_of_distance():
     assert shadow.correlated_cluster_blocked(_setup(24050.0, "PE"), positions, T1, policy) is False
 
 
-def test_adjacency_is_exclusive_at_the_boundary():
-    """Distance exactly equal to the band is NOT close enough to block
-    -- '< band', not '<=', matching real strike spacing where you want
-    the boundary strike to still be reachable."""
+def test_adjacency_is_inclusive_at_the_boundary():
+    """Distance exactly equal to the band DOES block ('<= band').
+
+    This test asserted the opposite until 2026-08-17, when the live
+    session proved the exclusive version silently never fired for Bank
+    Nifty at all: its strikes sit 100pts apart and the scanner's bursts
+    skip every other one, so candidates land EXACTLY 200pts apart -- the
+    configured band -- and `200 < 200` is False. Sentinel opened 5
+    strikes of a 9-strike correlated PE cluster it exists to block. The
+    exact-boundary case is the TYPICAL case here, not an edge case.
+    """
     policy = shadow.Policy(strike_adjacency_band_points=200)
     positions = [_position(23850.0, "PE", T0)]   # exactly 200pt away
+    assert shadow.correlated_cluster_blocked(_setup(24050.0, "PE"), positions, T1, policy) is True
+
+
+def test_just_outside_the_band_still_does_not_block():
+    """The band still has an outer edge -- inclusive at exactly `band`,
+    but anything beyond it is genuinely unrelated."""
+    policy = shadow.Policy(strike_adjacency_band_points=200)
+    positions = [_position(23849.0, "PE", T0)]   # 201pt away
     assert shadow.correlated_cluster_blocked(_setup(24050.0, "PE"), positions, T1, policy) is False
 
 

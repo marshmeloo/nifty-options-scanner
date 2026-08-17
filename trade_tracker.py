@@ -1117,6 +1117,17 @@ def cluster_cap_blocks(state: dict, strike: float, option_type: str, now: dateti
     OFF unless config.CLUSTER_CAP_ENABLED is True -- Anchor v1.0's real
     config leaves this False, so this always returns False for Anchor's
     live process regardless of what any other process's config sets.
+
+    The band comparison is INCLUSIVE (`<=`), fixed 2026-08-17. It was
+    `<`, which silently never fired for Bank Nifty: its strikes are
+    100pts apart and the scanner's typical burst skips every other one,
+    landing candidates EXACTLY 200pts apart -- the exact configured band
+    -- and `200 < 200` is False. Confirmed against that day's real
+    session, where Sentinel opened 5 strikes of a 9-strike correlated
+    PE cluster it was specifically built to block (57100/300/500/700/900,
+    all within 3 minutes, all losses). An exact-boundary strike is the
+    typical case for Bank Nifty, not an edge case, so the boundary
+    belongs inside the band.
     """
     if not getattr(config, "CLUSTER_CAP_ENABLED", False):
         return False
@@ -1131,7 +1142,7 @@ def cluster_cap_blocks(state: dict, strike: float, option_type: str, now: dateti
         if not opened_at:
             continue
         age_minutes = (now - datetime.fromisoformat(opened_at)).total_seconds() / 60
-        if 0 <= age_minutes <= window and abs(t["strike"] - strike) < band:
+        if 0 <= age_minutes <= window and abs(t["strike"] - strike) <= band:
             return True
     return False
 

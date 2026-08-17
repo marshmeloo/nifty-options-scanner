@@ -139,3 +139,58 @@ def test_try_open_new_trade_unaffected_for_anchor(monkeypatch, journal_paths):
 def journal_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(tt, "JOURNAL_PATH", tmp_path / "trade_journal.jsonl")
     monkeypatch.setattr(tt, "OPEN_TRADES_PATH", tmp_path / "open_trades.json")
+
+
+# --------------------------------------------------------------------------
+# Regression: the real 2026-08-17 Bank Nifty cluster the cap failed to block
+# --------------------------------------------------------------------------
+
+def test_exactly_band_apart_blocks_the_real_banknifty_spacing(monkeypatch):
+    """The 2026-08-17 live failure, reduced to one assertion.
+
+    Bank Nifty strikes are 100pts apart and the scanner's bursts skip
+    every other one, so consecutive candidates land EXACTLY 200pts apart
+    -- the configured CLUSTER_CAP_ADJACENCY_POINTS. The comparison was
+    `< band`, so `200 < 200` was False and the cap never fired for Bank
+    Nifty at all. Sentinel opened 5 strikes of a 9-strike correlated PE
+    cluster it was specifically built to block.
+    """
+    monkeypatch.setattr(config, "CLUSTER_CAP_ENABLED", True)
+    monkeypatch.setattr(config, "CLUSTER_CAP_ADJACENCY_POINTS", 200)
+    monkeypatch.setattr(config, "CLUSTER_CAP_WINDOW_MINUTES", 30)
+
+    opened_at = datetime.fromisoformat("2026-08-17T10:31:40.285963")
+    now = datetime.fromisoformat("2026-08-17T10:32:23.499242")   # 43s later, real timings
+    state = {"trades": [_trade(57100.0, "PE", opened_at)]}
+
+    assert tt.cluster_cap_blocks(state, 57300.0, "PE", now) is True
+
+
+def test_real_banknifty_cluster_is_thinned_not_fully_blocked(monkeypatch):
+    """Honest scope of the fix, replayed from that session's real strikes
+    and timestamps: a 200pt band against 100pt strike spacing can only
+    ever block ALTERNATE strikes. 5 opened -> 3 opened, not 1. Pinned
+    here so the limitation is visible rather than assumed away -- closing
+    the cluster down further needs a wider band for Bank Nifty, which is
+    a separate calibration question (see BACKLOG.md).
+    """
+    monkeypatch.setattr(config, "CLUSTER_CAP_ENABLED", True)
+    monkeypatch.setattr(config, "CLUSTER_CAP_ADJACENCY_POINTS", 200)
+    monkeypatch.setattr(config, "CLUSTER_CAP_WINDOW_MINUTES", 30)
+
+    real_cluster = [
+        (57100.0, "2026-08-17T10:31:40.285963"),
+        (57300.0, "2026-08-17T10:32:23.499242"),
+        (57500.0, "2026-08-17T10:33:04.547799"),
+        (57700.0, "2026-08-17T10:33:46.630359"),
+        (57900.0, "2026-08-17T10:34:35.793148"),
+    ]
+    state = {"trades": []}
+    opened = []
+    for strike, ts in real_cluster:
+        now = datetime.fromisoformat(ts)
+        if not tt.cluster_cap_blocks(state, strike, "PE", now):
+            opened.append(strike)
+            state["trades"].append(_trade(strike, "PE", now))
+
+    assert opened == [57100.0, 57500.0, 57900.0]
