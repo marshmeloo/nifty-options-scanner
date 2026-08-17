@@ -199,3 +199,65 @@ def test_loaded_trades_carry_peak_fields(tmp_path, monkeypatch):
     t = ds._load_all_pnl_trades()[0]
     assert t["peak_favorable_inr"] == 1059.0
     assert t["peak_r"] == 0.75
+
+
+# --------------------------------------------------------------------------
+# _contract_label: multi-leg strategies had no readable identifier in /pnl
+# (added 2026-08-17 -- spread/condor rows rendered a blank "-" contract)
+# --------------------------------------------------------------------------
+
+def test_contract_label_single_leg_uses_strike_and_type():
+    t = {"strike": 24200.0, "option_type": "PE"}
+    assert ds._contract_label(t) == "24200 PE"
+
+
+def test_contract_label_single_leg_trims_trailing_space_without_type():
+    assert ds._contract_label({"strike": 24200.0}) == "24200"
+
+
+def test_contract_label_directional_spread_bull_put():
+    t = {"plan": {"direction": "PE", "short_strike": 24600.0, "hedge_strike": 24500.0}}
+    assert ds._contract_label(t) == "Bull put 24600/24500"
+
+
+def test_contract_label_directional_spread_bear_call():
+    t = {"plan": {"direction": "CE", "short_strike": 24800.0, "hedge_strike": 24900.0}}
+    assert ds._contract_label(t) == "Bear call 24800/24900"
+
+
+def test_contract_label_condor_names_both_shorts_and_hedges():
+    t = {"plan": {"short_ce_strike": 24500.0, "short_pe_strike": 23850.0,
+                  "hedge_ce_strike": 24800.0, "hedge_pe_strike": 23550.0}}
+    label = ds._contract_label(t)
+    assert "Condor" in label
+    assert "24500CE" in label and "23850PE" in label
+    assert "24800" in label and "23550" in label
+
+
+def test_contract_label_falls_back_when_nothing_identifiable():
+    assert ds._contract_label({}) == "—"
+    assert ds._contract_label({"plan": {}}) == "—"
+
+
+def test_contract_label_prefers_single_leg_fields_when_both_present():
+    """A single-leg journal entry that happens to carry a plan must still
+    report its own strike, not a spread description."""
+    t = {"strike": 24200.0, "option_type": "CE", "plan": {"short_strike": 999.0}}
+    assert ds._contract_label(t) == "24200 CE"
+
+
+def test_pnl_loader_falls_back_to_plan_lots_for_multi_leg(tmp_path, monkeypatch):
+    """Spread/condor entries keep `lots` inside `plan`, not at top level --
+    the table showed "-" for every one of them."""
+    journal = tmp_path / "directional_spread_journal.jsonl"
+    journal.write_text(json.dumps({
+        "closed_at": "2026-08-17T14:00:00", "pnl_inr": 1196.0, "status": "CLOSED",
+        "plan": {"direction": "PE", "short_strike": 24600.0, "hedge_strike": 24500.0, "lots": 3},
+    }) + "\n")
+    monkeypatch.setattr(ds, "PNL_JOURNALS", [(journal, "NIFTY", "Directional Spread")])
+
+    trades = ds._load_all_pnl_trades()
+
+    assert len(trades) == 1
+    assert trades[0]["lots"] == 3
+    assert trades[0]["contract"] == "Bull put 24600/24500"

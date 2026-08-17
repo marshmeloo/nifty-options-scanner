@@ -55,6 +55,17 @@ BN_SPREAD_STATE_PATH = STATE_DIR / "directional_spread_position_banknifty.json"
 BN_PRICE_ACTION_STATE_PATH = STATE_DIR / "price_action_position_banknifty.json"
 BN_PRICE_ACTION_JOURNAL_PATH = LOGS_DIR / "price_action_journal_banknifty.jsonl"
 
+# --- Sentinel v1.1-dev (see STRATEGY_VERSIONS.md): runs as its own live
+# process per index, opening and closing real paper trades every cycle
+# exactly like Anchor does. Added to this LIVE dashboard 2026-08-17 --
+# until then Sentinel appeared only in the /pnl historical view, which
+# made it look like its trades were computed after the fact rather than
+# taken live. They were always live; only the visibility was missing.
+SENTINEL_OPEN_TRADES_PATH = STATE_DIR / "open_trades_sentinel.json"
+SENTINEL_TRADE_JOURNAL_PATH = LOGS_DIR / "trade_journal_sentinel.jsonl"
+BN_SENTINEL_OPEN_TRADES_PATH = STATE_DIR / "open_trades_banknifty_sentinel.json"
+BN_SENTINEL_TRADE_JOURNAL_PATH = LOGS_DIR / "trade_journal_banknifty_sentinel.jsonl"
+
 
 def _read_todays_closed_trades() -> list:
     """
@@ -196,6 +207,35 @@ def _enrich_trades(trades: list, lot_size: int, r_multiple_fn, target_rr) -> lis
     return enriched
 
 
+def _sentinel_block(open_trades_path: Path, journal_path: Path, lot_size: int) -> dict:
+    """
+    One index's Sentinel section: open trades (enriched the same way
+    Anchor's are, so the frontend can reuse the same renderer) plus
+    what it closed today and the resulting totals.
+
+    Separate from Anchor's own block by design -- Sentinel is a distinct
+    strategy with its own state/journal files, and pooling the two would
+    make either one's numbers meaningless (see STRATEGY_VERSIONS.md's
+    promotion policy).
+    """
+    state = _read_json(open_trades_path, default={})
+    raw = state.get("trades", []) if state else []
+    open_trades = _enrich_trades(raw, lot_size, tt.r_multiple, config.DEFAULT_TARGET_RR)
+    closed_today = _read_closed_today(journal_path)
+    open_pnl = round(sum(t.get("running_pnl_inr", 0) or 0 for t in open_trades), 2)
+    realized_pnl = round(sum(t.get("pnl_inr", 0) or 0 for t in closed_today), 2)
+    return {
+        "open_trades": open_trades,
+        "closed_today": closed_today,
+        "totals": {
+            "capital_deployed": round(sum(t["capital_deployed"] for t in open_trades), 2),
+            "open_pnl_inr": open_pnl,
+            "realized_pnl_inr": realized_pnl,
+            "total_pnl_today_inr": round(open_pnl + realized_pnl, 2),
+        },
+    }
+
+
 def _read_json(path: Path, default=None):
     try:
         return json.loads(path.read_text())
@@ -307,6 +347,44 @@ def _peak_favorable_inr(t: dict, index_label: str):
     return None
 
 
+def _contract_label(t: dict) -> str:
+    """
+    Human-readable description of WHAT was traded, across three different
+    journal shapes. Added 2026-08-17: the /pnl table read `strike` +
+    `option_type` for every row, which only single-leg strategies
+    (momentum, price action) actually store. Directional spread and
+    condor entries have neither field -- they describe their legs inside
+    `plan` -- so every one of their rows rendered a blank "—" contract
+    with no way to tell which position it even was.
+
+    Normalised here rather than in the frontend because this is where the
+    per-journal shapes are already known and documented (see
+    PNL_JOURNALS), and because the CSV export should carry the same
+    label the table shows.
+    """
+    def _n(value):
+        """Trim the trailing '.0' every strike carries as a float -- '24500',
+        not '24500.0' -- and degrade to '?' rather than crashing on a
+        missing leg (a partially-written plan should still be readable)."""
+        return f"{value:g}" if isinstance(value, (int, float)) else "?"
+
+    strike, option_type = t.get("strike"), t.get("option_type")
+    if strike is not None:
+        return f"{_n(strike)} {option_type or ''}".strip()
+
+    plan = t.get("plan") or {}
+    # Condor: four legs, identified by its two shorts.
+    if plan.get("short_ce_strike") is not None and plan.get("short_pe_strike") is not None:
+        return (f"Condor {_n(plan['short_ce_strike'])}CE/{_n(plan['short_pe_strike'])}PE"
+                f" hedge {_n(plan.get('hedge_ce_strike'))}/{_n(plan.get('hedge_pe_strike'))}")
+    # Directional spread: two legs, short + hedge, direction names the shape.
+    if plan.get("short_strike") is not None:
+        direction = plan.get("direction")
+        shape = "Bull put" if direction == "PE" else ("Bear call" if direction == "CE" else "Spread")
+        return f"{shape} {_n(plan['short_strike'])}/{_n(plan.get('hedge_strike'))}"
+    return "—"
+
+
 def _load_all_pnl_trades() -> list:
     """
     Every CLOSED trade across every strategy/index journal, normalised to
@@ -368,8 +446,9 @@ def _load_all_pnl_trades() -> list:
                 "net_pnl_inr": round(net, 2),
                 "strike": t.get("strike"),
                 "option_type": t.get("option_type"),
+                "contract": _contract_label(t),
                 "outcome": t.get("outcome") or t.get("status"),
-                "lots": t.get("lots"),
+                "lots": t.get("lots") if t.get("lots") is not None else (t.get("plan") or {}).get("lots"),
                 "peak_favorable_inr": _peak_favorable_inr(t, index_label),
                 "peak_r": t.get("max_r_seen"),
             })
@@ -538,6 +617,9 @@ def build_state() -> dict:
         "price_action_closed_today": bn_price_action_closed_today,
         "price_action_log_age_seconds": bn_price_action_log_age_seconds,
         "price_action_poll_interval_seconds": getattr(pacfg, "POLL_INTERVAL_SECONDS", None),
+        "sentinel": _sentinel_block(
+            BN_SENTINEL_OPEN_TRADES_PATH, BN_SENTINEL_TRADE_JOURNAL_PATH, BANKNIFTY_LOT_SIZE,
+        ),
     }
 
     return {
@@ -576,6 +658,10 @@ def build_state() -> dict:
         "price_action_closed_today": price_action_closed_today,
         "price_action_poll_interval_seconds": getattr(pacfg, "POLL_INTERVAL_SECONDS", None),
         "price_action_log_age_seconds": price_action_log_age_seconds,
+        "sentinel": _sentinel_block(
+            SENTINEL_OPEN_TRADES_PATH, SENTINEL_TRADE_JOURNAL_PATH,
+            getattr(config, "NIFTY_LOT_SIZE", 65),
+        ),
         "banknifty": banknifty,
     }
 

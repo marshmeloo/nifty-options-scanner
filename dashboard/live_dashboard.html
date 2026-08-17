@@ -209,6 +209,11 @@
   <div id="closed-today-container"></div>
 </div>
 
+<div class="panel" id="sentinel-panel" style="display:none;">
+  <h2>Sentinel v1.1-dev <span style="font-weight:400; color:var(--muted); font-size:12px;">— candidate strategy, its own live process; never pooled with Anchor's numbers above</span></h2>
+  <div id="sentinel-container"></div>
+</div>
+
 <div class="panel" id="condor-panel" style="display:none;">
   <h2>Iron Condor Position</h2>
   <div id="condor-container"></div>
@@ -259,6 +264,11 @@
 <div class="panel" id="closed-today-panel-bn" style="display:none;">
   <h2>Closed Today</h2>
   <div id="closed-today-container-bn"></div>
+</div>
+
+<div class="panel" id="sentinel-panel-bn" style="display:none;">
+  <h2>Sentinel v1.1-dev <span style="font-weight:400; color:var(--muted); font-size:12px;">— candidate strategy, its own live process; never pooled with Anchor's numbers above</span></h2>
+  <div id="sentinel-container-bn"></div>
 </div>
 
 <div class="panel" id="condor-panel-bn" style="display:none;">
@@ -600,13 +610,16 @@ function renderRRStats(rr) {
     </div>`;
 }
 
-function renderClosedToday(trades, suffix) {
-  suffix = suffix || "";
-  const panel = document.getElementById("closed-today-panel" + suffix);
-  const container = document.getElementById("closed-today-container" + suffix);
-  if (!trades || !trades.length) { panel.style.display = "none"; return; }
-  panel.style.display = "block";
-  container.innerHTML = `
+// Shared by the Closed Today panels and Sentinel's own closed-trade
+// table -- same trade shape (both are momentum journal entries), so the
+// same renderer covers both rather than a near-duplicate.
+// The tfoot totals row was added 2026-08-17: the table listed every
+// closed trade but never summed them, so "how did today actually go"
+// meant adding up rows by eye.
+function closedTradesTable(trades) {
+  const wins = trades.filter(t => t.outcome === "WIN").length;
+  const totalPnl = trades.reduce((sum, t) => sum + (t.pnl_inr || 0), 0);
+  return `
     <table>
       <thead><tr><th>Closed</th><th>Strike</th><th>Type</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>P&amp;L %</th><th>P&amp;L (Rs)</th></tr></thead>
       <tbody>
@@ -623,7 +636,83 @@ function renderClosedToday(trades, suffix) {
           </tr>
         `).join("")}
       </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="5" style="color:var(--muted);">
+            ${trades.length} closed &middot; ${wins}W / ${trades.length - wins}L
+          </td>
+          <td colspan="2" style="color:var(--muted);">Total</td>
+          <td class="${pnlClass(totalPnl)}" style="font-weight:700;">${fmtInr(totalPnl)}</td>
+        </tr>
+      </tfoot>
     </table>`;
+}
+
+function renderClosedToday(trades, suffix) {
+  suffix = suffix || "";
+  const panel = document.getElementById("closed-today-panel" + suffix);
+  const container = document.getElementById("closed-today-container" + suffix);
+  if (!trades || !trades.length) { panel.style.display = "none"; return; }
+  panel.style.display = "block";
+  container.innerHTML = closedTradesTable(trades);
+}
+
+// Sentinel v1.1-dev: its own live process, its own state/journal files.
+// Shown in its own panel and never merged into Anchor's tables above --
+// pooling two different strategies' trades would make either one's
+// numbers meaningless (see STRATEGY_VERSIONS.md's promotion policy).
+function renderSentinel(sentinel, suffix) {
+  suffix = suffix || "";
+  const panel = document.getElementById("sentinel-panel" + suffix);
+  const container = document.getElementById("sentinel-container" + suffix);
+  if (!sentinel) { panel.style.display = "none"; return; }
+
+  const open = sentinel.open_trades || [];
+  const closed = sentinel.closed_today || [];
+  if (!open.length && !closed.length) { panel.style.display = "none"; return; }
+  panel.style.display = "block";
+
+  const totals = sentinel.totals || {};
+  const parts = [];
+
+  if (open.length) {
+    parts.push(`<div style="margin-bottom:6px; font-weight:600;">Open</div>`);
+    parts.push(`
+      <table>
+        <thead><tr><th>Strike</th><th>Type</th><th>Entry</th><th>Target</th><th>Stop</th><th>Current</th><th>R now</th><th>Peak R</th><th>P&amp;L (Rs)</th></tr></thead>
+        <tbody>
+          ${open.map(t => `
+            <tr>
+              <td>${t.strike}</td>
+              <td>${t.option_type}</td>
+              <td>${t.entry}</td>
+              <td>${t.target}</td>
+              <td>${t.stop}</td>
+              <td>${t.current_ltp ?? "?"}</td>
+              <td class="${pnlClass(t.current_r)}">${fmtSigned(t.current_r, 2, "R")}</td>
+              <td class="${pnlClass(t.max_r_seen)}">${fmtSigned(t.max_r_seen, 2, "R")}</td>
+              <td class="${pnlClass(t.running_pnl_inr)}">${fmtInr(t.running_pnl_inr)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>`);
+  }
+
+  if (closed.length) {
+    parts.push(`<div style="margin:14px 0 6px; font-weight:600;">Closed today</div>`);
+    parts.push(closedTradesTable(closed));
+  }
+
+  parts.push(`
+    <div class="grid" style="margin-top:14px;">
+      <div class="card"><h3>Sentinel today</h3>
+        <div class="row"><span class="k">Open P&amp;L</span><span class="v ${pnlClass(totals.open_pnl_inr)}">${fmtInr(totals.open_pnl_inr)}</span></div>
+        <div class="row"><span class="k">Realised today</span><span class="v ${pnlClass(totals.realized_pnl_inr)}">${fmtInr(totals.realized_pnl_inr)}</span></div>
+        <div class="row"><span class="k">Total today</span><span class="v ${pnlClass(totals.total_pnl_today_inr)}">${fmtInr(totals.total_pnl_today_inr)}</span></div>
+      </div>
+    </div>`);
+
+  container.innerHTML = parts.join("");
 }
 
 function renderPriceAction(trades, closedToday, logAgeSeconds, pollIntervalSeconds, suffix) {
@@ -870,6 +959,7 @@ async function refresh() {
     renderOpenTrades(data.open_trades, data.totals);
     renderRRStats(data.rr_stats);
     renderClosedToday(data.closed_today);
+    renderSentinel(data.sentinel);
     renderCondor(data.condor_position, data.condor_position_age_seconds, data.condor_poll_interval_seconds);
     renderDirectionalSpread(data.directional_spread_position, data.directional_spread_position_age_seconds, data.directional_spread_poll_interval_seconds);
     renderPriceAction(data.price_action_trades, data.price_action_closed_today, data.price_action_log_age_seconds, data.price_action_poll_interval_seconds);
@@ -916,6 +1006,7 @@ async function refresh() {
 
     renderOpenTrades(bn.open_trades, bn.totals, "-bn");
     renderClosedToday(bn.closed_today, "-bn");
+    renderSentinel(bn.sentinel, "-bn");
     renderCondor(bn.condor_position, bn.condor_position_age_seconds, bn.condor_poll_interval_seconds, "-bn");
     renderDirectionalSpread(bn.directional_spread_position, bn.directional_spread_position_age_seconds, bn.directional_spread_poll_interval_seconds, "-bn");
     renderPriceAction(bn.price_action_trades, bn.price_action_closed_today, bn.price_action_log_age_seconds, bn.price_action_poll_interval_seconds, "-bn");

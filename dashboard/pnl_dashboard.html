@@ -554,7 +554,7 @@ function renderTradeTable(trades) {
         <td>${(t.closed_at || "").replace("T", " ").slice(0, 16)}</td>
         <td>${t.index}</td>
         <td>${t.strategy}</td>
-        <td>${t.strike ? t.strike + " " + (t.option_type || "") : "—"}</td>
+        <td>${t.contract || (t.strike ? t.strike + " " + (t.option_type || "") : "—")}</td>
         <td>${t.lots ?? "—"}</td>
         <td class="${pnlClass(t.realised_pnl_inr)}">${fmtInr(t.realised_pnl_inr)}</td>
         <td>${t.charges_modelled ? fmtInr(-(t.charges_inr||0)) : "—"}</td>
@@ -569,7 +569,10 @@ function renderTradeTable(trades) {
 document.getElementById("downloadBtn").addEventListener("click", () => {
   const trades = periodTrades(filteredTrades());
   if (!trades.length) return;
-  const cols = ["date","closed_at","index","strategy","strike","option_type","lots","realised_pnl_inr","charges_inr","charges_modelled","net_pnl_inr","outcome"];
+  // `contract` carries the same normalised description the table shows,
+  // which is the only readable identifier multi-leg strategies have
+  // (spread/condor rows leave strike/option_type empty by design).
+  const cols = ["date","closed_at","index","strategy","contract","strike","option_type","lots","realised_pnl_inr","charges_inr","charges_modelled","net_pnl_inr","outcome"];
   const csv = [cols.join(",")].concat(
     trades.map(t => cols.map(c => JSON.stringify(t[c] ?? "")).join(","))
   ).join("\n");
