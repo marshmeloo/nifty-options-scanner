@@ -23,6 +23,31 @@ import config
 import trade_tracker as tt
 
 
+@pytest.fixture(autouse=True)
+def _adjustment_enabled(monkeypatch):
+    """
+    This file's whole purpose is pinning the adjustment MECHANISM, so it
+    runs as if enabled regardless of the live default -- see
+    test_adjustment_is_disabled_by_default below for the coverage of
+    that default itself. config.LEARNED_TAG_ADJUSTMENT_ENABLED went to
+    False 2026-08-18 (see config.py's comment): even with
+    MIN_TRADES_FOR_ANY_ADJUSTMENT/MIN_TAG_SAMPLES_FOR_ADJUSTMENT both
+    satisfied on the live journal, that was judged too small a sample to
+    trust for per-tag differentiation this early.
+    """
+    monkeypatch.setattr(config, "LEARNED_TAG_ADJUSTMENT_ENABLED", True)
+
+
+def test_adjustment_is_disabled_by_default(monkeypatch):
+    """The live default, unset by the fixture above."""
+    monkeypatch.setattr(config, "LEARNED_TAG_ADJUSTMENT_ENABLED", False)
+    monkeypatch.setattr(tt, "_load_recent_journal", lambda limit=None: (_ for _ in ()).throw(
+        AssertionError("disabled path must not even read the journal")))
+    score, notes = tt.apply_learned_adjustment(5.5, ["Bullish FVG at this strike (1-2)"])
+    assert score == 5.5
+    assert any("disabled" in n for n in notes)
+
+
 def _journal(entries):
     """entries: list of (outcome, [tags])"""
     return [{"outcome": o, "reason_tags": t} for o, t in entries]

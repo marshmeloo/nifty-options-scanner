@@ -576,6 +576,17 @@ JOURNAL_LOOKBACK_FOR_LEARNING = 100  # how many recent journal entries to consid
 # moves the score at all and only a genuinely differentiated tag with
 # real weight behind it can shift anything.
 
+# TURNED OFF 2026-08-18. Even with MIN_TRADES_FOR_ANY_ADJUSTMENT and
+# MIN_TAG_SAMPLES_FOR_ADJUSTMENT both satisfied on the live journal (43
+# decided trades, every active tag with 14-37 samples), that is still a
+# small sample to trust for per-tag differentiation this early -- and
+# the measured real effect was already tiny (-0.06 to -0.08 on two tags,
+# zero on the rest), so disabling it costs almost nothing right now.
+# Revisit once the journal has genuinely grown; flip back to True is a
+# one-line change, nothing else needs touching. When False,
+# apply_learned_adjustment() returns the score completely unchanged.
+LEARNED_TAG_ADJUSTMENT_ENABLED = False
+
 # Below this many closed WIN/LOSS trades in total, apply NO adjustment
 # whatsoever. With single-digit trade counts there is nothing to learn
 # and pretending otherwise actively suppressed trading.

@@ -338,7 +338,18 @@ def apply_learned_adjustment(score: float, reasons: list) -> tuple:
         co-occur heavily and uncapped summing double-counts one
         underlying market condition -- which is what made the old
         penalty grow with the raw score.
+
+    A fourth, blunter guard sits in front of all three: config.
+    LEARNED_TAG_ADJUSTMENT_ENABLED. Turned off 2026-08-18 -- even with
+    the two thresholds above satisfied on the live journal, that was
+    still judged too small a sample to trust for per-tag differentiation
+    (see config.py's comment for the numbers). When False, this returns
+    immediately with the score untouched, before even reading the
+    journal.
     """
+    if not config.LEARNED_TAG_ADJUSTMENT_ENABLED:
+        return round(score, 2), ["Learned tag adjustment disabled (config.LEARNED_TAG_ADJUSTMENT_ENABLED=False)."]
+
     base, total_trades = base_win_rate()
     if total_trades < config.MIN_TRADES_FOR_ANY_ADJUSTMENT:
         return round(score, 2), [

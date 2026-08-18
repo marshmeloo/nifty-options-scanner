@@ -94,13 +94,17 @@ class Policy:
     # history from an earlier period is look-ahead bias: 2026 tag win
     # rates informing a 2024 decision. Set False for historical runs.
     #
-    # This is currently inert either way -- the journal holds 9 decided
-    # trades against a MIN_TRADES_FOR_ANY_ADJUSTMENT floor of 30, so
-    # apply_learned_adjustment returns the raw score untouched. That is an
-    # accident of timing, not a safeguard: the moment the journal passes
-    # 30, every historical backtest would silently begin contaminating
-    # itself. Making it a switch means the correctness is stated rather
-    # than inherited from a coincidence.
+    # Currently inert either way regardless of this flag or journal size:
+    # config.LEARNED_TAG_ADJUSTMENT_ENABLED was turned off live 2026-08-18
+    # (see config.py's comment), and apply_learned_adjustment() checks
+    # that flag before anything else, so it returns the raw score
+    # untouched no matter what use_learned_adjustment is set to here. This
+    # USED to be an accident of timing (a 9-trade journal sitting below
+    # the 30-trade floor, about to silently start mattering the moment it
+    # crossed that line) -- it is now a deliberate global switch instead,
+    # which is the safer state to be inert FROM. If the live flag is ever
+    # flipped back on, this backtest-side switch becomes load-bearing
+    # again exactly as originally intended.
     use_learned_adjustment: bool = True
     # Optional callable(setup) -> float replacing the scanner's own score,
     # so alternative weightings can be evaluated over recorded history

@@ -66,6 +66,13 @@ DECISION_RELEVANT_SETTINGS = (
     "MAX_DAILY_LOSS_PCT", "MAX_LOTS_PER_TRADE", "NIFTY_LOT_SIZE",
     "MAX_NEW_TRADES_PER_DAY", "MIN_CONVICTION_SCORE_TO_TRACK",
     "JOURNAL_LOOKBACK_FOR_LEARNING", "MIN_TAG_SAMPLES_FOR_ADJUSTMENT",
+    # LEARNED_TAG_ADJUSTMENT_ENABLED and the three below were added in the
+    # 2026-07-30 tag-adjustment rewrite but never added here -- a gap this
+    # touches while adding the new on/off switch. All four are directly
+    # decision-relevant: they're the actual knobs that determine whether
+    # and how much a candidate's score moves.
+    "LEARNED_TAG_ADJUSTMENT_ENABLED", "MIN_TRADES_FOR_ANY_ADJUSTMENT",
+    "TAG_PRIOR_STRENGTH", "TAG_ADJUSTMENT_SCALE", "MAX_TOTAL_TAG_ADJUSTMENT",
     "WEAK_TAG_WIN_RATE", "STRONG_TAG_WIN_RATE",
     "REENTRY_PRICE_TOLERANCE_PCT",
     "EXPIRY_DAY_EXTRA_CONVICTION", "EXPIRY_DAY_NO_NEW_TRADES_AFTER",
