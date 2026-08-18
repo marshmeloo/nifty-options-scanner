@@ -41,16 +41,20 @@ OI/IV data itself doesn't update meaningfully every few seconds.
 import os
 import json
 import time
+import logging
 import statistics
 from datetime import datetime, date
 from pathlib import Path
 
 import requests
 
+log = logging.getLogger("nifty_scanner")
+
 import config as cfg
 import oi_analytics
 import dhan_rate_limiter
 import orderflow
+import instrument_master
 from models import OptionQuote, MarketSnapshot, Candle
 from atomic_state import atomic_write_json
 
@@ -144,6 +148,156 @@ def _fetch_raw_chain(expiry: str, underlying_scrip: int = NIFTY_UNDERLYING_SCRIP
     )
     resp.raise_for_status()
     return resp.json()["data"]
+
+
+def get_ltp_batch(security_ids: list, exchange_segment: str = "NSE_FNO") -> dict:
+    """
+    Batch LTP-only quote for up to 1000 instruments via Dhan's
+    /marketfeed/ltp -- a separate, far cheaper endpoint than
+    /optionchain: no OI/IV/greeks/bid-ask, just last_price, but its own
+    documented quota is 1 request/second (vs /optionchain's one request
+    per 3 seconds for a WHOLE chain). See dhan_rate_limiter's module
+    docstring for why the two are rate-limited independently rather than
+    sharing one budget.
+
+    Built for the fast stop/target check (main_live.py and friends):
+    that check only needs the LTP of the handful of strikes with an open
+    trade, not a full chain re-fetch. This is NOT a chain replacement --
+    it has no bid/ask, so callers needing realistic fill pricing (see
+    config.USE_BID_ASK_FILLS) must prefer orderflow.py's WebSocket book
+    first and use this only as the fallback for whatever that doesn't
+    cover, exactly like get_nifty_snapshot() already prefers
+    orderflow.top_of_book() over the REST chain's own bid/ask fields.
+
+    Not chunked at 1000: every current caller is at most a few open
+    positions across four processes, nowhere near Dhan's limit. If a
+    future caller could exceed it, Dhan's own error response on that
+    request will say so loudly rather than this silently truncating.
+
+    Returns {security_id (int): last_price (float)} for every instrument
+    Dhan actually returned a price for. A requested id missing from the
+    response (expired/invalid/no data that tick) is simply absent from
+    the result -- callers must treat a missing key the same way they'd
+    treat a missing chain strike: leave that trade's state untouched
+    this cycle, don't crash and don't invent a price.
+
+    Docs: https://dhanhq.co/docs/v2/market-quote/
+    """
+    if not security_ids:
+        return {}
+
+    dhan_rate_limiter.wait_for_ltp_slot()
+    resp = requests.post(
+        f"{DHAN_BASE_URL}/marketfeed/ltp",
+        headers=_headers(),
+        json={exchange_segment: list(security_ids)},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json().get("data", {})
+
+    prices = {}
+    for segment_data in data.values():
+        for sec_id_str, payload in segment_data.items():
+            try:
+                prices[int(sec_id_str)] = payload["last_price"]
+            except (TypeError, ValueError, KeyError):
+                continue  # one malformed entry must not lose the rest of the batch
+    return prices
+
+
+def get_fast_check_snapshot(open_positions, expiry: str, symbol: str = "NIFTY") -> MarketSnapshot:
+    """
+    Lightweight MarketSnapshot for the fast stop/target check ONLY. Built
+    2026-08-18 to stop re-fetching a FULL option chain every
+    FAST_CHECK_INTERVAL_SECONDS just to re-check a handful of already-open
+    strikes -- see dhan_rate_limiter's module docstring and BACKLOG.md for
+    the request-demand problem that was contributing to.
+
+    trade_tracker.update_open_trades() is the only intended consumer. It
+    reads snapshot.chain (strike/option_type/ltp/bid/ask per quote) and
+    snapshot.timestamp -- nothing else. spot/vwap/pcr/oi_analysis below
+    are unused placeholders, NOT real values -- never reuse this snapshot
+    for scanning, OI analytics, or the dashboard; call get_nifty_snapshot()
+    for those.
+
+    `open_positions`: iterable of (strike, option_type) for every
+    currently-open trade this cycle needs to check.
+
+    Two tiers per strike, cheapest AND most realistic first:
+      1. orderflow.py's already-live WebSocket book -- zero additional
+         Dhan API cost, and has REAL bid/ask AND ltp. This is the SAME
+         source get_nifty_snapshot() already prefers for bid/ask (see
+         its `of_top` lookup above), so preferring it here changes
+         nothing about fill realism versus the full-chain fetch this
+         replaces -- config.USE_BID_ASK_FILLS still gets a real bid
+         wherever orderflow has one.
+      2. /marketfeed/ltp (get_ltp_batch), ONE batched request for every
+         strike orderflow didn't have fresh data for. LTP only, no
+         bid/ask -- exactly the EXISTING has_book=False fallback path
+         in trade_tracker.exit_price_for(), not a new degradation.
+    One orderflow.load_state() call up front serves every strike in
+    `open_positions`, rather than one disk read per strike.
+
+    A strike neither tier can answer for (not subscribed on orderflow,
+    AND missing from the instrument master, AND missing from Dhan's LTP
+    response) is simply absent from .chain -- update_open_trades()
+    already tolerates that by leaving the trade open, untouched, for
+    this cycle. Same behaviour as a strike filtered out of a full chain
+    fetch; nothing new for that function to handle.
+
+    A failure of the LTP fallback CALL itself (network/HTTP error) is
+    caught here rather than raised, and degrades to the same "leave it
+    open" outcome for just the strikes that needed it -- strictly better
+    than the full-chain fast check's previous behaviour, where any
+    single API failure lost the check for EVERY open trade that cycle,
+    not just the ones the failing call would have covered.
+    """
+    quotes = []
+    need_lookup = []
+    of_state = orderflow.load_state()
+
+    for strike, option_type in open_positions:
+        contract = orderflow.book_for(strike, option_type, state=of_state)
+        if contract is None:
+            need_lookup.append((strike, option_type))
+            continue
+        top = orderflow.top_of_book(strike, option_type, state=of_state)
+        quotes.append(OptionQuote(
+            symbol=symbol, expiry=expiry, strike=strike, option_type=option_type,
+            ltp=contract["ltp"], oi=0, oi_change_pct=0.0, volume=0, iv=0.0, iv_percentile=0.0,
+            bid=top["bid"], ask=top["ask"], bid_qty=top["bid_qty"], ask_qty=top["ask_qty"],
+        ))
+
+    if need_lookup:
+        index = instrument_master.build_index(underlying=symbol)
+        position_by_id = {}
+        for strike, option_type in need_lookup:
+            sec_id = instrument_master.security_id_for(strike, expiry, option_type, index)
+            if sec_id is None:
+                log.info(f"  [fast check] no security id for {strike:.0f}{option_type} -- "
+                         f"instrument master may be stale, skipping this cycle")
+                continue
+            position_by_id[sec_id] = (strike, option_type)
+
+        if position_by_id:
+            try:
+                prices = get_ltp_batch(list(position_by_id.keys()))
+            except requests.RequestException as e:
+                log.info(f"  [fast check] LTP fallback failed, {len(position_by_id)} strike(s) "
+                         f"unchecked this cycle: {e}")
+                prices = {}
+            for sec_id, ltp in prices.items():
+                strike, option_type = position_by_id[sec_id]
+                quotes.append(OptionQuote(
+                    symbol=symbol, expiry=expiry, strike=strike, option_type=option_type,
+                    ltp=ltp, oi=0, oi_change_pct=0.0, volume=0, iv=0.0, iv_percentile=0.0,
+                ))
+
+    return MarketSnapshot(
+        symbol=symbol, spot=0.0, vwap=0.0, pcr=0.0, chain=quotes,
+        timestamp=datetime.now(), source="fast_check",
+    )
 
 
 PRICE_BASELINE_PATH = STATE_DIR / "price_baseline.json"

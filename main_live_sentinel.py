@@ -57,6 +57,7 @@ from datetime import datetime, date, time as dtime
 from pathlib import Path
 
 import config
+import dhan_source
 
 # --- Sentinel v1.1-dev identity + cluster-cap config, patched before any
 # strategy module is used. See STRATEGY_VERSIONS.md for what these mean
@@ -421,16 +422,29 @@ def force_close_all(state: dict, expiry: str, last_snapshot=None):
 
 def check_open_trades_fast(state: dict, expiry: str):
     """
-    NOT CALLED as of 2026-08-17 -- Sentinel deliberately runs no fast
-    check; see the comment in run_forever()'s loop for why and what it
-    costs. Kept (rather than deleted) so this file stays structurally
-    parallel to main_live.py and re-enabling is a one-line change if the
-    Dhan request-demand problem is solved another way.
+    RE-ENABLED 2026-08-18, after being deliberately dropped on 2026-08-17
+    (see git history / STRATEGY_VERSIONS.md) because the full-chain fetch
+    it used to make was measured as the majority of this account's Dhan
+    request volume. That reason no longer applies: this now uses
+    dhan_source.get_fast_check_snapshot() (orderflow's live book first,
+    /marketfeed/ltp fallback for whatever it misses), the same cheap
+    mechanism main_live.py's own fast check switched to the same day --
+    see that function's docstring. Removes the exit-latency confound the
+    2026-08-17 removal introduced between Anchor and Sentinel (Sentinel
+    was noticing stops/targets up to POLL_INTERVAL_SECONDS later than
+    Anchor); the two are now back to differing ONLY in the cluster cap,
+    which is the actual comparison this candidate exists to run.
+
+    Deliberately Dhan-only, NOT routed through resilient_source, for the
+    same reason main_live.py's version is: an NSE-resilient fast check
+    would mean re-fetching NSE's own full chain every
+    FAST_CHECK_INTERVAL_SECONDS, exactly the cost this exists to avoid.
     """
     if not state["trades"]:
         return
+    positions = [(t["strike"], t["option_type"]) for t in state["trades"]]
     try:
-        snapshot = get_nifty_snapshot(expiry=expiry, must_include_strikes=_tracked_strikes(state))
+        snapshot = dhan_source.get_fast_check_snapshot(positions, expiry=expiry)
     except Exception as e:
         log.info(f"  [fast check] snapshot fetch failed, will retry next fast check: {e}")
         return
@@ -520,25 +534,16 @@ def run_forever():
                 except Exception as e:
                     log.info(f"  Error this cycle (will retry next cycle): {e}")
                 last_full_cycle_at = now
-            # NO FAST CHECK HERE, deliberately (2026-08-17). Anchor's own
-            # process runs one every FAST_CHECK_INTERVAL_SECONDS while a
-            # trade is open; Sentinel does not, to cut Dhan request demand
-            # -- the fast check was measured as 48 of ~58 req/min with
-            # trades open, against a ~17/min budget (see BACKLOG.md).
-            # Dropping it here halves the momentum fast-check load.
-            #
-            # KNOWN COST, stated rather than buried: Sentinel now notices
-            # a stop/target up to POLL_INTERVAL_SECONDS late instead of
-            # FAST_CHECK_INTERVAL_SECONDS late. On 2026-08-17, 5 of
-            # Sentinel's 23 exits were caught by the fast check, so this
-            # is not hypothetical -- those would have exited later, at
-            # whatever price the market had moved to.
-            #
-            # THIS WEAKENS THE ANCHOR-vs-SENTINEL COMPARISON. The two now
-            # differ in exit-detection latency as well as the cluster cap,
-            # so a P&L gap between them can no longer be attributed to the
-            # cap alone. Weigh that before promoting or rejecting Sentinel
-            # on live evidence (see STRATEGY_VERSIONS.md's promotion policy).
+            else:
+                # RE-ENABLED 2026-08-18 -- see check_open_trades_fast's
+                # docstring. Was dropped 2026-08-17 because it fetched a
+                # full chain every FAST_CHECK_INTERVAL_SECONDS; now uses
+                # the same orderflow-first/LTP-fallback snapshot as
+                # main_live.py, which does not carry that cost.
+                try:
+                    check_open_trades_fast(state, expiry)
+                except Exception as e:
+                    log.info(f"  [fast check] error (will retry next fast check): {e}")
             was_open_last_cycle = True
         else:
             if was_open_last_cycle and state["trades"]:

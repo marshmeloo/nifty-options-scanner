@@ -49,6 +49,22 @@ It does not fix the NSE fallback tier being blocked by tightened bot
 detection (see BACKLOG.md) -- that's a different, external problem this
 can't touch. It only ensures Dhan itself, the primary tier, isn't
 rate-limited by our own combined traffic.
+
+TWO INDEPENDENT BUDGETS (added 2026-08-18)
+--------------------------------------------
+/marketfeed/ltp (added for the fast stop/target check, see
+dhan_source.get_ltp_batch) has its own documented Dhan limit -- 1
+request/second for up to 1000 instruments -- separate from
+/optionchain's 1 request/3s. Sharing one lock/state pair between them
+would wrongly force LTP calls to wait out the chain endpoint's much
+slower interval, for no reason: they are different quotas. Every
+function below now takes optional `lock_path`/`state_path` (defaulting
+to the original chain-fetch files, so every existing caller is
+unaffected), and `wait_for_ltp_slot()` is a thin wrapper pointed at a
+second, separate lock/state pair with its own, faster interval. Same
+hardened contention handling (OSError-tolerant acquire, jittered
+queueing under contention) applies to both -- that logic has nothing to
+do with WHICH budget it's coordinating.
 """
 
 import os
@@ -65,6 +81,12 @@ STATE_DIR.mkdir(exist_ok=True)
 LOCK_PATH = STATE_DIR / "dhan_rate_limiter.lock"
 STATE_PATH = STATE_DIR / "dhan_rate_limiter.json"
 
+# Second, independent budget for /marketfeed/ltp -- see this module's
+# docstring for why it needs its own lock/state pair rather than sharing
+# the chain-fetch one above.
+LTP_LOCK_PATH = STATE_DIR / "dhan_rate_limiter_ltp.lock"
+LTP_STATE_PATH = STATE_DIR / "dhan_rate_limiter_ltp.json"
+
 # Slightly above Dhan's documented 3s/request limit, shared across ALL
 # processes hitting this account -- not per-process. Deliberately a
 # little conservative rather than exactly 3.0: Dhan's own enforcement
@@ -72,6 +94,14 @@ STATE_PATH = STATE_DIR / "dhan_rate_limiter.json"
 # cost of being 0.5s too cautious is negligible next to the cost of
 # another 429 storm.
 MIN_INTERVAL_SECONDS = 3.5
+
+# Dhan documents 1 request/second for /marketfeed/ltp (up to 1000
+# instruments per call), a separate quota from /optionchain above. Same
+# "a little conservative" reasoning as MIN_INTERVAL_SECONDS: margin
+# against clock/enforcement-window mismatch costs almost nothing here
+# since a request that waits an extra 0.2s is still far faster than the
+# 3.5s chain-fetch interval it's replacing for the fast check.
+LTP_MIN_INTERVAL_SECONDS = 1.2
 
 # If a lock file is older than this, its owner almost certainly crashed
 # or was killed mid-request (matches this project's general assumption,
@@ -94,7 +124,7 @@ MAX_ACQUIRE_WAIT_SECONDS = 8.0
 UNLOCKED_SPACING_MAX_WAIT_SECONDS = 15.0
 
 
-def _try_acquire_lock() -> bool:
+def _try_acquire_lock(lock_path: Path) -> bool:
     """
     True if this process now holds the lock, False if someone else does.
 
@@ -118,33 +148,33 @@ def _try_acquire_lock() -> bool:
     thing that takes down a trading process.
     """
     try:
-        fd = os.open(str(LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.close(fd)
         return True
     except OSError:
         return False
 
 
-def _clear_stale_lock():
+def _clear_stale_lock(lock_path: Path):
     try:
-        age = time.time() - LOCK_PATH.stat().st_mtime
+        age = time.time() - lock_path.stat().st_mtime
         if age > STALE_LOCK_SECONDS:
-            LOCK_PATH.unlink()
+            lock_path.unlink()
             log.info(f"  [rate limiter] cleared a stale lock ({age:.0f}s old, owner likely crashed)")
     except OSError:
         pass  # already gone, or a race with another process clearing it -- fine either way
 
 
-def _read_last_request_at() -> float:
-    if not STATE_PATH.exists():
+def _read_last_request_at(state_path: Path) -> float:
+    if not state_path.exists():
         return 0.0
     try:
-        return json.loads(STATE_PATH.read_text()).get("last_request_at", 0.0)
+        return json.loads(state_path.read_text()).get("last_request_at", 0.0)
     except (json.JSONDecodeError, OSError):
         return 0.0
 
 
-def _respect_interval_unlocked(min_interval: float):
+def _respect_interval_unlocked(min_interval: float, state_path: Path):
     """
     Best-effort spacing WITHOUT holding the lock, for when acquisition
     times out under heavy contention.
@@ -175,7 +205,7 @@ def _respect_interval_unlocked(min_interval: float):
     # the previous one wrote and queues behind it properly.
     deadline = time.monotonic() + UNLOCKED_SPACING_MAX_WAIT_SECONDS
     while time.monotonic() < deadline:
-        elapsed = time.time() - _read_last_request_at()
+        elapsed = time.time() - _read_last_request_at(state_path)
         if elapsed >= min_interval:
             break
         # Jittered re-check so waiters don't march in lockstep and
@@ -183,21 +213,29 @@ def _respect_interval_unlocked(min_interval: float):
         time.sleep(min(min_interval - elapsed, min_interval / 4) + random.uniform(0.0, min_interval / 4))
 
     try:
-        STATE_PATH.write_text(json.dumps({"last_request_at": time.time()}))
+        state_path.write_text(json.dumps({"last_request_at": time.time()}))
     except OSError:
         pass  # observability only -- never block the request on this
 
 
-def wait_for_slot(min_interval: float = None):
+def wait_for_slot(min_interval: float = None, lock_path: Path = None, state_path: Path = None):
     """
     Block until it's this process's turn to make a Dhan request,
-    coordinating with every other process sharing this account. Call
-    immediately before every Dhan HTTP request.
+    coordinating with every other process sharing this account AND this
+    specific quota (see `lock_path`/`state_path`). Call immediately
+    before every Dhan HTTP request.
 
     Never blocks a trading loop indefinitely: if the lock can't be
     acquired within MAX_ACQUIRE_WAIT_SECONDS, falls back to best-effort
     unlocked spacing (see _respect_interval_unlocked) rather than either
     waiting forever OR firing unthrottled.
+
+    `lock_path`/`state_path` default to the original /optionchain files,
+    so every existing caller is unaffected. Pass LTP_LOCK_PATH/
+    LTP_STATE_PATH (or use wait_for_ltp_slot(), the same thing spelled
+    out) to coordinate against the SEPARATE /marketfeed/ltp quota
+    instead -- see this module's docstring for why the two must not
+    share one budget.
 
     IMPORTANT, and not something this function can fix on its own: it
     can only SHAPE demand, never create capacity. Measured 2026-08-17
@@ -207,33 +245,42 @@ def wait_for_slot(min_interval: float = None):
     20/min). Sustained 3.4x oversubscription means requests queue and
     some cycles will still be slow or fail no matter how fair the
     queueing is. The durable fix is fewer/cheaper requests -- see
-    BACKLOG.md.
+    BACKLOG.md. (The fast check moving to /marketfeed/ltp on 2026-08-18
+    is exactly that fix, for that one call site.)
     """
     min_interval = min_interval if min_interval is not None else MIN_INTERVAL_SECONDS
+    lock_path = lock_path if lock_path is not None else LOCK_PATH
+    state_path = state_path if state_path is not None else STATE_PATH
     acquire_deadline = time.monotonic() + MAX_ACQUIRE_WAIT_SECONDS
 
     acquired = False
     while time.monotonic() < acquire_deadline:
-        if _try_acquire_lock():
+        if _try_acquire_lock(lock_path):
             acquired = True
             break
-        _clear_stale_lock()
+        _clear_stale_lock(lock_path)
         # Jittered poll: a fixed sleep marches every waiter in lockstep,
         # so they keep colliding on the same retry tick.
         time.sleep(random.uniform(0.02, 0.08))
 
     if not acquired:
         log.info("  [rate limiter] lock contended, spacing this request without it")
-        _respect_interval_unlocked(min_interval)
+        _respect_interval_unlocked(min_interval, state_path)
         return
 
     try:
-        elapsed = time.time() - _read_last_request_at()
+        elapsed = time.time() - _read_last_request_at(state_path)
         if elapsed < min_interval:
             time.sleep(min_interval - elapsed)
-        STATE_PATH.write_text(json.dumps({"last_request_at": time.time()}))
+        state_path.write_text(json.dumps({"last_request_at": time.time()}))
     finally:
         try:
-            LOCK_PATH.unlink()
+            lock_path.unlink()
         except OSError:
             pass  # already gone (e.g. force-cleared as stale by another process) -- fine
+
+
+def wait_for_ltp_slot():
+    """wait_for_slot(), coordinated against /marketfeed/ltp's own separate
+    quota instead of /optionchain's. See this module's docstring."""
+    wait_for_slot(min_interval=LTP_MIN_INTERVAL_SECONDS, lock_path=LTP_LOCK_PATH, state_path=LTP_STATE_PATH)

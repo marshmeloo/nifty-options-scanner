@@ -20,6 +20,8 @@ def isolated_state(tmp_path, monkeypatch):
     the real shared state used by live processes."""
     monkeypatch.setattr(drl, "LOCK_PATH", tmp_path / "dhan_rate_limiter.lock")
     monkeypatch.setattr(drl, "STATE_PATH", tmp_path / "dhan_rate_limiter.json")
+    monkeypatch.setattr(drl, "LTP_LOCK_PATH", tmp_path / "dhan_rate_limiter_ltp.lock")
+    monkeypatch.setattr(drl, "LTP_STATE_PATH", tmp_path / "dhan_rate_limiter_ltp.json")
     return tmp_path
 
 
@@ -89,7 +91,7 @@ def test_permission_error_on_acquire_is_treated_as_contention_not_a_crash(monkey
         raise PermissionError(13, "Permission denied")
     monkeypatch.setattr(drl.os, "open", _raise_permission_error)
 
-    assert drl._try_acquire_lock() is False
+    assert drl._try_acquire_lock(drl.LOCK_PATH) is False
 
 
 def test_wait_for_slot_survives_permission_error_and_proceeds(monkeypatch):
@@ -110,7 +112,7 @@ def test_file_exists_error_still_treated_as_contention(monkeypatch):
         raise FileExistsError(17, "File exists")
     monkeypatch.setattr(drl.os, "open", _raise_file_exists)
 
-    assert drl._try_acquire_lock() is False
+    assert drl._try_acquire_lock(drl.LOCK_PATH) is False
 
 
 # --------------------------------------------------------------------------
@@ -123,7 +125,7 @@ def test_contended_lock_still_spaces_the_request(monkeypatch):
     must now still space the request, even without the lock."""
     monkeypatch.setattr(drl, "MAX_ACQUIRE_WAIT_SECONDS", 0.05)
     monkeypatch.setattr(drl, "MIN_INTERVAL_SECONDS", 0.2)
-    monkeypatch.setattr(drl, "_try_acquire_lock", lambda: False)   # permanently contended
+    monkeypatch.setattr(drl, "_try_acquire_lock", lambda *a, **kw: False)   # permanently contended
     drl.STATE_PATH.write_text(json.dumps({"last_request_at": time.time()}))
 
     started = time.monotonic()
@@ -141,7 +143,7 @@ def test_contended_fallback_records_its_request(monkeypatch):
     been idle and fires immediately."""
     monkeypatch.setattr(drl, "MAX_ACQUIRE_WAIT_SECONDS", 0.05)
     monkeypatch.setattr(drl, "MIN_INTERVAL_SECONDS", 0.05)
-    monkeypatch.setattr(drl, "_try_acquire_lock", lambda: False)
+    monkeypatch.setattr(drl, "_try_acquire_lock", lambda *a, **kw: False)
     drl.STATE_PATH.write_text(json.dumps({"last_request_at": 0.0}))
 
     drl.wait_for_slot()
@@ -154,7 +156,7 @@ def test_contended_fallback_survives_an_unwritable_state_file(monkeypatch):
     """Recording is observability -- it must never block the request."""
     monkeypatch.setattr(drl, "MAX_ACQUIRE_WAIT_SECONDS", 0.05)
     monkeypatch.setattr(drl, "MIN_INTERVAL_SECONDS", 0.05)
-    monkeypatch.setattr(drl, "_try_acquire_lock", lambda: False)
+    monkeypatch.setattr(drl, "_try_acquire_lock", lambda *a, **kw: False)
 
     class _Unwritable(type(drl.STATE_PATH)):
         def write_text(self, *a, **kw):
@@ -198,3 +200,56 @@ def test_real_concurrent_processes_are_actually_spaced(monkeypatch):
     # The old "proceed without it" path finished all 11 in ~0.3s (just the
     # acquire timeout); real spacing has to take meaningfully longer.
     assert span >= 0.5, f"11 requests completed in {span:.2f}s -- not actually spaced"
+
+
+# --------------------------------------------------------------------------
+# Two independent budgets: /optionchain vs /marketfeed/ltp (2026-08-18)
+# --------------------------------------------------------------------------
+
+def test_wait_for_slot_defaults_are_unaffected_by_the_new_parameters():
+    """Every existing caller (option-chain fetches) invokes wait_for_slot()
+    with zero or one (min_interval) argument. Confirms the new lock_path/
+    state_path parameters default to the original files rather than
+    silently requiring callers to be updated."""
+    drl.wait_for_slot(min_interval=0.05)
+    assert drl.STATE_PATH.exists()
+    assert not drl.LTP_STATE_PATH.exists()
+
+
+def test_wait_for_ltp_slot_uses_the_separate_ltp_files():
+    drl.wait_for_ltp_slot()
+    assert drl.LTP_STATE_PATH.exists()
+    assert not drl.STATE_PATH.exists()
+
+
+def test_chain_and_ltp_budgets_do_not_block_each_other(monkeypatch):
+    """The whole point of splitting the budgets: a slow /optionchain
+    interval must not force /marketfeed/ltp calls to wait it out, and
+    vice versa. Set MIN_INTERVAL_SECONDS (chain) far above
+    LTP_MIN_INTERVAL_SECONDS and confirm an LTP call right after a chain
+    call doesn't inherit the chain's wait."""
+    monkeypatch.setattr(drl, "MIN_INTERVAL_SECONDS", 5.0)
+    monkeypatch.setattr(drl, "LTP_MIN_INTERVAL_SECONDS", 0.05)
+
+    drl.wait_for_slot()  # chain call, records into STATE_PATH
+
+    start = time.time()
+    drl.wait_for_ltp_slot()  # must not wait out the chain's 5s interval
+    assert time.time() - start < 1.0
+
+
+def test_ltp_lock_contention_falls_back_independently_of_chain_lock(monkeypatch):
+    """Confirms the LTP path exercises the same hardened contention
+    handling (OSError-tolerant acquire, unlocked fallback spacing) as the
+    chain path, coordinated through its own lock file and state file."""
+    monkeypatch.setattr(drl, "MAX_ACQUIRE_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(drl, "LTP_MIN_INTERVAL_SECONDS", 0.2)
+    monkeypatch.setattr(drl, "_try_acquire_lock", lambda *a, **kw: False)   # permanently contended
+    drl.LTP_STATE_PATH.write_text(json.dumps({"last_request_at": time.time()}))
+
+    started = time.monotonic()
+    drl.wait_for_ltp_slot()   # must proceed via the unlocked fallback, not hang or raise
+    elapsed = time.monotonic() - started
+
+    assert elapsed >= 0.2
+    assert json.loads(drl.LTP_STATE_PATH.read_text())["last_request_at"] > 0.0

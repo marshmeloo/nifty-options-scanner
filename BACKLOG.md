@@ -3,63 +3,86 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
-## Dhan request demand is ~3.4x the rate limit -- limiter hardened, but the real fix is fewer requests (added 2026-08-17)
+## Dhan request demand is ~3.4x the rate limit -- RESOLVED 2026-08-18 (limiter hardened 2026-08-17, demand itself cut 2026-08-18)
 
-The limiter's thundering-herd bug is FIXED (see below). The underlying
-capacity problem is NOT, and no amount of limiter tuning can fix it.
+The limiter's thundering-herd bug was fixed 2026-08-17 (see below). The
+underlying CAPACITY problem -- momentum's fast check re-fetching a full
+option chain every 5s while a trade was open -- is now fixed too, via
+option 1 from this entry's original list: the fast check moved off
+`/optionchain` entirely.
 
-MEASURED DEMAND as of the 2026-08-17 session, 11 live processes sharing
-one Dhan account. Note the fast check only runs while that process has a
-position OPEN (it returns before fetching otherwise), so the top figure
-is a worst case, not a constant:
+ORIGINAL PROBLEM (2026-08-17 session, 11 live processes sharing one Dhan
+account): the fast check only ran while its process held a position, so
+demand scaled with how many momentum processes were in a trade
+simultaneously -- 0 -> ~10 req/min (fine), 1 -> ~22, 2 -> ~34, 4 -> ~58,
+against a ~17.1 req/min chain-fetch budget. The account went over the
+limit precisely WHILE HOLDING POSITIONS -- exactly when a missed
+stop/target check matters most. Measured that session: 2,209
+lock-acquire timeouts, 53 real 429s on NIFTY alone, 171 blind cycles (79
+of them inside the 36-minute window NIFTY held 4 trades). As a stopgap
+the same day, Sentinel's two processes dropped their fast check
+entirely, which cut the worst case to ~34 req/min but was still over
+budget, and cost Sentinel up to POLL_INTERVAL_SECONDS of exit-detection
+latency versus Anchor -- a real, recorded weakening of the Anchor-vs-
+Sentinel comparison (STRATEGY_VERSIONS.md's whole point).
 
-    momentum full cycles   4 processes x 30s   =  8.0 req/min
-    momentum fast checks   4 processes x  5s   = 48.0 req/min  (only while a trade is open)
-    directional spread     2 processes x 90s   =  1.3 req/min
-    condor                 1 process x 300s    =  0.2 req/min
-    price action           2 processes x 300s  =  0.4 req/min
-                                          idle =  9.9 req/min
-                       all 4 holding positions = 57.9 req/min
+FIX (2026-08-18): `check_open_trades_fast()` in all four momentum
+processes now calls `dhan_source.get_fast_check_snapshot()` instead of
+the full chain fetch:
+  1. `orderflow.py`'s already-live WebSocket book, first -- ZERO Dhan
+     REST cost (it's a persistent WebSocket connection, not a polled
+     endpoint, so it doesn't count against either rate-limiter budget
+     at all), and has the real bid/ask AND ltp for any strike it's
+     subscribed to, which in steady state is every open position (both
+     orderflow_feed.py and orderflow_feed_banknifty.py subscribe to
+     every strike a live process is tracking).
+  2. `POST /v2/marketfeed/ltp` (new: `dhan_source.get_ltp_batch()`),
+     ONE batched request per process per cycle, only for whatever
+     orderflow didn't have fresh data for. This is Dhan's own
+     documented separate quota -- 1 request/second for up to 1000
+     instruments -- not the same budget as `/optionchain`. Verified
+     live pre-market on 2026-08-18 (real security IDs, real response
+     parsing, see dhan_source.get_fast_check_snapshot's own tests) --
+     structurally correct; noted for the record that the two endpoints
+     returned visibly different LTPs for the same strike during that
+     pre-market check (no trades yet that session), which reads as
+     ordinary pre-market staleness between two independently-cached
+     Dhan endpoints, not a parsing bug -- both numbers were internally
+     consistent with which security ID they came from.
+  `dhan_rate_limiter.py` was generalized to coordinate two independent
+  budgets (`wait_for_slot()` now takes optional `lock_path`/`state_path`,
+  defaulting to the original chain files; `wait_for_ltp_slot()` is the
+  new LTP-budget equivalent) so an LTP call never queues behind the
+  chain endpoint's slower interval for no reason.
 
-    limiter budget at MIN_INTERVAL_SECONDS=3.5 = 17.1 req/min
-    Dhan's documented limit (1 per 3s)         = 20.0 req/min
+NEW DEMAND PICTURE. The fast check no longer touches the chain budget
+AT ALL (steady state: zero REST calls, orderflow covers it for free).
+Chain-budget demand is now POSITION-INDEPENDENT -- it no longer scales
+with how many momentum processes hold trades:
 
-Scaling by how many momentum processes actually hold a position:
-0 -> ~10/min (fine), 1 -> ~22, 2 -> ~34, 4 -> ~58. So the account only
-goes over the limit WHILE HOLDING POSITIONS -- precisely when a missed
-stop/target check matters most. That matched the logs: 79 of the day's
-171 blind cycles fell inside the 36-minute window NIFTY held 4 trades.
+    momentum full cycles   4 processes x 30s   =  8.0 req/min  (unchanged)
+    directional spread     2 processes x 90s   =  1.3 req/min  (unchanged)
+    condor                 1 process x 300s    =  0.2 req/min  (unchanged)
+    price action           2 processes x 300s  =  0.4 req/min  (unchanged)
+                        chain budget, ANY state =  9.9 req/min
+    limiter budget at MIN_INTERVAL_SECONDS=3.5 = 17.1 req/min  (~1.7x headroom, always)
 
-Consequences measured that session: 2,209 lock-acquire timeouts across
-the group, 53 real 429s on NIFTY alone, 171 cycles with NO chain data
-from either source. Nothing was mispriced, but a stop/target check
-silently not running during a real approach is exactly the risk this
-limiter exists to prevent.
+LTP-fallback demand (only strikes orderflow misses; genuinely worst
+case, assuming orderflow provides nothing at all, which should not
+happen in steady state):
 
-PARTIALLY ADDRESSED 2026-08-17: Sentinel's two processes no longer run a
-fast check at all (see main_live_sentinel.py's loop comment). That
-removes 24 of the 48 fast-check req/min -- worst case drops ~58 -> ~34.
-Anchor's fast check is untouched. The cost is real and recorded there:
-Sentinel now notices exits up to POLL_INTERVAL_SECONDS late rather than
-FAST_CHECK_INTERVAL_SECONDS late (5 of its 23 exits that day were caught
-by the fast check), and Anchor-vs-Sentinel now differ in exit latency as
-well as the cluster cap, which weakens that comparison.
+    4 processes x 1 batched call / 5s          = 48.0 req/min
+    limiter budget at LTP_MIN_INTERVAL_SECONDS = 50.0 req/min  (1.2s/call)
+    Dhan's documented limit (1/sec)             = 60.0 req/min
 
-STILL OVER BUDGET at ~34 req/min vs ~17. Remaining options, none
-adopted, both of which change what Anchor sees and so need a decision
-rather than a guess:
-  1. Fast check uses Dhan's lightweight /marketfeed/ltp endpoint with
-     the tracked security IDs instead of the whole chain
-     (instrument_master.py already exists for exactly this and its
-     docstring names this use). Much cheaper per call; needs the
-     endpoint verified live. Best option -- keeps 5s latency AND cuts
-     cost, rather than trading one for the other.
-  2. Share one chain fetch between each index's Anchor and Sentinel
-     processes via a short-TTL file cache -- they fetch identical data
-     seconds apart. Makes one of them read data slightly staler.
-  3. Widen FAST_CHECK_INTERVAL_SECONDS from 5s for Anchor too. Simplest,
-     but directly reduces how promptly a stop/target is noticed -- the
-     opposite of what the fast check is for.
+Both budgets now have headroom in the worst case, not just the idle
+case -- the structural fix this entry originally asked for.
+
+Sentinel's fast check was RE-ENABLED 2026-08-18 on this same cheap
+mechanism (main_live_sentinel.py / main_live_banknifty_sentinel.py),
+removing the exit-latency confound the 2026-08-17 stopgap introduced.
+Anchor and Sentinel now differ ONLY in the cluster cap again, which is
+the actual comparison this candidate exists to run.
 
 ## Rate limiter abandoned rate limiting under contention -- thundering herd (added 2026-08-17)
 
@@ -1566,27 +1589,14 @@ Switching back to `SCORING_MODE = "legacy"` is a one-line, fully-tested,
 reversible change (see tests/test_scoring_mode.py) if live results
 diverge materially from the backtest.
 
-## Fast position-check: lightweight LTP endpoint (added 2026-07-27)
+## Fast position-check: lightweight LTP endpoint (added 2026-07-27, DONE 2026-08-18)
 
-`main_live.py`'s `check_open_trades_fast()` (runs every
-`config.FAST_CHECK_INTERVAL_SECONDS`, 5s by default, to catch a
-target/stop spike between full 30s scan cycles) currently re-fetches the
-**full option chain** each time — simple, reuses fully-tested code, but
-heavier than it needs to be at a fast cadence.
-
-Dhan has a lighter endpoint built for exactly this: `POST
-/v2/marketfeed/ltp`, which returns just the LTP for a specific list of
-security IDs (see `dhanhq.co/docs/v2/market-quote/`). Switching to it
-requires:
-1. Downloading and parsing Dhan's instrument master file (maps every
-   contract to its security ID) — a new data source we don't currently use.
-2. Resolving each open trade's (strike, expiry, option_type) to its
-   security ID via that master file.
-3. Using those IDs in the `/marketfeed/ltp` call instead of the full
-   `/optionchain` fetch.
-
-Worth doing before relying on fast polling with real capital, both for
-efficiency and to reduce load against Dhan's rate limits.
+DONE -- see the "Dhan request demand" entry near the top of this file
+for the full writeup. `check_open_trades_fast()` in all four momentum
+processes now prefers `orderflow.py`'s live WebSocket book and falls
+back to a batched `POST /v2/marketfeed/ltp` (`dhan_source.get_ltp_batch()`)
+only for whatever orderflow misses, resolving security IDs via
+`instrument_master.py` exactly as anticipated here.
 
 ## Broker-side protective stop-loss
 

@@ -402,13 +402,19 @@ def force_close_all(state: dict, expiry: str, last_snapshot=None):
 
 def check_open_trades_fast(state: dict, expiry: str):
     """
-    NOT CALLED as of 2026-08-17 -- same as main_live_sentinel.py's own
-    copy; see that file's docstring and run_forever()'s loop comment.
+    RE-ENABLED 2026-08-18 -- same as main_live_sentinel.py's own copy;
+    see that file's docstring for the full reasoning (the lightweight
+    orderflow-first/LTP-fallback snapshot removes the Dhan-demand cost
+    that motivated dropping this on 2026-08-17). No resilience change
+    versus before: get_banknifty_snapshot() was already Dhan-only (no
+    NSE/TradingView tier exists for Bank Nifty), so this loses nothing
+    that existed a moment ago.
     """
     if not state["trades"]:
         return
+    positions = [(t["strike"], t["option_type"]) for t in state["trades"]]
     try:
-        snapshot = get_banknifty_snapshot(must_include_strikes=_tracked_strikes(state))
+        snapshot = dhan_source.get_fast_check_snapshot(positions, expiry=expiry, symbol="BANKNIFTY")
     except Exception as e:
         log.info(f"  [fast check] snapshot fetch failed, will retry next fast check: {e}")
         return
@@ -495,11 +501,14 @@ def run_forever():
                 except Exception as e:
                     log.info(f"  Error this cycle (will retry next cycle): {e}")
                 last_full_cycle_at = now
-            # NO FAST CHECK HERE, deliberately (2026-08-17) -- same
-            # reasoning, cost and caveat as main_live_sentinel.py's own
-            # comment at this point in its loop; see that file and
-            # BACKLOG.md's Dhan-demand entry. Anchor's Bank Nifty process
-            # still runs its fast check normally.
+            else:
+                # RE-ENABLED 2026-08-18 -- see check_open_trades_fast's
+                # docstring and main_live_sentinel.py's own copy of this
+                # comment for the full reasoning.
+                try:
+                    check_open_trades_fast(state, expiry)
+                except Exception as e:
+                    log.info(f"  [fast check] error (will retry next fast check): {e}")
             was_open_last_cycle = True
         else:
             if was_open_last_cycle and state["trades"]:

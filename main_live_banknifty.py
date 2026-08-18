@@ -446,10 +446,22 @@ def force_close_all(state: dict, expiry: str, last_snapshot=None):
 
 
 def check_open_trades_fast(state: dict, expiry: str):
+    """
+    Uses dhan_source.get_fast_check_snapshot() (orderflow's live book
+    first, /marketfeed/ltp fallback for whatever it misses) instead of
+    get_banknifty_snapshot()'s full chain fetch -- added 2026-08-18, see
+    dhan_rate_limiter's module docstring and BACKLOG.md for the request-
+    demand problem the full fetch was contributing to. No resilience
+    change versus before: get_banknifty_snapshot() was already Dhan-
+    only (no NSE/TradingView tier exists for Bank Nifty), so this loses
+    nothing that existed a moment ago -- it only replaces one Dhan call
+    shape with a cheaper one.
+    """
     if not state["trades"]:
         return
+    positions = [(t["strike"], t["option_type"]) for t in state["trades"]]
     try:
-        snapshot = get_banknifty_snapshot(must_include_strikes=_tracked_strikes(state))
+        snapshot = dhan_source.get_fast_check_snapshot(positions, expiry=expiry, symbol="BANKNIFTY")
     except Exception as e:
         log.info(f"  [fast check] snapshot fetch failed, will retry next fast check: {e}")
         return

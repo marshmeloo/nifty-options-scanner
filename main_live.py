@@ -19,6 +19,7 @@ from datetime import datetime, date, time as dtime
 from pathlib import Path
 
 import config
+import dhan_source
 from resilient_source import get_nifty_snapshot, get_nearest_expiry, get_nifty_intraday_candles
 from scanner import scan, compute_market_bias, tag_bias_conflicts
 from plan_generator import build_plan
@@ -432,11 +433,27 @@ def check_open_trades_fast(state: dict, expiry: str):
     than necessary. Skips the fetch entirely if there's nothing open
     (the common case for most of a session), so this costs nothing when
     there's nothing to check.
+
+    Uses dhan_source.get_fast_check_snapshot() (orderflow's live book
+    first, /marketfeed/ltp fallback for whatever it misses) instead of
+    the full chain fetch above -- added 2026-08-18 after that full fetch
+    was found to be the majority of this account's Dhan request volume,
+    see dhan_rate_limiter's module docstring and BACKLOG.md.
+
+    Deliberately Dhan-only here, NOT routed through resilient_source: an
+    NSE-resilient fast check would mean re-fetching NSE's own full chain
+    every FAST_CHECK_INTERVAL_SECONDS, exactly the cost this exists to
+    avoid. If a trade's strike is unavailable from BOTH orderflow and
+    Dhan's LTP endpoint this tick, it simply waits for the next regular
+    (still Dhan->NSE resilient) full scan cycle -- a reversion to the
+    pre-fast-check cadence for that one trade that cycle, not a new
+    blind spot.
     """
     if not state["trades"]:
         return
+    positions = [(t["strike"], t["option_type"]) for t in state["trades"]]
     try:
-        snapshot = get_nifty_snapshot(expiry=expiry, must_include_strikes=_tracked_strikes(state))
+        snapshot = dhan_source.get_fast_check_snapshot(positions, expiry=expiry)
     except Exception as e:
         log.info(f"  [fast check] snapshot fetch failed, will retry next fast check: {e}")
         return
