@@ -673,3 +673,95 @@ def test_check_once_still_silent_when_flat_and_no_candidates(monkeypatch):
     pn.check_once()
 
     assert sent == []
+
+
+# --- _realized_today_total / "Total day P&L" (added 2026-08-18) ------------------
+
+def _closed_trade(pnl_inr):
+    return {"pnl_inr": pnl_inr, "closed_at": "2026-08-18T11:00:00"}
+
+
+def test_realized_today_total_is_zero_on_a_flat_state_with_no_history():
+    assert pn._realized_today_total(_flat_state()) == 0
+
+
+def test_realized_today_total_sums_momentum_both_indices():
+    state = _flat_state()
+    state["closed_today"] = [_closed_trade(500), _closed_trade(-100)]
+    state["banknifty"]["closed_today"] = [_closed_trade(300)]
+    assert pn._realized_today_total(state) == 700
+
+
+def test_realized_today_total_sums_price_action_both_indices():
+    state = _flat_state()
+    state["price_action_closed_today"] = [_closed_trade(200)]
+    state["banknifty"]["price_action_closed_today"] = [_closed_trade(150)]
+    assert pn._realized_today_total(state) == 350
+
+
+def test_realized_today_total_sums_condor_and_spread_nifty_only():
+    """Bank Nifty condor/spread are backtest-only (no live journal), so
+    there is deliberately no bn.condor_closed_today / bn's own spread
+    equivalent to sum -- only the NIFTY-level keys exist."""
+    state = _flat_state()
+    state["condor_closed_today"] = [_closed_trade(850)]
+    state["directional_spread_closed_today"] = [_closed_trade(-200)]
+    assert pn._realized_today_total(state) == 650
+
+
+def test_realized_today_total_combines_every_source_across_both_indices():
+    state = _flat_state()
+    state["closed_today"] = [_closed_trade(500)]
+    state["banknifty"]["closed_today"] = [_closed_trade(300)]
+    state["price_action_closed_today"] = [_closed_trade(200)]
+    state["banknifty"]["price_action_closed_today"] = [_closed_trade(150)]
+    state["condor_closed_today"] = [_closed_trade(850)]
+    state["directional_spread_closed_today"] = [_closed_trade(-200)]
+    assert pn._realized_today_total(state) == 1800
+
+
+def test_snapshot_message_shows_day_total_as_open_plus_realized():
+    state = _flat_state()
+    state["open_trades"] = [_momentum_trade(pnl_inr=1320)]
+    state["closed_today"] = [_closed_trade(500)]
+    msg = pn.build_snapshot_message(state)
+    assert "Total open P&L: ₹+1,320" in msg
+    assert "Total day P&L: ₹+1,820" in msg
+    assert "₹+500 realized" in msg
+
+
+def test_snapshot_message_day_total_can_differ_in_sign_from_open_total():
+    """The whole reason this is worth a separate line: a losing open
+    trade can still be a winning day if enough was already banked."""
+    state = _flat_state()
+    state["open_trades"] = [_momentum_trade(pnl_inr=-300)]
+    state["closed_today"] = [_closed_trade(2000)]
+    msg = pn.build_snapshot_message(state)
+    assert "Total open P&L: ₹-300" in msg
+    assert "Total day P&L: ₹+1,700" in msg
+
+
+def test_full_message_includes_day_total_when_positions_open():
+    state = _flat_state()
+    state["open_trades"] = [_momentum_trade(pnl_inr=1320)]
+    state["closed_today"] = [_closed_trade(500)]
+    msg = pn.build_full_message(state)
+    assert "Total day P&L: ₹+1,820" in msg
+
+
+def test_full_message_shows_realized_only_note_when_flat_but_something_closed():
+    state = _flat_state()
+    state["closed_today"] = [_closed_trade(650)]
+    state["latest_cycle"] = {"candidates": [_candidate()]}
+    msg = pn.build_full_message(state)
+    assert "no open positions right now" in msg
+    assert "day P&L so far: ₹+650" in msg
+
+
+def test_full_message_placeholder_unchanged_when_truly_flat():
+    """No regression on the original message text when there is neither
+    an open position nor anything realized today."""
+    state = _flat_state()
+    state["latest_cycle"] = {"candidates": [_candidate()]}
+    msg = pn.build_full_message(state)
+    assert "(no open positions right now)" in msg

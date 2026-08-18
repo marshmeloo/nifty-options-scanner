@@ -181,6 +181,31 @@ def _index_section(label: str, momentum_trades: list, condor_position: dict,
     return [f"{_direction_icon(subtotal)} {label}"] + body, subtotal
 
 
+def _realized_today_total(state: dict) -> float:
+    """
+    Sum of pnl_inr across every trade/position CLOSED today, across every
+    strategy and both indices -- momentum, price action (both indices),
+    condor and directional spread (NIFTY only: Bank Nifty's condor/spread
+    variants are backtest-only, no live journal exists for them -- see
+    BACKLOG.md). Added alongside the existing open-P&L total so "Total
+    day P&L" (this + open P&L) reflects money already banked today, not
+    just what's currently live -- the same reason _position_lines_and_total
+    doesn't trust state["totals"] alone (see its own docstring): each
+    piece has to be pulled from its own source rather than assumed to be
+    covered by one aggregate.
+    """
+    bn = state.get("banknifty") or {}
+    closed_lists = (
+        state.get("closed_today") or [],
+        bn.get("closed_today") or [],
+        state.get("price_action_closed_today") or [],
+        bn.get("price_action_closed_today") or [],
+        state.get("condor_closed_today") or [],
+        state.get("directional_spread_closed_today") or [],
+    )
+    return round(sum(t.get("pnl_inr", 0) or 0 for lst in closed_lists for t in lst), 2)
+
+
 def _position_lines_and_total(state: dict) -> tuple:
     """(lines across both indices, combined pnl total) -- shared by
     build_snapshot_message() and build_full_message() so there's exactly
@@ -214,8 +239,14 @@ def build_snapshot_message(state: dict = None):
     # open (caught by testing this against real dev data: condor and
     # spread positions were open with real non-zero MTM, but totals showed
     # Rs 0 since no momentum trade happened to be open at the same time).
+    realized_today = _realized_today_total(state)
+    day_total = round(total_pnl + realized_today, 2)
     header = f"\U0001f4ca Live Positions — {datetime.now().strftime('%H:%M:%S')}"
-    footer = f"{_pnl_icon(total_pnl)} Total open P&L: ₹{total_pnl:+,.0f}"
+    footer = (
+        f"{_pnl_icon(total_pnl)} Total open P&L: ₹{total_pnl:+,.0f}\n"
+        f"{_pnl_icon(day_total)} Total day P&L: ₹{day_total:+,.0f}  "
+        f"(₹{realized_today:+,.0f} realized + ₹{total_pnl:+,.0f} open)"
+    )
     return "\n".join([header, ""] + sections + ["", footer])
 
 
@@ -282,16 +313,25 @@ def build_full_message(state: dict = None):
     if not position_lines and not radar_lines:
         return None
 
+    realized_today = _realized_today_total(state)
+    day_total = round(total_pnl + realized_today, 2)
+
     header = f"\U0001f4ca Live Positions — {datetime.now().strftime('%H:%M:%S')}"
     blocks = [header]
     if position_lines:
         blocks.append("\n".join(position_lines))
     if radar_lines:
         blocks.append("\n".join(radar_lines))
-    blocks.append(
-        f"{_pnl_icon(total_pnl)} Total open P&L: ₹{total_pnl:+,.0f}" if position_lines
-        else "(no open positions right now)"
-    )
+    if position_lines:
+        blocks.append(
+            f"{_pnl_icon(total_pnl)} Total open P&L: ₹{total_pnl:+,.0f}\n"
+            f"{_pnl_icon(day_total)} Total day P&L: ₹{day_total:+,.0f}  "
+            f"(₹{realized_today:+,.0f} realized + ₹{total_pnl:+,.0f} open)"
+        )
+    elif realized_today:
+        blocks.append(f"(no open positions right now — {_pnl_icon(realized_today)} day P&L so far: ₹{realized_today:+,.0f})")
+    else:
+        blocks.append("(no open positions right now)")
     return "\n\n".join(blocks)
 
 

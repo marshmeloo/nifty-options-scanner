@@ -482,6 +482,10 @@ def build_state() -> dict:
         (price_action_state or {}).get("trades", []) if price_action_state else []
     )
     price_action_closed_today = _read_price_action_closed_today()
+    # NIFTY only -- Bank Nifty condor/spread are backtest-only, no live
+    # journal exists for them yet (see BACKLOG.md).
+    condor_closed_today = _read_closed_today(ct.JOURNAL_PATH)
+    spread_closed_today = _read_closed_today(dst.JOURNAL_PATH)
     opening_gap = _read_json(STATE_DIR / "opening_gap.json", default={})
     staged_orders = _read_json(STATE_DIR / "staged_orders.json", default=[])
     pending_staged = [r for r in (staged_orders or []) if r.get("status") == "PENDING"]
@@ -656,6 +660,8 @@ def build_state() -> dict:
         "condor_profit_stats": condor_profit_stats,
         "price_action_trades": price_action_trades,
         "price_action_closed_today": price_action_closed_today,
+        "condor_closed_today": condor_closed_today,
+        "directional_spread_closed_today": spread_closed_today,
         "price_action_poll_interval_seconds": getattr(pacfg, "POLL_INTERVAL_SECONDS", None),
         "price_action_log_age_seconds": price_action_log_age_seconds,
         "sentinel": _sentinel_block(
