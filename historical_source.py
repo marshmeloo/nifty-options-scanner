@@ -53,8 +53,12 @@ WHAT IS NOT RECONSTRUCTED
     fills and results are correspondingly OPTIMISTIC versus live, where
     entry pays the ask and exit hits the bid. Compare historical results
     against live ones with that bias in mind -- never pool them.
-  - Greeks (delta/theta/vega). Not returned. plan_generator's ATR x delta
-    stop distance falls back to its no-delta path.
+  - Greeks (delta/theta/vega/gamma). Not returned. plan_generator's ATR x
+    delta stop distance falls back to its no-delta path. gamma_exposure.py
+    reconstructs gamma itself from what IS available here (spot, strike,
+    time to expiry, iv) via Black-Scholes -- see that module's docstring,
+    including the validation against Dhan's own live-reported gamma that
+    justifies trusting the reconstruction.
   - VWAP. No intraday VWAP is published; spot is used as the same
     placeholder nse_source.py already uses.
   - Sub-interval path. Minute is the finest granularity available, and
@@ -102,6 +106,38 @@ BANKNIFTY_SECURITY_ID = 25
 # flag when there's only one expiry series), but "MONTH" is the
 # accurate, honest label for what's actually being fetched.
 BANKNIFTY_EXPIRY_FLAG = "MONTH"
+
+# NIFTY's weekly options expiry moved from Thursday to Tuesday effective
+# 2025-09-01 (SEBI circular, October 2024) -- both regimes fall inside
+# the recorded history this module reconstructs, so which weekday a
+# contract actually settled on depends on WHEN the snapshot is from, not
+# a single constant. Mirrors shadow_directional_spread.py's own
+# _EXPIRY_WEEKDAY_* constants (kept as a separate copy here rather than
+# imported from there, to avoid this data-reconstruction module
+# depending on a strategy-specific backtest module -- small enough that
+# the duplication risk is low next to that cleaner dependency direction).
+_EXPIRY_WEEKDAY_CHANGE_DATE = date(2025, 9, 1)
+_EXPIRY_WEEKDAY_BEFORE = 3   # Thursday
+_EXPIRY_WEEKDAY_ON_OR_AFTER = 1   # Tuesday
+
+
+def nominal_expiry_date(on_date: date) -> date:
+    """
+    Real calendar expiry date for a NIFTY "rolling:week1"-labelled
+    contract seen on `on_date` -- next occurrence of the regime-
+    appropriate weekday (Thursday before 2025-09-01, Tuesday on/after)
+    on or after `on_date` itself. NIFTY ONLY: Bank Nifty's rolling
+    contracts here use MONTH, not WEEK (see BANKNIFTY_EXPIRY_FLAG's own
+    comment), and monthly expiry-date reconstruction (last
+    Tuesday/Thursday of the month, adjusted for holidays) is a different
+    and more involved calculation this function does not attempt.
+
+    Built for gamma_exposure.py, which needs an actual date to compute
+    time-to-expiry from -- see that module's _resolve_expiry_date().
+    """
+    target = _EXPIRY_WEEKDAY_ON_OR_AFTER if on_date >= _EXPIRY_WEEKDAY_CHANGE_DATE else _EXPIRY_WEEKDAY_BEFORE
+    return on_date + timedelta(days=(target - on_date.weekday()) % 7)
+
 
 # Real data start dates, found by direct probe (binary search on
 # 2026-08-04), NOT from any documented retention window -- Dhan's own
@@ -271,9 +307,17 @@ def reconstruct_range(from_date: str, to_date: str, interval: str = "5",
                         symbol=symbol,
                         # The rolling series doesn't name the contract's
                         # expiry date, only that it was the nearest one
-                        # at that timestamp. Nothing downstream parses
-                        # this string, so label it honestly rather than
-                        # inventing a date that might be wrong.
+                        # at that timestamp, so label it honestly rather
+                        # than inventing a date that might be wrong.
+                        # UPDATE 2026-08-19: gamma_exposure.py became the
+                        # first downstream consumer that legitimately
+                        # needs a real date (Black-Scholes gamma needs
+                        # time-to-expiry) -- see nominal_expiry_date()
+                        # below, which reconstructs it from NIFTY's known
+                        # weekly-expiry weekday regime rather than
+                        # guessing. Still correct for anything that
+                        # doesn't call that: this field itself remains
+                        # the honest "rolling:weekN" label.
                         expiry=f"rolling:{expiry_flag.lower()}{expiry_code}",
                         strike=float(row.get("strike") or 0.0),
                         option_type=option_type,

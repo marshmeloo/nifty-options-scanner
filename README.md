@@ -1035,6 +1035,75 @@ Each tier has a cooldown after a failure so a genuinely-down source
 doesn't add latency/log-noise to every 30s poll — see
 `FALLBACK_RETRY_COOLDOWN_SECONDS` in `config.py`.
 
+## Not adopted: 2026-08-19 -- Gamma Exposure (GEX) regime found no evidence of predicting momentum forward returns
+
+Comparing this project against a retail options-analytics dashboard
+(neogreeks.in) on 2026-08-18 surfaced one genuinely new idea worth
+testing, as opposed to signals already computed here under a different
+name: Gamma Exposure -- whether dealer hedging flow, inferred from OI +
+gamma, amplifies or damps price moves. The specific, falsifiable
+hypothesis: this project's core edge (momentum ROC alignment, see the
+`momentum_only` entry below) should work BEST when dealers are
+short gamma (hedging amplifies moves) and WORST when they're long
+gamma (hedging damps/pins price).
+
+**Built to test it, not to assume it.** `black_scholes.py` computes
+gamma from spot/strike/time-to-expiry/IV -- needed because
+`historical_source.py`'s reconstructed contracts carry no Greeks at all
+(Dhan's Expired Options Data endpoint doesn't return them). Validated
+against Dhan's own live-reported gamma first (12 real strikes, both
+CE/PE, 2026-08-18: consistently within 1-6%) before trusting it as a
+historical proxy -- see `test_black_scholes.py`. `gamma_exposure.py`
+aggregates that into net GEX, a gamma regime (SHORT_GAMMA/LONG_GAMMA),
+and a zero-gamma level (the hypothetical spot where regime flips, gamma
+recomputed at each candidate spot with OI held fixed -- an earlier
+draft that instead walked the actual strike ladder at today's gamma
+was a DIFFERENT, wrong computation, caught and rewritten before this
+ever ran against real data; see that module's own docstring).
+`gamma_exposure_study.py` follows `component_study.py`'s exact
+counterfactual-candidate methodology (every candidate `scanner.scan()`
+ever flagged, not just taken trades -- taken-trade analysis is
+selection-biased, see that module's docstring) and additionally caught
+a real data-integration gap: `historical_source.py`'s contracts carry a
+symbolic `"rolling:week1"` expiry, not a real date, so a naive
+time-to-expiry calc against every historical contract came back
+computing gamma against TODAY's date -- silently zeroing every value.
+Fixed with `historical_source.nominal_expiry_date()`, reconstructing
+the real calendar expiry from NIFTY's actual weekly-expiry weekday
+(correctly handling the real Thursday-\>Tuesday regime change effective
+2025-09-01).
+
+**Result, run across all 1,485 historical days (2020-08-03 to
+2026-07-28), momentum-aligned candidates only:**
+
+| horizon | short-gamma n | long-gamma n | lift (short - long) | z |
+|---|---|---|---|---|
+| 30min | 16,193 | 87,863 | -0.62% | -1.67 |
+| 60min | 14,142 | 78,011 | +0.19% | +0.36 |
+
+Neither horizon clears the 1.96 significance bar. More telling than
+either number alone: the DIRECTION flips between horizons (-0.62% at
+30min, +0.19% at 60min) -- the signature of sampling noise, not a real
+effect. Also checked the opposite sign convention (dealers assumed
+short puts/long calls rather than the reverse -- see
+`gamma_exposure.SIGN_CONVENTION`'s own docstring on why this is a
+modelling assumption, not a verified fact): it necessarily mirrors the
+same split with the same |z|, so the null result holds regardless of
+which convention is assumed correct.
+
+**NOT ADOPTED, and nothing needed to be reverted** -- this was research
+from the start (explicit instruction: no live change without a separate
+decision after seeing the backtest). `gamma_exposure.py` and
+`black_scholes.py` stay in the codebase (tested, and gamma is now
+parsed from Dhan's live chain into `OptionQuote.gamma` alongside
+delta/theta/vega for anyone who wants to look at a live GEX read
+directly), but nothing reads them for scoring, filtering, or entries.
+Full per-run output in `logs/gamma_exposure_study*.json`. Re-run with
+`python gamma_exposure_study.py --horizon N` for other horizons if this
+is ever revisited -- worth trying a much shorter horizon (5-10min,
+closer to NeoGreeks' own squeeze-detector window) before concluding
+GEX has nothing to offer here at all.
+
 ## Added: 2026-08-02 -- profit-milestone tracking for the directional spread and condor
 
 The momentum scanner has tracked R-multiple milestones since the

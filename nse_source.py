@@ -7,7 +7,7 @@ NSE's website exposes the same option-chain data its own site renders at:
 It's undocumented and unofficial (no SLA, can change or start blocking
 requests without notice), but it's free, needs no API key, and returns
 a very similar shape to Dhan's chain (OI, LTP, IV, volume; NO Greeks --
-NSE doesn't publish delta/theta/vega for you, unlike Dhan).
+NSE doesn't publish delta/theta/vega/gamma for you, unlike Dhan).
 
 NSE blocks requests that don't look like a real browser: no cookies, no
 plausible User-Agent -> 401/403. The fix is a short "warm-up" GET against
@@ -99,7 +99,7 @@ def get_nifty_snapshot(expiry: str = None, must_include_strikes: set = None) -> 
     Fetch a live Nifty option chain from NSE's public API and return it in
     the same MarketSnapshot shape as dhan_source.get_nifty_snapshot, so
     the rest of the pipeline can't tell the difference. No Greeks (delta/
-    theta/vega stay None); everything OI/IV/PCR-based still works.
+    theta/vega/gamma stay None); everything OI/IV/PCR-based still works.
 
     `must_include_strikes`: see dhan_source.get_nifty_snapshot's docstring
     -- same fix, mirrored here so the fallback tier can't reintroduce the

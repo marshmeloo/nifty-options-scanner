@@ -25,6 +25,7 @@ class OptionQuote:
     delta: Optional[float] = None
     theta: Optional[float] = None
     vega: Optional[float] = None
+    gamma: Optional[float] = None
     price_change_pct: Optional[float] = None   # premium change vs a comparable baseline
     buildup_type: Optional[str] = None         # "long_buildup" | "short_buildup" | "short_covering" | "long_unwinding" | None
     # OI and premium change over a RECENT INTRADAY window, as opposed to
@@ -88,6 +89,29 @@ class OIAnalysis:
     net_delta_oi: int               # (today's CE OI added) - (today's PE OI added), signed
     net_delta_oi_bias: str          # "bullish" | "bearish" | "neutral" reading of net_delta_oi
     top_oi_concentration: list = field(default_factory=list)  # list[(strike, ce_oi, pe_oi)], sorted by combined OI desc
+
+
+@dataclass
+class GammaExposure:
+    """
+    Dealer Gamma Exposure (GEX) read, computed once per snapshot from
+    OI + Black-Scholes gamma across all strikes. See gamma_exposure.py --
+    RESEARCH ONLY as of 2026-08-19, not wired into any live decision.
+
+    Deliberately separate from OIAnalysis above: call_wall_strike/
+    put_wall_strike there are the strikes with the largest raw OI: a
+    far-OTM strike can carry huge OI but contribute almost nothing to
+    actual gamma exposure (gamma decays fast away from the money), so an
+    OI wall and a gamma wall can legitimately point at different
+    strikes. Naming these gamma_* keeps the two from ever being confused
+    or silently substituted for each other.
+    """
+    net_gex: float                  # signed, aggregate across every strike; sign convention is gamma_exposure.SIGN_CONVENTION
+    regime: str                     # "SHORT_GAMMA" | "LONG_GAMMA", from net_gex's sign
+    zero_gamma_level: Optional[float]   # spot level where cumulative GEX crosses zero, interpolated; None if it never crosses within the chain's strikes
+    gamma_call_wall_strike: Optional[float]   # strike with the single largest call-side gamma exposure
+    gamma_put_wall_strike: Optional[float]    # strike with the single largest put-side gamma exposure
+    per_strike: list = field(default_factory=list)  # list[(strike, call_gex, put_gex, net_gex)], sorted by strike ascending
 
 
 @dataclass

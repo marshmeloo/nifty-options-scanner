@@ -88,6 +88,40 @@ def test_get_nifty_snapshot_defaults_reproduce_old_nifty_behaviour(monkeypatch):
     assert snap.symbol == "NIFTY"
 
 
+_FAKE_OC_WITH_GREEKS = {
+    "100": {"ce": {"implied_volatility": 12.0, "last_price": 5.0, "oi": 100, "previous_oi": 90,
+                   "volume": 10, "greeks": {"delta": 0.55, "theta": -1.2, "vega": 3.4, "gamma": 0.012}},
+            "pe": {"implied_volatility": 12.0, "last_price": 5.0, "oi": 100, "previous_oi": 90,
+                   "volume": 10, "greeks": {"delta": -0.45, "theta": -1.1, "vega": 3.3, "gamma": 0.011}}},
+}
+
+
+def test_get_nifty_snapshot_extracts_all_four_greeks_including_gamma(monkeypatch):
+    """
+    Every existing test here uses an EMPTY greeks dict, which never
+    actually exercised the extraction lines themselves -- gamma was
+    added to that extraction (dhan_source.py) alongside the pre-existing
+    delta/theta/vega pulls, so this closes that gap for all four at once
+    rather than adding a fourth near-identical test.
+    """
+    monkeypatch.setattr(ds, "_fetch_raw_chain", lambda expiry, *a, **kw: {"last_price": 100.0, "oc": _FAKE_OC_WITH_GREEKS})
+    monkeypatch.setattr(ds, "get_nearest_expiry", lambda *a, **kw: "2026-08-06")
+    monkeypatch.setattr(ds, "_update_vwap_proxy", lambda spot, *a, **kw: spot)
+    monkeypatch.setattr(ds, "_load_iv_history", lambda *a, **kw: [])
+    monkeypatch.setattr(ds, "_save_iv_history", lambda h, *a, **kw: None)
+    monkeypatch.setattr(ds, "_load_price_baseline", lambda *a, **kw: {"date": None, "prices": {}})
+    monkeypatch.setattr(ds, "_save_price_baseline", lambda s, *a, **kw: None)
+    monkeypatch.setattr(ds, "_load_oi_history", lambda *a, **kw: {"date": None, "samples": {}})
+    monkeypatch.setattr(ds, "_save_oi_history", lambda h, *a, **kw: None)
+
+    snap = ds.get_nifty_snapshot(expiry="2026-08-06")
+    ce = next(q for q in snap.chain if q.option_type == "CE")
+    pe = next(q for q in snap.chain if q.option_type == "PE")
+
+    assert (ce.delta, ce.theta, ce.vega, ce.gamma) == (0.55, -1.2, 3.4, 0.012)
+    assert (pe.delta, pe.theta, pe.vega, pe.gamma) == (-0.45, -1.1, 3.3, 0.011)
+
+
 def test_get_nifty_snapshot_passes_banknifty_params_through(monkeypatch):
     seen = {}
 
