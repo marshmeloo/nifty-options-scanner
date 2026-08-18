@@ -95,9 +95,23 @@ def test_nifty_snapshot_fetch_failure_is_caught_not_raised(monkeypatch):
 
 
 def test_nifty_a_real_close_still_saves_and_journals(monkeypatch):
-    """End-to-end through the real trade_tracker.update_open_trades(), not
+    """
+    End-to-end through the real trade_tracker.update_open_trades(), not
     just checking the call arguments -- confirms the lightweight snapshot
-    actually plugs into the existing close/journal/save pipeline."""
+    actually plugs into the existing close/journal/save pipeline.
+
+    Runs inside trade_tracker.journal_writes_disabled() -- an EARLIER
+    version of this test forgot that update_open_trades() calls the real
+    _append_journal() on any close, and only mocked save_open_trades(),
+    which left the actual JOURNAL_PATH write live. Running the full
+    suite once against the PRODUCTION checkout wrote this exact fake WIN
+    trade for real into prod's live trade_journal.jsonl (caught and
+    removed 2026-08-18 -- see git history / incident notes). Mocking
+    save_open_trades() is still correct (state persistence isn't what
+    this test is verifying), but journal_writes_disabled() is now what
+    stops the journal side effect, not an oversight relying on nothing
+    else in the call path touching disk.
+    """
     import models
 
     saved = []
@@ -115,7 +129,8 @@ def test_nifty_a_real_close_still_saves_and_journals(monkeypatch):
         "trades": [{"strike": 24500.0, "option_type": "CE", "entry": 100.0,
                    "target": 150.0, "stop": 80.0, "lots": 1, "entry_time": "09:20:00"}]
     }
-    main_live.check_open_trades_fast(state, expiry="2026-08-20")
+    with main_live.tt.journal_writes_disabled():
+        main_live.check_open_trades_fast(state, expiry="2026-08-20")
 
     assert len(saved) == 1
     assert state["trades"] == [], "the winning trade should have closed"
