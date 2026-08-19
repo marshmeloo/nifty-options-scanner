@@ -3,6 +3,121 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Stocks in play: FIRST REAL RESULT -- pullback on high-RVOL decliners beats its controls, but is cost-marginal (added 2026-08-20)
+
+Backfill finished: 208 F&O stocks, 155,234 symbol-days, 2023-08..2026-08,
+zero failed fetches. Two studies run.
+
+### 1. The distribution test -- "win large fast, lose small" is NOT supported as stated
+
+152,527 stock-days, forward return from the 09:30 selection point to
+the close, bucketed by opening relative volume:
+
+    RVOL     n         mean      skew   win%   W/L    >+2%    <-2%
+    <1     104,610   -0.042%    +0.36   46.7   1.05   7.40%   7.36%
+    1-2     33,012   +0.012%    +0.48   47.8   1.10  10.21%   9.27%
+    2-3      7,410   -0.018%    +0.23   47.4   1.07  12.32%  11.69%
+    3-5      4,210   -0.030%    +0.40   46.2   1.11  13.52%  13.66%
+    5+       3,285   -0.170%    +0.48   44.2   1.04  15.40%  18.39%
+
+The skew IS positive throughout (+0.23 to +0.48), so the intuition
+about a fat right tail has some basis. But the rest does not survive:
+the mean return is ~zero or NEGATIVE and gets monotonically WORSE with
+higher RVOL; the win/loss size ratio is 1.04-1.11, nowhere near "win
+large, lose small"; and at RVOL 5+ the DOWNSIDE tail is fatter than the
+upside (18.4% vs 15.4%). High relative volume by itself buys volatility
+in both directions, not favourable asymmetry.
+
+The one real asymmetry is directional: high-RVOL DECLINERS keep
+declining (mean -0.213% after selection) while high-RVOL gainers go
+nowhere (+0.017%). Same intraday short bias the index ORB study found
+independently, which is mild cross-validation of both.
+
+### 2. The strategy sweep -- one cell is genuinely alive
+
+108 cells (RVOL threshold x direction x entry x exit), statutory costs
+deducted, slippage left as the free variable. Headline metric is
+BREAK-EVEN SLIPPAGE: the per-leg bps at which a cell nets zero.
+
+Every real rule against its own controls, RVOL>=3 losers, fixed_r exit:
+
+    pullback      n=1,317  meanR +0.1290  t=+7.33  BE 17.39 bps
+    orb           n=1,574  meanR +0.0950  t=+5.74  BE 11.83 bps
+    momentum      n=1,890  meanR +0.0676  t=+4.42  BE  7.58 bps
+    always_short  n=1,890  meanR +0.0676  t=+4.42  BE  7.58 bps  CONTROL
+    always_long   n=1,890  meanR -0.0687  t=-4.52  BE  0.00 bps  CONTROL
+    random        n=1,890  meanR +0.0128  t=+0.84  BE  0.00 bps  CONTROL
+
+Three things worth stating plainly:
+
+  - **`momentum` is IDENTICAL to the always_short control**, in every
+    bucket, every time. That is structural, not a bug: "enter in the
+    opening move's direction" inside a direction-filtered bucket just
+    IS "always short". So the momentum rule contributes exactly nothing
+    beyond the selection. Anyone reporting it as a strategy would be
+    reporting a control.
+  - **`random` is ~0 everywhere** (BE 0.00-3.38), so the stop-plus-exit
+    payoff geometry is not manufacturing the result -- which is the
+    trap that killed index ORB.
+  - **`pullback` beats every control in all six buckets**, typically by
+    2-4x on break-even slippage, with t-stats of +6.9 to +9.3 against a
+    Bonferroni bar of 3.31 for 54 non-control cells.
+
+Break-even slippage also RISES monotonically with the RVOL threshold on
+the losers side (9.56 -> 14.09 -> 17.39 bps at 1.2/2.0/3.0), which is
+the dose-response you would want from a real effect rather than noise.
+
+### 3. Out-of-sample -- holds, but the level swings hard
+
+RVOL>=3 losers, fixed_r, three independent ~1-year periods:
+
+    entry           Y1 2023-08..    Y2 2024-08..    Y3 2025-08..
+    pullback        R+0.180 BE 13.1  R+0.026 BE 10.6  R+0.189 BE 26.2
+    orb             R+0.149 BE 13.3  R+0.009 BE  4.4  R+0.137 BE 18.3
+    always_short    R+0.076 BE  3.5  R+0.009 BE  0.4  R+0.119 BE 17.2
+    random          R+0.014 BE  0.0  R+0.004 BE  0.0  R+0.020 BE  0.0
+
+Positive in all three periods and ahead of controls in all three. But
+Y2 is nearly flat (R +0.026), so this is regime-dependent, and Y3's
+strength partly reflects a strong intraday short bias that lifts the
+control too (always_short BE 17.2 that year).
+
+### HONEST VERDICT: promising, NOT proven, and the cost gate is the issue
+
+This is materially stronger than the index ORB null -- a real,
+control-beating, multi-period effect with dose-response. It is not a
+green light:
+
+  - **The binding constraint is the WORST year, BE 10.6 bps.** Indian
+    F&O stock half-spreads run roughly 1-5 bps on liquid names and
+    5-15 bps on less liquid ones -- and an RVOL>=3 screen
+    PREFERENTIALLY surfaces the unusual-activity, less-liquid end. So
+    the worst year sits inside the plausible slippage range. That is
+    the same failure mode that killed the published US version, and it
+    has not been cleared here, only narrowed.
+  - **Survivorship bias is real and unquantified** -- today's F&O list
+    applied to history.
+  - Spreads have not been MEASURED for these names; the backfill holds
+    OHLCV only. Everything above is judged against plausible ranges,
+    not data.
+  - Position sizing, fill feasibility on 5-20 concurrent names, and
+    what instrument would express this (stock, future, or notoriously
+    illiquid stock options) are all untouched.
+
+NEXT STEP if pursued, and it should be this one and not more parameter
+sweeping: get real bid/ask for the selected names and replace the
+break-even-slippage judgement call with a measurement. If measured
+spreads exceed ~10 bps on the names this selects, the track closes like
+index ORB did.
+
+Code: `research/stocks_in_play.py` (selection + distribution),
+`research/stock_strategies.py` (entry/exit variants + controls),
+`research/stock_costs.py` (equity cost model + break-even slippage),
+`research/stocks_in_play_sweep.py` (the sweep). Results in
+`logs/stocks_in_play_study.json`, `logs/stocks_in_play_sweep.json`.
+NOTHING ADOPTED -- no live code touched, this is not an equity strategy
+in production.
+
 ## Platform research: TradeFinder's intraday feature set, and what is worth borrowing (added 2026-08-19)
 
 Competitive scan of tradefinder.in (Indian retail intraday platform,

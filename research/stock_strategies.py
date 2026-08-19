@@ -19,15 +19,24 @@ THE VARIANTS, AND WHERE EACH COMES FROM
   - `pullback`        -- wait for a retrace toward the opening range
                          edge and enter on continuation. The standard
                          retail answer to "don't chase the spike".
-  - `always`          -- enter every selected name, direction from the
-                         opening move. A CONTROL, not a strategy: it
-                         isolates how much of any result comes from
-                         SELECTION rather than from the entry rule.
+  - `always_long` /   -- ignore the opening move entirely and always take
+    `always_short`       the same side. DRIFT CONTROLS. The index ORB
+                         study found a large intraday SHORT bias that
+                         beat every real ORB variant, so "our edge is
+                         just being short intraday" is a live
+                         alternative explanation that has to be
+                         measurable, not assumed away.
   - `random`          -- coin-flip direction, same entry bar, same stop.
-                         The second control. Together with `always` it
-                         separates three things that are otherwise
-                         conflated: the selection, the direction call,
-                         and the payoff geometry of a stop-plus-exit.
+                         Isolates the payoff geometry of stop-plus-exit
+                         from any directional information.
+
+(An earlier draft had an `always` variant intended as a
+selection-vs-entry control. It was removed because it was IDENTICAL to
+`momentum` -- both simply took the opening move's direction -- so it
+produced byte-identical numbers and would have read as independent
+corroboration of whatever `momentum` did. "Does selection matter" is
+answered by comparing RVOL buckets in stocks_in_play.py, not by an
+entry variant.)
 
 EXIT FAMILIES
 -------------
@@ -66,7 +75,7 @@ SESSION_OPEN_MIN = _minutes(SESSION_OPEN)
 @dataclass
 class StockVariant:
     name: str
-    entry: str = "momentum"       # orb | momentum | pullback | always | random
+    entry: str = "momentum"       # orb | momentum | pullback | always_long | always_short | random
     exit: str = "runner"          # eod | fixed_r | runner
     selection_minutes: int = 15   # must match the selection window used upstream
     stop_atr_mult: float = 1.0    # stop = this x the opening-range height
@@ -120,10 +129,13 @@ def simulate(bars: list, variant: StockVariant, day: str = "", symbol: str = "")
 
     direction, entry_px, entry_i = None, None, None
 
-    if variant.entry in ("momentum", "always"):
+    if variant.entry == "momentum":
         direction = or_dir
         if direction:
             direction, entry_px, entry_i = direction, after[0][1], 0
+    elif variant.entry in ("always_long", "always_short"):
+        direction = "long" if variant.entry == "always_long" else "short"
+        entry_px, entry_i = after[0][1], 0
     elif variant.entry == "random":
         direction = _random.Random(f"{variant.seed}:{symbol}:{day}").choice(["long", "short"])
         entry_px, entry_i = after[0][1], 0
