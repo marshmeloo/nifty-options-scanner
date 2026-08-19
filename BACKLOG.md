@@ -3,6 +3,83 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Bank Nifty cluster cap: 200pt is far too narrow -- ~500pt cuts drawdown 67% for 17% of profit (added 2026-08-19)
+
+The live cluster cap (200pt / 30min, Sentinel-only) was backtested
+against NIFTY's history ONLY -- main_live_banknifty_sentinel.py says so
+in its own docstring -- then applied unchanged to Bank Nifty. Two
+a-priori reasons that is wrong, both pointing the same way:
+
+  - **Proportion.** 200pt is 0.83% of NIFTY at ~24,000 but only 0.35% of
+    Bank Nifty at ~57,000. Proportional equivalence predicts ~475pt.
+  - **Strike spacing.** NIFTY strikes are 50pt apart, Bank Nifty's 100pt,
+    so a 200pt band reaches 4 strikes either side on NIFTY but only 2 on
+    Bank Nifty. Structurally it can only THIN a Bank Nifty cluster,
+    never collapse one.
+
+Live evidence across three sessions: 2026-08-10 (8 CE trades, 8 strikes,
+Rs -5,153), 2026-08-17 (9-strike cluster), 2026-08-19 (5 CE trades inside
+115 seconds, Rs -11,436 -- two of them 300pt apart, straight through the
+200pt band).
+
+SWEPT band {none, 200, 300, 400, 500, 600, 800} at the live 30min window,
+Bank Nifty's own 1,244-day history and live config (lot 30, premium
+300-800), 5 independent ~1-year periods (same split as the 2026-08-13
+BN momentum validation), real costs:
+
+    band     trades       net Rs   profit kept   worst-period DD   DD cut   periods+
+    none      8,483   +3,090,771        100.0%           309,466     0.0%      5/5
+    200       6,417   +2,912,493         94.2%           172,508    44.3%      5/5
+    300       5,736   +2,662,930         86.2%           142,339    54.0%      5/5
+    400       5,229   +2,507,792         81.1%           121,443    60.8%      5/5
+    500       4,708   +2,558,738         82.8%           102,199    67.0%      5/5
+    600       4,380   +2,508,330         81.2%            73,160    76.4%      5/5
+    800       4,217   +2,500,823         80.9%            69,093    77.7%      5/5
+
+WHY NET PROFIT IS NOT THE RANKING METRIC: a cluster cap can only REMOVE
+trades, so against a +Rs 3M backtest every cap cuts profit and ranking by
+net would mechanically pick "no cap" and answer nothing. The cap exists
+to cut DRAWDOWN. The bar is NIFTY's own Sentinel adoption: ~14% of profit
+given up for a ~62% smaller max drawdown.
+
+READ:
+  - Drawdown falls MONOTONICALLY with band width in the aggregate, and
+    falls in EVERY ONE of the 5 periods individually (e.g. Y4, the worst:
+    309k -> 173k -> 121k -> 102k -> 69k). This is a structural effect,
+    not a lucky cell.
+  - All 5 periods stay positive at every band -- widening does not break
+    profitability anywhere.
+  - Profit retention PLATEAUS at ~81-83% from 400pt onward, so past 400
+    the drawdown reduction is close to free.
+  - The current 200 achieves only a 44.3% drawdown cut -- well short of
+    the NIFTY Sentinel trade-off it was copied from.
+  - Knee is around 500-600. 800 buys only 1.3pp more DD cut than 600.
+
+INDEPENDENT CORROBORATION worth weighting: the a-priori proportional
+prediction (~475pt, computed before running anything) lands inside the
+empirically-best zone. The result is not a grid winner picked after the
+fact -- theory and measurement agree, which is the strongest form this
+kind of evidence takes here.
+
+CAVEAT, stated rather than buried: 500 vs 600 is within noise on several
+periods (Y2 DD 70k vs 73k, Y3 36k vs 42k -- 500 is actually better on
+both). 600's aggregate advantage comes mostly from fixing the single
+worst period (Y4, 102k -> 69k), and picking a band BECAUSE it fixes the
+worst period is exactly where overfitting starts. The honest statement
+is "anything in 400-800 is roughly equivalent, 200 is too narrow" -- the
+broad plateau is itself the robust finding, not any single cell.
+
+RECOMMENDATION: 500pt, being the round number nearest the a-priori
+~475pt prediction rather than the empirical argmax. NOT APPLIED --
+this is Sentinel-only territory and the change is not made here.
+Anchor's Bank Nifty process has CLUSTER_CAP_ENABLED=False entirely and
+is frozen; that even 200pt would have cut drawdown 44% for 5.8% of
+profit is a separate and larger question, requiring live evidence under
+this project's own promotion policy.
+
+Full grid in `logs/sweep_banknifty_cluster_cap.json`
+(`sweep_banknifty_cluster_cap.py`).
+
 ## SCOPED, NOT BUILT: NIFTY ATM-IV-rank as a replacement for the India-VIX condor gate (added 2026-08-19)
 
 Follow-on from the IV-rank sweep below, which closed threshold tuning
