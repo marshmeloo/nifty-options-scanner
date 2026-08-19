@@ -1078,18 +1078,38 @@ the real calendar expiry from NIFTY's actual weekly-expiry weekday
 
 | horizon | short-gamma n | long-gamma n | lift (short - long) | z |
 |---|---|---|---|---|
+| 5min | 18,634 | 97,983 | +0.10% | +0.57 |
+| 10min | 18,159 | 96,012 | -0.19% | -0.87 |
 | 30min | 16,193 | 87,863 | -0.62% | -1.67 |
 | 60min | 14,142 | 78,011 | +0.19% | +0.36 |
 
-Neither horizon clears the 1.96 significance bar. More telling than
-either number alone: the DIRECTION flips between horizons (-0.62% at
-30min, +0.19% at 60min) -- the signature of sampling noise, not a real
-effect. Also checked the opposite sign convention (dealers assumed
-short puts/long calls rather than the reverse -- see
+No horizon clears the 1.96 single-test bar, and with four horizons
+tested the Bonferroni bar is ~2.50, so nothing here is close. More
+telling than any single number: the DIRECTION alternates with no
+pattern (+ - - + across 5/10/30/60min) -- the signature of sampling
+noise, not an effect that decays or strengthens with horizon the way a
+real hedging-flow mechanism should. The 5-10min horizons were added
+2026-08-19 specifically to test the "gamma effects may be too
+short-fused for a 30min window" objection this entry originally left
+open, closer to NeoGreeks' own squeeze-detector window; they do not
+rescue the result. Also checked the opposite sign convention (dealers
+assumed short puts/long calls rather than the reverse -- see
 `gamma_exposure.SIGN_CONVENTION`'s own docstring on why this is a
 modelling assumption, not a verified fact): it necessarily mirrors the
 same split with the same |z|, so the null result holds regardless of
 which convention is assumed correct.
+
+Spot-checked against the two most recent LIVE-recorded sessions
+(2026-08-17 and 2026-08-18, `source="dhan"` rather than reconstructed)
+as a sanity check on live data: 10,630 candidates, of which only 25
+were momentum-aligned -- all 25 on 08-17, all in SHORT_GAMMA, and zero
+momentum-aligned candidates at all on 08-18. Far below the >=30-per-
+side floor, so no comparison was computed. Directionally consistent
+with the hypothesis, but at n=25-on-one-side it is not evidence, and
+there is a real confound: a genuine directional move triggers momentum
+alignment (that is what it measures) AND can drain dealer long gamma at
+the same time, so common cause is at least as likely as gamma regime
+driving anything.
 
 **NOT ADOPTED, and nothing needed to be reverted** -- this was research
 from the start (explicit instruction: no live change without a separate
@@ -1099,10 +1119,18 @@ parsed from Dhan's live chain into `OptionQuote.gamma` alongside
 delta/theta/vega for anyone who wants to look at a live GEX read
 directly), but nothing reads them for scoring, filtering, or entries.
 Full per-run output in `logs/gamma_exposure_study*.json`. Re-run with
-`python gamma_exposure_study.py --horizon N` for other horizons if this
-is ever revisited -- worth trying a much shorter horizon (5-10min,
-closer to NeoGreeks' own squeeze-detector window) before concluding
-GEX has nothing to offer here at all.
+`python gamma_exposure_study.py --horizon N` if this is ever revisited.
+
+CLOSED, not left open-ended, following the same rule as the condor
+sweep above: four horizons spanning 5min to 60min, both sign
+conventions, and a live-data spot check all came back null, so the
+remaining ways to keep testing this (more horizons, more regime
+sub-buckets) would be searching for a threshold that happens to look
+significant rather than testing a hypothesis. Only reopen on a
+DIFFERENT hypothesis about what GEX should predict -- e.g. realised
+volatility or intraday range rather than this project's own momentum
+candidates' forward returns, which is what was actually tested here --
+not another sweep against the same question.
 
 ## Added: 2026-08-02 -- profit-milestone tracking for the directional spread and condor
 
