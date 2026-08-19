@@ -53,3 +53,8 @@ env/
 
 # Workspace role marker -- environment-specific, never shared
 .workspace
+
+# Stock intraday cache for the "stocks in play" research track (~200 MB,
+# 208 symbols). Regenerable: python -m research.stock_data --backfill
+logs/stock_candles/
+logs/stock_universe.json
