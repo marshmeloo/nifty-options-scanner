@@ -1035,6 +1035,127 @@ Each tier has a cooldown after a failure so a genuinely-down source
 doesn't add latency/log-noise to every 30s poll — see
 `FALLBACK_RETRY_COOLDOWN_SECONDS` in `config.py`.
 
+## Not adopted: 2026-08-19 -- Opening Range Breakout: 16 variations tested, none beat a coin flip
+
+Researched the published ORB literature and backtested every distinct
+variation it describes against 1,506 NIFTY sessions (2020-08-03 to
+2026-08-19). **Not one of the 16 variants beat a random entry using the
+same risk geometry.** Nothing adopted.
+
+**The variations tested** (`orb.py`), taken from the literature rather
+than invented, crossed with 5/15/30/60-minute opening ranges:
+
+| entry rule | source |
+|---|---|
+| `or_direction` — no breakout wait; enter at the first post-range bar in the direction the range itself closed | Zarattini & Aziz (2025), QQQ/TQQQ |
+| `breakout` — classic: wait for price to trade beyond the range, whichever side breaks picks direction | textbook / retail standard |
+| `breakout_or_direction` — stop order beyond the range but ONLY in the first candle's direction | Zarattini, Barbon & Aziz (2024), 7,000+ US stocks |
+| `close_confirm` — requires a bar CLOSE beyond the level, the standard false-breakout filter | retail standard |
+
+**Why the benchmark is the whole story.** An OR-based stop with an
+end-of-day exit has a built-in payoff shape — capped -1R losses,
+uncapped winners — that produces positive mean R *with no predictive
+signal whatsoever*. Every ORB variant here posts a positive mean R
+(+0.02R to +0.12R), which in isolation reads as "ORB works." It isn't:
+a coin flip entered at the same bar with the same stop scores
++0.04R to +0.12R on the same days. **Every single variant's edge over
+random is NEGATIVE** (-0.0008R to -0.054R, all |z| < 0.9). Most ORB
+writeups never run this control, which is how the strategy keeps
+getting rediscovered.
+
+Best variants by t-stat: `breakout_60min` (+2.67), `or_direction_30min`
+(+2.51), `breakout_or_direction_30min` (+2.43). The Bonferroni bar for
+16 simultaneous tests is |t| > 2.96 — **none clear it**, and all three
+lose to random anyway. Out-of-sample decay is severe across the board:
+`breakout_30min` +0.106R in-sample → +0.011R out; `close_confirm_60min`
++0.084R → +0.000R; `close_confirm_30min` +0.099R → +0.001R.
+
+This matches the literature rather than contradicting it. The flagship
+US-stocks paper found **unfiltered ORB lost** (29% vs the S&P's 198%,
+Sharpe 0.48 vs 0.78); it only worked after filtering to the ~20 highest
+relative-volume "stocks in play" each day. That filter has no analogue
+for a single index — you cannot pick today's NIFTY out of a universe of
+NIFTYs — so the null result here is the expected one.
+
+**Two methodology bugs found and fixed mid-study**, both of which would
+have produced a wrong answer:
+  - *Degenerate stops.* The coin-flip benchmark initially beat every
+    real variant — because entering at the next bar's open can land
+    arbitrarily close to the range edge, giving stop distances with a
+    p10 of 5.0 NIFTY points and a minimum of 0.1. R-multiple divides by
+    that, manufacturing huge R from ordinary moves. Fixed with a 0.1%
+    minimum stop distance applied to every variant identically. (This
+    is the same objection critics level at the published papers'
+    "no slippage, ~$0.08 stop" results.)
+  - *Direction-dependent selection.* The first fix SKIPPED
+    below-floor trades, which is subtly wrong: whether a stop is too
+    tight depends on where price sits inside the range, which differs
+    systematically for longs vs shorts. It silently turned "always
+    short" into "short only once price already fell to the range low"
+    and dropped benchmark participation to ~57% while real variants
+    stayed near 99%. Changed to WIDEN the stop to the floor instead,
+    keeping every day and restoring ~99% participation across the
+    board.
+
+**The one real finding, and it is not ORB.** The strongest effect in
+the entire table is a plain intraday SHORT bias: blindly shorting at
+the end of the opening range with an OR-based stop earned +0.185R to
++0.199R per trade (t up to 2.93), beating every ORB variant, while
+blindly going long earned -0.107R to +0.007R. It is not a COVID
+artifact — positive in 6 of 7 years (2023 the lone flat year at
+-0.001R), and it survives out-of-sample (+0.234R in-sample → +0.130R
+out). This is consistent with the well-documented overnight-drift-
+positive / intraday-drift-negative anomaly seen in equity markets
+generally, so it is a confirmation of a known effect rather than a
+discovery. **Not adopted either**: it is gross of costs, that anomaly
+is notoriously hard to monetise once shorting costs are paid, and one
+flat year inside a seven-year sample is exactly what a fragile edge
+looks like.
+
+**Why this stopped at the index level and did not proceed to options.**
+The staged design (`orb.py`'s docstring) tests the index first because
+options can only ADD cost — spread, theta, slippage — on top of
+whatever directional edge exists in the underlying; they cannot
+manufacture one. An index-level edge is a necessary condition, and no
+variant produced one, so building the options layer would only have
+measured how fast a zero edge decays.
+
+Code: `orb.py` (variants + per-day simulation, 29 tests),
+`orb_study.py` (backtest driver), `orb_candle_cache.py` (candle data).
+Full results in `logs/orb_study.json`. CLOSED — reopen only with a
+genuinely new filter that has an index analogue, not another sweep of
+range lengths and exit rules.
+
+Sources: [Zarattini & Aziz (SSRN)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4416622),
+[what the two ORB papers actually found](https://danfin.net/opening-range-breakout-research),
+[Concretum's ORB backtest writeup](https://concretumgroup.com/backtesting-the-opening-range-breakout-orb-strategy-using-polygon-io/).
+
+## Found: 2026-08-19 -- every candle fetch has been silently missing the session's first bar
+
+Turned up while building the ORB study, and it affects live code, not
+just research. Dhan's `/charts/intraday` treats `fromDate` as
+**exclusive**, and `dhan_source.get_nifty_intraday_candles` defaults it
+to `"YYYY-MM-DD 09:15:00"` — so the 09:15 bar, the first of the
+session, is dropped from every fetch. Requesting from 09:15 returns 74
+bars starting 09:20; requesting from 09:00 returns 75 starting 09:15.
+Confirmed by direct probe against both 5-minute and 1-minute data.
+
+Everything downstream of those candles has therefore been reading a
+session that begins one bar late: `price_action.analyze_with_context`,
+ATR (and so `plan_generator`'s volatility-based stops),
+`market_regime`, `volume_profile`, `anchored_vwap`, and every
+historical reconstruction in `logs/snapshots/`. The distortion is one
+bar in 75 for most of those, but it is specifically the OPENING bar,
+which is the most volatile of the session and carries the overnight
+gap — so it is not a uniformly negligible one.
+
+NOT FIXED in live code as part of this work. Changing the default
+alters what Anchor sees, which this project only does on live-data
+evidence (STRATEGY_VERSIONS.md's promotion policy), and the ORB study
+sidestepped it by fetching its own candles from 09:00
+(`orb_candle_cache.py`). Worth fixing deliberately, with the affected
+backtests re-run afterwards rather than pooled across the change.
+
 ## Not adopted: 2026-08-19 -- Gamma Exposure (GEX) regime found no evidence of predicting momentum forward returns
 
 Comparing this project against a retail options-analytics dashboard

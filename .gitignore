@@ -20,6 +20,11 @@ logs/commodities/
 # Same reasoning as snapshots: valuable measurement data, but runtime
 # output rather than source -- back it up outside git.
 logs/orderflow/
+# 5-minute index candles for the ORB study (~1.7 MB). Unlike the two
+# above this is freely REGENERABLE -- `python orb_candle_cache.py`
+# refetches the lot from Dhan in ~73 calls -- so it is a cache, not data
+# worth preserving.
+logs/orb_candles.json.gz
 cmd-print-*.txt
 sample_data.csv
 state/*.json
