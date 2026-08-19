@@ -30,6 +30,43 @@ closer inspection, to be cutting a large amount of completely ordinary
 trading along with the specific pattern it targeted — the backtest
 alone made it look better than it was.
 
+### What "beaten it on live data" means (set 2026-08-19)
+
+Both conditions, on live paper-tracked trades, per index, against Anchor
+over **the same period**:
+
+1. **Lower drawdown** than Anchor — peak-to-trough of cumulative net
+   P&L, ordered by close time, same nominal capital.
+2. **At least ~80% of Anchor's net profit** over that period.
+
+**Why the profit test is a floor and not "more profit".** The cluster
+cap's whole mechanism is trading profit for drawdown — it can only
+*remove* trades. Bank Nifty's own sweep (BACKLOG 2026-08-19) puts the
+expected steady state at ~83% of profit for ~67% less drawdown. So a
+challenger carrying it is *expected* to earn less than Anchor, and a
+bar of "higher P&L" would be waiting on something the design does not
+produce. ~80% is the floor below which the drawdown reduction is no
+longer worth what it costs.
+
+**Sample size — a judgement call, flagged as such rather than implied
+by the numbers above.** Neither condition means anything on a handful
+of trades: drawdown in particular is a slow statistic that needs enough
+trades to actually trace a peak and a trough. Suggested minimum **100
+closed trades per side, spanning at least ~4 trading weeks** so the
+comparison covers more than one market mood. At observed rates that is
+roughly 5 weeks for Bank Nifty (~4 Sentinel trades/day at the 500pt
+band) and considerably longer for NIFTY, whose Sentinel takes well
+under one trade/day — the NIFTY verdict will simply arrive much later,
+and forcing it early is how a coin flip gets promoted.
+
+**Comparisons must not pool across configuration changes.** A
+challenger's evidence clock resets whenever its own decision-relevant
+config moves. Concretely: Bank Nifty Sentinel's record before
+2026-08-19 was taken at a 200pt cluster band and is *not* evidence about
+the 500pt band it now runs. `logic_version.py` fingerprints
+`CLUSTER_CAP_*` (added 2026-08-19) precisely so those stretches stay
+separable rather than being silently averaged together.
+
 Every real trade is stamped with `strategy_name` / `strategy_version`
 in its journal entry (see `trade_tracker.open_new_trade`), so live
 results can always be grouped by which named version produced them.
