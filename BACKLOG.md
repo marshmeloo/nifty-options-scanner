@@ -3,6 +3,61 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Condor IV-rank gate: swept BELOW 15 for the first time -- 15 confirmed a real optimum, keep it (added 2026-08-19)
+
+Prompted by a direct observation: the condor had not opened a position
+since 2026-08-13. Not a fault -- India VIX sat at 11.3-11.5 all week (IV
+rank 11-12), below `config_condor.MIN_IV_RANK_TO_OPEN = 15`, so it
+correctly declined to sell cheap premium every cycle. But "never trades"
+is not a strategy either, so the threshold was worth re-examining.
+
+THE GAP: the sweep that chose 15 (2026-08-12 entry below) tested
+min_iv_rank in {15, 20, 25, 30}. **15 was the LOWEST value tried.** It
+won a grid it sat on the edge of, which is materially weaker evidence
+than beating neighbours on both sides -- the untested question was
+whether something BELOW 15 trades more without giving back the edge.
+
+Swept it, same 4 independent periods, PT=50% fixed (the original found
+the PT level secondary to the gate itself), real p90 costs:
+
+    gate        trades       net Rs   periods_positive
+    none           252      -42,626   2/4
+    iv>=5          196      -82,095   2/4
+    iv>=8          187      -71,422   2/4
+    iv>=10         167      -45,285   2/4
+    iv>=12         156       -9,557   2/4
+    iv>=15         132      +39,913   4/4   <- current live value
+    iv>=20         101      +20,197   2/4
+
+RESULT: lowering the gate is decisively worse, and degrades roughly
+monotonically as it drops (12 -> -9.6k, 10 -> -45k, 8 -> -71k, 5 ->
+-82k). 15 remains the ONLY cell positive in all four periods and still
+has the highest total net of anything tried, now with real values on
+BOTH sides of it rather than just above. The grid-edge concern from
+2026-08-12 is resolved, in favour of keeping 15.
+
+Note `iv>=5` is worse than no gate at all (-82k vs -43k). Not a
+contradiction: with one-at-a-time position limits, skipping a day
+changes which later positions you are free to hold, so a gate can move
+you into a worse set of trades rather than simply removing bad ones.
+
+NOTHING CHANGED. The honest consequence is the one already being
+observed: this strategy is DESIGNED to sit out low-volatility regimes,
+and if VIX stays in the low 11s it will keep not trading -- for weeks,
+potentially. That is the gate working, not failing. Accepting long flat
+stretches is the cost of the only condor configuration that has ever
+been positive across all four periods.
+
+CAVEAT worth keeping visible: at iv>=15 the 2022-08..2023-12 period is
+only +Rs 716 -- technically positive, but thin enough that the "4/4
+periods" headline rests on a near-coin-flip in one of them. Same
+finding as 2026-08-12, unchanged by this sweep.
+
+Full grid in `logs/sweep_condor_iv_rank.json` (`sweep_condor_iv_rank.py`).
+CLOSED for threshold tuning -- reopen only on a genuinely different
+idea (e.g. a NIFTY ATM-IV-rank measure rather than India VIX, or a
+regime filter that is not volatility-level based), not another grid.
+
 ## Dhan request demand is ~3.4x the rate limit -- RESOLVED 2026-08-18 (limiter hardened 2026-08-17, demand itself cut 2026-08-18)
 
 The limiter's thundering-herd bug was fixed 2026-08-17 (see below). The
