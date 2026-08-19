@@ -75,6 +75,15 @@ DECISION_RELEVANT_SETTINGS = (
     "TAG_PRIOR_STRENGTH", "TAG_ADJUSTMENT_SCALE", "MAX_TOTAL_TAG_ADJUSTMENT",
     "WEAK_TAG_WIN_RATE", "STRONG_TAG_WIN_RATE",
     "REENTRY_PRICE_TOLERANCE_PCT",
+    # Correlated-cluster cap. Directly decides whether a candidate is
+    # taken, and the band is no longer one shared number -- NIFTY
+    # Sentinel runs 200pt, Bank Nifty Sentinel 500pt as of 2026-08-19
+    # (see BACKLOG.md). Was missing from this list, so a band change
+    # would not have churned the config side of the fingerprint and
+    # results either side of it could have been pooled. Same gap as the
+    # tag-adjustment constants above.
+    "CLUSTER_CAP_ENABLED", "CLUSTER_CAP_ADJACENCY_POINTS", "CLUSTER_CAP_WINDOW_MINUTES",
+    "DIRECTION_CHASE_COOLDOWN_MINUTES",
     "EXPIRY_DAY_EXTRA_CONVICTION", "EXPIRY_DAY_NO_NEW_TRADES_AFTER",
     "NEWS_RISK_BLOCKS_NEW_TRADES",
 )

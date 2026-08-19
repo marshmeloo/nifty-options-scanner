@@ -124,19 +124,45 @@ gentlest but may not fully cover slower-forming bursts (the real
 Bank Nifty 08-14 cluster spanned close to an hour end to end, even
 though most of it fired within 3 minutes).
 
-**Bank Nifty caveat, stated plainly:** the 200pt/30min values above
-come entirely from NIFTY's own backtest. NIFTY strikes are 50pt apart;
-Bank Nifty's are 100pt apart, and Bank Nifty's own trade profile is
-already known to differ substantially (69.6% EOD-close trades vs
-NIFTY's 30.7%, per the Bank Nifty research note). Running the same
-values on Bank Nifty's Sentinel process is a reasonable first pass,
-not a claim that they've been separately verified for it.
+**Bank Nifty band RESOLVED 2026-08-19: 500pt, not NIFTY's 200pt.** The
+caveat that used to sit here — that 200pt/30min came entirely from
+NIFTY's backtest and had never been verified for Bank Nifty — has now
+been settled by backtesting it on Bank Nifty's own 1,244-day history
+across 5 independent ~1-year periods (`sweep_banknifty_cluster_cap.py`,
+BACKLOG.md 2026-08-19).
 
-**Still not deployed, still not tested against the real 08-12/08-14
-sessions themselves** (reconstructed data ends 2026-08-05) or against
-Bank Nifty's own history. A promising backtest is evidence toward
-promotion, not promotion itself — see the policy at the top of this
-file.
+200pt was too narrow for two reasons that both predicted the same fix
+before any data was run: it is 0.83% of NIFTY at ~24,000 but only 0.35%
+of Bank Nifty at ~57,000 (proportional equivalence → ~475pt), and at
+Bank Nifty's 100pt strike spacing it reached 2 strikes either side
+instead of NIFTY's 4 — structurally able to thin a cluster, never
+collapse one. Live confirmation on 2026-08-10, 08-17 and 08-19; on the
+last, two Sentinel trades 300pt apart passed straight through the 200pt
+band, and the second (−₹2,452) is verifiably blocked at 500pt.
+
+Measured: drawdown falls monotonically with band width, in every one of
+the 5 periods individually, all staying profitable throughout. 200pt cut
+worst-period drawdown 44%; **500pt cuts it 67% while keeping 83% of
+profit** — comparable to the ~14%-profit-for-~62%-drawdown trade-off
+NIFTY's own Sentinel was built on. 500 was chosen as the round number
+nearest the a-priori ~475pt prediction rather than the empirical argmax
+(600 edges it in aggregate but is within noise on several periods and
+wins mainly by fixing the single worst one). The robust finding is that
+400–800 are roughly equivalent and 200 was too narrow.
+
+**NIFTY Sentinel keeps 200pt** — that value was validated on NIFTY's own
+history and this finding says nothing about it. The two processes now
+carry deliberately different bands, and `logic_version.py` fingerprints
+`CLUSTER_CAP_*` (added the same day; it previously did not, so a band
+change would not have churned the config side of the version).
+
+**Still not tested against the real 08-12/08-14 sessions themselves**
+(reconstructed data ends 2026-08-05). Bank Nifty's own history HAS now
+been tested (see the band entry above, 2026-08-19). A promising
+backtest is evidence toward promotion, not promotion itself — Sentinel
+remains a paper-tracked candidate and Anchor remains unchanged, with
+`CLUSTER_CAP_ENABLED = False` on both its NIFTY and Bank Nifty
+processes. See the policy at the top of this file.
 
 ---
 

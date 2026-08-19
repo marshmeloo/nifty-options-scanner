@@ -12,14 +12,34 @@ main_live_sentinel.py's Sentinel overrides (strategy identity,
 correlated-cluster cap, no duplicate snapshot recording) -- see both of
 those files' own docstrings for the reasoning behind each.
 
-REAL, STANDING CAVEAT NOT TO LOSE SIGHT OF: the 200pt / 30min
-cluster-cap values were backtested against NIFTY's history only (see
-STRATEGY_VERSIONS.md's Sentinel entry). NIFTY strikes are 50pt apart;
-Bank Nifty's are 100pt apart, and its whole trade profile is already
-known to differ from NIFTY's (69.6% EOD-close trades vs NIFTY's 30.7%,
-per the Bank Nifty research note). These values have NOT been
-independently verified for Bank Nifty -- running this live-paper is
-partly how that gets checked, not a claim that it already has been.
+CLUSTER-CAP BAND IS BANK-NIFTY-SPECIFIC (500pt), NOT NIFTY'S 200pt.
+Resolved 2026-08-19; this file previously carried 200pt inherited from
+NIFTY with a standing caveat that it had never been verified here. It
+now has been -- see BACKLOG.md's 2026-08-19 entry
+(sweep_banknifty_cluster_cap.py) for the full grid.
+
+Why 200pt was wrong for Bank Nifty, both reasons pointing the same way:
+200pt is 0.83% of NIFTY at ~24,000 but only 0.35% of Bank Nifty at
+~57,000 (proportional equivalence predicts ~475pt), and with Bank
+Nifty's 100pt strike spacing against NIFTY's 50pt it reached only 2
+strikes either side instead of 4 -- structurally able to THIN a cluster
+but never collapse one. Confirmed live three times (2026-08-10,
+08-17, and 08-19, the last being 5 CE trades inside 115 seconds with two
+of them 300pt apart, straight through the 200pt band).
+
+Swept over Bank Nifty's own 1,244-day history across 5 independent
+~1-year periods: drawdown falls monotonically with band width, in every
+period individually, with all periods staying profitable throughout.
+200pt cut worst-period drawdown only 44%; 500pt cuts it 67% while
+keeping 83% of profit. 500 was chosen as the round number nearest the
+a-priori ~475pt prediction rather than the empirical argmax (600 scores
+marginally better in aggregate but is within noise of 500 on several
+periods, and its edge comes mostly from fixing the single worst period
+-- which is where overfitting starts). The honest finding is that
+anything in 400-800 is roughly equivalent and 200 was too narrow.
+
+NIFTY's Sentinel keeps 200pt: that value WAS validated against NIFTY's
+own history, and this finding says nothing about it.
 
 Run:
   set DHAN_CLIENT_ID=...
@@ -50,7 +70,9 @@ config.STRIKE_RANGE_POINTS = 2000
 config.STRATEGY_NAME = "Sentinel"
 config.STRATEGY_VERSION = "1.1-dev"
 config.CLUSTER_CAP_ENABLED = True
-config.CLUSTER_CAP_ADJACENCY_POINTS = 200
+# 500, NOT NIFTY's 200 -- backtested on Bank Nifty's own history
+# 2026-08-19, see this file's module docstring and BACKLOG.md.
+config.CLUSTER_CAP_ADJACENCY_POINTS = 500
 config.CLUSTER_CAP_WINDOW_MINUTES = 30
 config.RECORD_SNAPSHOTS = False
 
@@ -438,8 +460,8 @@ def run_forever():
     if ws == workspace.DEVELOPMENT:
         log.info("  WARNING: running a live session from the DEVELOPMENT checkout. Trades "
                  "journalled here will not be in production's record.")
-    log.info("  CAVEAT: the 200pt/30min cluster-cap values were backtested against NIFTY's "
-             "history only, not Bank Nifty's -- see this file's own module docstring.")
+    log.info(f"  Cluster-cap band {config.CLUSTER_CAP_ADJACENCY_POINTS}pt is Bank-Nifty-specific "
+             f"(backtested on BN's own 1,244-day history 2026-08-19), NOT NIFTY's 200pt.")
 
     log.info("Fetching nearest Bank Nifty expiry...")
     expiry = get_banknifty_nearest_expiry()
