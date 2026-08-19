@@ -3,6 +3,113 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## RESEARCHED, NOT BUILT: ORB on "stocks in play" (high relative-volume Indian stocks) (added 2026-08-19)
+
+Raised after index ORB came back null: does ORB work on individual
+momentum stocks selected by volume/gainer screens, rather than on the
+index? Researched, feasibility-probed, not built. **Verdict: the one ORB
+variant genuinely worth testing, but gated on a cost test that the
+published evidence suggests it will probably fail.**
+
+### Why this is a better question than the one already answered
+
+Not a random re-roll of a settled result. The flagship US study
+(Zarattini, Barbon & Aziz 2024) found UNFILTERED ORB across 7,000+
+stocks LOST to buy-and-hold -- and that filtering to the top-20 stocks
+each day by opening relative volume turned it into 1,637% total return,
+41.6% IRR, Sharpe 2.81, near-zero beta. The filter IS the strategy.
+
+When the index ORB study here closed as null (README 2026-08-19), the
+stated reason was precisely that this filter has no index analogue --
+"you cannot pick today's NIFTY out of a universe of NIFTYs." A stock
+universe restores exactly the missing ingredient. So this asks a
+different question, not the same one again.
+
+### Feasibility: PROVEN, probed directly
+
+  - Dhan's instrument master carries 9,846 NSE EQUITY rows and 1,256
+    FUTSTK, giving a ~220-name F&O stock universe.
+  - Historical 5-minute intraday candles ARE available per stock
+    (RELIANCE probed at 2022-06-15, 2024-03-14, 2026-08-18 -- 75 bars
+    each, correctly starting 09:15 once the 09:14 fromDate fix is used).
+  - Multi-day range fetching works for equities as it does for the index
+    (one call returned a full month, 1,725 bars / 23 days), so a 3-year
+    backfill over 220 stocks is ~7,920 calls, roughly 7.7 hours of
+    background API time -- large but a one-off.
+  - NSE's own top-gainers / volume-spurts PAGES are NOT usable as the
+    selection source: they are live snapshots with no history, and NSE
+    blocks automated fetches (see nse_source.py's own docstring). The
+    selection must be RECONSTRUCTED from stock data as it would have
+    looked that morning -- which is the correct approach anyway, since
+    it is the only way to guarantee no look-ahead.
+
+### The evidence against, which is strong and specific
+
+An independent replication of the sibling QQQ paper reproduced the
+mechanics almost exactly (1,775 vs 1,795 trades, Sharpe 1.06 vs 1.12)
+and then destroyed the practical claim:
+
+  - **Break-even at ~2.2 cents/share of slippage.** The entire edge
+    lives INSIDE QQQ's bid-ask spread; $138,639 of published profit
+    became $4,860 under realistic costs.
+  - **76% of the filtered strategy's profit came from 2022 alone** --
+    a volatility-regime artifact, losing money in 2017, 2020 and early
+    2023.
+  - **Bootstrap Sharpe CI [0.05, 1.41] vs buy-and-hold [-0.03, 1.47]**
+    -- overlapping; no robust portfolio-level edge despite significant
+    per-trade statistics.
+
+That replication targets the INDEX-ETF paper, not the stocks-in-play
+one, so it is not a direct refutation. But the lesson transfers in the
+WRONG direction: QQQ is among the most liquid instruments on earth, and
+the edge still died inside its spread. Indian single stocks -- including
+the mid-caps a relative-volume screen will preferentially surface,
+because unusual volume IS the selection criterion -- have materially
+wider spreads and worse impact costs than QQQ.
+
+### Fit with this system: this would be a new instrument class
+
+Checked: the live system trades index derivatives ONLY (OPTIDX /
+NSE_FNO / IDX_I throughout). `instrument_master.py` is the single file
+that even mentions equities, and only incidentally. There is no equity
+data source, no equity universe handling, no per-stock scanning, and no
+execution path for stocks.
+
+Also unresolved and not a detail: WHAT would actually be traded.
+Stock options (OPTSTK) exist but liquidity outside the largest names is
+poor -- and buying options on a wide-spread underlying compounds the
+exact cost problem that killed the replication. Stock futures or the
+stock itself mean a different margin/capital model this project has
+never touched. Plus capital fragments across 5-20 positions/day instead
+of one index position.
+
+### Recommendation: test it, but cost-gate FIRST
+
+Worth pursuing, because it is the single documented condition under
+which ORB works and the data is in hand. But structure it so the known
+killer is measured first, not last:
+
+  1. Backfill ~100-220 stocks, 3 years (background, ~8h).
+  2. Reconstruct the daily "stocks in play" selection from opening
+     relative volume, strictly from information available by 09:20.
+  3. Measure GROSS edge on the selected names. If there is no large
+     gross edge, stop -- costs only ever subtract.
+  4. Apply a REALISTIC Indian single-stock cost model (spread by
+     liquidity band, not a flat number -- this project already has
+     spread_cost_study.py's per-premium-band approach to copy) and
+     require the edge to survive by a wide margin, not marginally.
+  5. Only then consider what instrument could actually express it.
+
+Hard bar, set in advance: if the strategy's break-even slippage is of
+the same order as the typical spread of the stocks it selects -- which
+is what happened to the QQQ replication -- it is not tradeable here and
+should be closed like index ORB was. Do NOT proceed to instrument
+selection or live wiring on a marginal gross result.
+
+Sources: Zarattini/Barbon/Aziz "A Profitable Day Trading Strategy For
+The U.S. Equity Market" (SSRN 4729284); independent replication
+github.com/giovannibrusco/zarattini-2023-orb-qqq.
+
 ## Bank Nifty cluster cap: 200pt is far too narrow -- ~500pt cuts drawdown 67% for 17% of profit (added 2026-08-19)
 
 The live cluster cap (200pt / 30min, Sentinel-only) was backtested
