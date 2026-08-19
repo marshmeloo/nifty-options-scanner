@@ -12,7 +12,7 @@ from datetime import datetime
 
 import pytest
 
-import gamma_exposure as gex
+from research import gamma_exposure as gex
 from models import MarketSnapshot, OptionQuote
 
 

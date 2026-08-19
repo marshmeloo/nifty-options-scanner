@@ -1042,7 +1042,7 @@ variation it describes against 1,506 NIFTY sessions (2020-08-03 to
 2026-08-19). **Not one of the 16 variants beat a random entry using the
 same risk geometry.** Nothing adopted.
 
-**The variations tested** (`orb.py`), taken from the literature rather
+**The variations tested** (`research/orb.py`), taken from the literature rather
 than invented, crossed with 5/15/30/60-minute opening ranges:
 
 | entry rule | source |
@@ -1113,15 +1113,15 @@ flat year inside a seven-year sample is exactly what a fragile edge
 looks like.
 
 **Why this stopped at the index level and did not proceed to options.**
-The staged design (`orb.py`'s docstring) tests the index first because
+The staged design (`research/orb.py`'s docstring) tests the index first because
 options can only ADD cost — spread, theta, slippage — on top of
 whatever directional edge exists in the underlying; they cannot
 manufacture one. An index-level edge is a necessary condition, and no
 variant produced one, so building the options layer would only have
 measured how fast a zero edge decays.
 
-Code: `orb.py` (variants + per-day simulation, 29 tests),
-`orb_study.py` (backtest driver), `orb_candle_cache.py` (candle data).
+Code: `research/orb.py` (variants + per-day simulation, 29 tests),
+`research/orb_study.py` (backtest driver), `research/orb_candle_cache.py` (candle data).
 Full results in `logs/orb_study.json`. CLOSED — reopen only with a
 genuinely new filter that has an index analogue, not another sweep of
 range lengths and exit rules.
@@ -1243,7 +1243,7 @@ anyway — a null that a ~1% shift in component lift cannot flip.
 candle-dependent (and the former shares the `day_candles[0].open` bug
 above), so their numbers will have moved slightly; they were left for a
 deliberate re-run rather than folded into this one. The ORB study is
-unaffected — `orb_candle_cache.py` fetched from 09:00 from the start.
+unaffected — `research/orb_candle_cache.py` fetched from 09:00 from the start.
 
 ## Not adopted: 2026-08-19 -- Gamma Exposure (GEX) regime found no evidence of predicting momentum forward returns
 
@@ -1257,20 +1257,20 @@ hypothesis: this project's core edge (momentum ROC alignment, see the
 short gamma (hedging amplifies moves) and WORST when they're long
 gamma (hedging damps/pins price).
 
-**Built to test it, not to assume it.** `black_scholes.py` computes
+**Built to test it, not to assume it.** `research/black_scholes.py` computes
 gamma from spot/strike/time-to-expiry/IV -- needed because
 `historical_source.py`'s reconstructed contracts carry no Greeks at all
 (Dhan's Expired Options Data endpoint doesn't return them). Validated
 against Dhan's own live-reported gamma first (12 real strikes, both
 CE/PE, 2026-08-18: consistently within 1-6%) before trusting it as a
-historical proxy -- see `test_black_scholes.py`. `gamma_exposure.py`
+historical proxy -- see `test_black_scholes.py`. `research/gamma_exposure.py`
 aggregates that into net GEX, a gamma regime (SHORT_GAMMA/LONG_GAMMA),
 and a zero-gamma level (the hypothetical spot where regime flips, gamma
 recomputed at each candidate spot with OI held fixed -- an earlier
 draft that instead walked the actual strike ladder at today's gamma
 was a DIFFERENT, wrong computation, caught and rewritten before this
 ever ran against real data; see that module's own docstring).
-`gamma_exposure_study.py` follows `component_study.py`'s exact
+`research/gamma_exposure_study.py` follows `component_study.py`'s exact
 counterfactual-candidate methodology (every candidate `scanner.scan()`
 ever flagged, not just taken trades -- taken-trade analysis is
 selection-biased, see that module's docstring) and additionally caught
@@ -1323,8 +1323,8 @@ driving anything.
 
 **NOT ADOPTED, and nothing needed to be reverted** -- this was research
 from the start (explicit instruction: no live change without a separate
-decision after seeing the backtest). `gamma_exposure.py` and
-`black_scholes.py` stay in the codebase (tested, and gamma is now
+decision after seeing the backtest). `research/gamma_exposure.py` and
+`research/black_scholes.py` stay in the codebase (tested, and gamma is now
 parsed from Dhan's live chain into `OptionQuote.gamma` alongside
 delta/theta/vega for anyone who wants to look at a live GEX read
 directly), but nothing reads them for scoring, filtering, or entries.

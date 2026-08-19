@@ -48,7 +48,7 @@ different question than "would this have helped live."
 from collections import defaultdict
 from datetime import datetime
 
-import black_scholes as bs
+from research import black_scholes as bs
 import historical_source
 from models import GammaExposure, MarketSnapshot
 

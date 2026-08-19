@@ -32,7 +32,7 @@ row-building loop is similar because the underlying question shape is
 similar, but this needs extra per-row data (gamma regime, momentum-
 alignment flag) that module doesn't expose, so it isn't simply reused.
 
-Run: python gamma_exposure_study.py [--horizon 30] [--out logs/gamma_exposure_study.json]
+Run: python -m research.gamma_exposure_study [--horizon 30] [--out logs/gamma_exposure_study.json]
 """
 
 import argparse
@@ -41,7 +41,7 @@ import math
 import statistics
 
 import config
-import gamma_exposure
+from research import gamma_exposure
 import oi_analytics
 import price_action
 import snapshot_recorder

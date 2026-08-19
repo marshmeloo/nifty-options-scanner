@@ -11,7 +11,7 @@ itself (see BACKLOG.md / README for the recorded result).
 Run: python -m pytest tests/test_gamma_exposure_study.py -q
 """
 
-import gamma_exposure_study as study
+from research import gamma_exposure_study as study
 
 
 # --------------------------------------------------------------------------

@@ -37,15 +37,15 @@ scan()) then reads corrected candles without knowing anything changed,
 and the stored data is untouched.
 
 Run:
-    python rerun_with_fixed_candles.py --study component
-    python rerun_with_fixed_candles.py --study gamma
+    python -m research.rerun_with_fixed_candles --study component
+    python -m research.rerun_with_fixed_candles --study gamma
 """
 
 import argparse
 import json
 from datetime import datetime
 
-import orb_candle_cache
+from research import orb_candle_cache
 import snapshot_recorder
 from models import Candle
 
@@ -125,7 +125,7 @@ def run_component_study(horizon: int, out: str):
 
 
 def run_gamma_study(horizon: int, out: str):
-    import gamma_exposure_study as gs
+    from research import gamma_exposure_study as gs
 
     days = historical_days()
     print(f"{len(days)} historical days: {days[0]} .. {days[-1]}", flush=True)

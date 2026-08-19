@@ -11,7 +11,7 @@ Run: python -m pytest tests/test_orb.py -q
 
 import pytest
 
-import orb
+from research import orb
 
 
 def _bar(t, o, h, l, c, v=1000):

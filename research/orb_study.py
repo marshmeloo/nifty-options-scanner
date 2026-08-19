@@ -28,8 +28,8 @@ THE THREE BARS A VARIANT HAS TO CLEAR
    only works in the first period is a fitted artefact.
 
 Run:
-    python orb_study.py                    # core variant set
-    python orb_study.py --out logs/x.json
+    python -m research.orb_study                    # core variant set
+    python -m research.orb_study --out logs/x.json
 """
 
 import argparse
@@ -38,8 +38,8 @@ import math
 import statistics
 from collections import defaultdict
 
-import orb
-import orb_candle_cache
+from research import orb
+from research import orb_candle_cache
 from component_study import _inv_norm   # Acklam inverse-normal, already used for the same purpose
 
 # Splits the sample for the out-of-sample check. Deliberately a fixed
@@ -229,7 +229,7 @@ def main():
 
     days = orb_candle_cache.load()
     if not days:
-        print("No candle cache. Run: python orb_candle_cache.py")
+        print("No candle cache. Run: python -m research.orb_candle_cache")
         return
 
     variants = core_variants()

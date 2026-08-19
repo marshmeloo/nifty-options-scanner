@@ -11,7 +11,7 @@ from datetime import datetime
 
 import pytest
 
-import black_scholes as bs
+from research import black_scholes as bs
 
 
 # --------------------------------------------------------------------------

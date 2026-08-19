@@ -28,8 +28,8 @@ ranges -- verified, an 18-day request returned 12 distinct trading
 days), so the full ~6-year history costs ~73 API calls rather than
 ~1,485 one per day.
 
-Run:  python orb_candle_cache.py            # fill/refresh the cache
-      python orb_candle_cache.py --describe # what's in it
+Run:  python -m research.orb_candle_cache            # fill/refresh the cache
+      python -m research.orb_candle_cache --describe # what's in it
 """
 
 import argparse
@@ -44,7 +44,9 @@ import dhan_source
 
 log = logging.getLogger("nifty_scanner")
 
-CACHE_PATH = Path(__file__).parent / "logs" / "orb_candles.json.gz"
+# parent.parent -- this module lives in research/, the cache belongs in the
+# project-root logs/ directory alongside every other study output.
+CACHE_PATH = Path(__file__).parent.parent / "logs" / "orb_candles.json.gz"
 
 # NSE regular session, as OPEN-STAMPED bar labels: 09:15 (covering
 # 09:15->09:20) through 15:25 (covering 15:25->15:30).
@@ -176,7 +178,7 @@ def refresh(start: str = DEFAULT_START, end: str = None, interval: str = "5") ->
 def describe() -> str:
     data = load()
     if not data:
-        return "cache empty -- run: python orb_candle_cache.py"
+        return "cache empty -- run: python -m research.orb_candle_cache"
     days = sorted(data)
     bar_counts = {}
     starts = {}
