@@ -3,6 +3,136 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## SCOPED, NOT BUILT: NIFTY ATM-IV-rank as a replacement for the India-VIX condor gate (added 2026-08-19)
+
+Follow-on from the IV-rank sweep below, which closed threshold tuning
+and named this as the only remaining idea worth pursuing. This entry is
+a SCOPE with a feasibility probe attached -- no implementation, no
+decision taken.
+
+### Why bother: India VIX measures the wrong thing
+
+India VIX is a 30-day forward vol index built from a strip of OTM
+options across the near AND next expiry, per NSE's methodology. The
+condor sells WEEKLY options at specific strikes. So the gate currently
+in production is filtering on a different tenor and a different part of
+the surface from the thing actually being sold. That is not obviously
+wrong -- vol regimes are correlated -- but it is a proxy, and the
+question is whether the direct measure does better.
+
+### Feasibility: PROVEN, the data exists
+
+Probed directly rather than assumed:
+  - Reconstructed history carries per-strike IV across the whole range
+    (checked 2022-09, 2024-03, 2026-07: 38-41 of 42 strikes have IV).
+    So an ATM-IV series is computable back to 2021 and the filter is
+    BACKTESTABLE, not a "collect data for a year first" build.
+  - `shadow_condor.CondorPolicy` already has the `min_iv_rank` hook and
+    a pluggable history (`vix_history`), so the backtest wiring is a
+    generalisation, not new machinery.
+  - `india_vix_source.iv_rank_and_percentile` is the rank computation
+    to mirror.
+
+### It is genuinely different information, measured
+
+305 paired days, 2021-08..2026-08, ATM straddle IV vs India VIX close:
+
+    Pearson  corr = +0.683
+    Spearman corr = +0.735   (rank agreement -- what matters for a rank gate)
+    Gate verdict at rank>=15: AGREE 76.4%, DISAGREE 23.6%
+
+Correlated but not redundant: roughly one day in four the two gates
+would make opposite calls. That is the case for building it.
+
+### The hard part, quantified: a raw ATM-IV rank is a day-of-week indicator
+
+Median ATM IV by days-to-expiry on the weekly contract:
+
+    DTE=6  13.00      DTE=3  15.41      DTE=1  16.94
+    DTE=5  11.57      DTE=2  15.78      DTE=0  24.12
+    DTE=4   9.76
+
+An 85% swing from DTE=6 to DTE=0 driven purely by position in the
+expiry cycle, not by whether vol is actually rich. India VIX has no
+such problem because its 30-day tenor is constant by construction. A
+naive `rank(ATM IV)` would therefore be substantially measuring "how
+close to expiry are we", and would fire or block for reasons that have
+nothing to do with volatility regime. **This is the whole engineering
+problem; everything else is plumbing.**
+
+Mitigating fact: condor entries cluster in a narrow DTE band rather
+than spreading across the week (backtest 2024-08..2025-12: 47 of 48
+entries at DTE 1-2), so the confound at the DECISION point is much
+smaller than the table above suggests.
+
+### Design options for the DTE problem
+
+  A. **DTE-conditional rank** -- rank today's ATM IV against history at
+     the SAME DTE. Directly removes the confound, cheap to implement.
+     Cost: splits history ~7 ways; with entries concentrated at DTE 1-2
+     the relevant buckets stay well populated, so this is likely
+     adequate.
+  B. **Constant-maturity interpolation** -- reconstruct a fixed-tenor
+     (7d or 30d) ATM IV by interpolating across two expiries, i.e. what
+     India VIX does. Most faithful, most expensive: needs the NEXT
+     expiry's chain historically (`expiryCode=2` on the rolling
+     endpoint) and a fresh backfill.
+  C. **Normalise by the DTE median** -- divide by the historical median
+     at that DTE. Cheapest, removes most of the effect, least
+     principled.
+
+Recommend starting at A, with C as a sanity cross-check. B only if A
+shows promise and the residual DTE effect still looks material.
+
+### What is NOT a head start (checked)
+
+`state/iv_history.json` looks like an existing ATM-IV history and is
+not one. `dhan_source` appends `atm_straddle_iv` on EVERY snapshot
+fetch and truncates at `IV_HISTORY_WINDOW = 252`, so at ~75 cycles/day
+it holds about three days of intraday readings, not the 252 TRADING
+DAYS the name implies. It is also **written but never read** -- nothing
+consumes it for any decision (it is a vestige of the abandoned
+"rank each strike against ATM IV history" approach that the module
+docstring describes replacing with cross-sectional percentile). A real
+build needs daily sampling and a real 252-day window; this store should
+be either fixed or deleted as part of the work rather than mistaken for
+existing infrastructure.
+
+### Validation bar (non-negotiable, same as the gate it would replace)
+
+Must beat India-VIX-rank>=15 on ITS OWN terms: 4/4 independent periods
+positive, and total net above +Rs 39,913 on the same 4 periods with
+real p90 costs. Thresholds must be fixed pre-specified values, never
+derived from the sample. A cell that wins on total but is 3/4 on
+periods is NOT an improvement -- consistency was the entire reason 15
+was adopted over higher-netting alternatives.
+
+### Honest risks
+
+  - **Most likely outcome is "no better".** Spearman 0.735 means the two
+    agree on the big moves; the 23.6% disagreement may be concentrated
+    in genuinely ambiguous days where neither call is reliably right.
+  - Multiple comparisons: this adds a second regime-filter family to a
+    strategy whose config has already been swept hard (36 condor
+    configs, 12 PT x IV cells, 7 IV thresholds). The Bonferroni bar
+    across everything tried on this strategy is getting demanding, and
+    a marginal win should be read as noise.
+  - The DTE fix itself is a modelling choice with free parameters
+    (bucket width, window length) -- more knobs, more overfitting
+    surface, on a strategy that has not yet earned its keep live.
+  - Backtest-vs-live entry-DTE divergence noticed while probing this
+    (backtest opens at DTE 1-2, the 3 real live entries are at DTE 5-6).
+    Tiny live sample, could be nothing, but it should be understood
+    BEFORE tuning an entry filter against backtest DTE behaviour that
+    live may not reproduce.
+
+### Recommendation
+
+Worth doing, but as a measurement, not a fix -- with a real chance the
+answer is "India VIX was fine". The DTE divergence in the last risk
+above should be resolved first, since it questions whether the backtest
+opens positions the way live does, which affects any entry-filter work.
+
 ## Condor IV-rank gate: swept BELOW 15 for the first time -- 15 confirmed a real optimum, keep it (added 2026-08-19)
 
 Prompted by a direct observation: the condor had not opened a position
