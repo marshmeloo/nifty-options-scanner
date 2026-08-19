@@ -3,6 +3,108 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Platform research: TradeFinder's intraday feature set, and what is worth borrowing (added 2026-08-19)
+
+Competitive scan of tradefinder.in (Indian retail intraday platform,
+live since 2022-06) plus reference screenshots of a third-party
+signal system. Intraday only -- swing features (Swing Spectrum,
+Reversal Radar, Channel BO, 10/50-day BO) deliberately ignored.
+
+### What their intraday product actually is
+
+Their entire intraday stack is relative-volume + price momentum stock
+selection, refined over a 3-year changelog. That is the SAME thesis as
+this project's stocks-in-play track, which is mild validation of the
+direction -- a company has sold it for three years and kept investing
+in the core ranking metric.
+
+Intraday-relevant features, from the changelog:
+
+  - **R. Factor** -- proprietary composite momentum rank. Core engine
+    rebuilt twice (2024-12, 2025-01) and later extended to rank SECTORS
+    (2025-10) rather than just stocks.
+  - **Intraday Boost** -- live momentum stock finder; filters added
+    2025-01, a "Signal" direction section added 2025-07.
+  - **Breakout Beacon** (2025-06) -- momentum surge + "big players
+    piling in".
+  - **5 & 10-minute momentum spikes** (2022-11, refined 2024-05) --
+    sharp volume increase AND significant price move, together.
+  - **Top Level / Low Level** (2022-12, refined 2024-11) -- stocks
+    trading near the day's high/low.
+  - **Contraction BO** (2022-09) -- breakout from a tight range.
+  - **LOM (Loss of Momentum)**, short and long term (2022-09) --
+    momentum EXHAUSTION, aimed at reversals.
+  - **Day H/L Reversal** (2022-10) -- at day extremes but turning.
+  - **Sector Scope / Sector Filters** (2024-03, 2025-10) -- sector
+    contribution and heatmap, R-factor-weighted, to catch "where smart
+    money is flowing early".
+  - **Index Movers** (2024-03) -- which constituents are pushing or
+    dragging an index.
+  - Options-side: Option Apex (candle-by-candle position buildup),
+    OI Clock, Index Alpha (backtested NIFTY/BankNifty option-buying
+    signals).
+
+### Honest read on it as EVIDENCE
+
+Near zero. The changelog says "after thorough backtesting" repeatedly
+and never once publishes a number -- no sample, no period, no
+expectancy, no drawdown. That is marketing copy, not evidence, and it
+is exactly the standard this project refuses for its own changes. Treat
+the feature list as a well-informed source of HYPOTHESES to test, never
+as validation that any of it works.
+
+The accompanying YouTube references are weaker still: all three from
+one channel (IntraSurgical, 387 subscribers, 108-306 views, one of them
+a 15-second Short) with a Telegram link in the description, i.e. a
+signals-service funnel. Titles confirm the topic is ORB/intraday but
+carry no independent weight.
+
+### Reference screenshots of a working signal system
+
+More useful than the videos, because they show concrete PARAMETER
+choices someone runs live:
+
+  - Candidate filter at **RVOL >= 1.2** -- notably LOW next to the
+    US literature's 2.0+ and the "top 20 by relative volume" of the
+    Zarattini paper. Argues for sweeping a RANGE of RVOL thresholds
+    rather than assuming a high bar.
+  - Signals timestamped **09:20-09:25**, i.e. selection inside the
+    first 10 minutes. This project's stocks_in_play currently uses a
+    15-minute window; worth testing 5 and 10 too, which also matches
+    TradeFinder's own 5/10-minute spike windows.
+  - Trade structure **E / SL / T1 / T2 / T3 where T3 = "2R close"** --
+    multi-target with a runner, not a single fixed target. Directly
+    relevant to the "win large, lose small" hypothesis: a runner is
+    how a fat right tail is actually harvested.
+  - Separate LONG and SHORT books, both populated the same morning.
+  - One candidate showed **RVOL 45.09**, far outside anything a
+    20-day-baseline RVOL normally produces -- their RVOL is likely
+    computed against a different baseline (longer window, or including
+    pre-open). A reminder that "RVOL" is not a standard quantity and
+    ours must be defined explicitly, as research/stocks_in_play.py does.
+
+### What is worth borrowing, ranked
+
+  1. **Sector context.** This project has NOTHING for sector rotation,
+     and it is the one idea here that is both absent and plausibly
+     load-bearing: a stock moving with its whole sector is a different
+     bet from one moving alone. Cheap to add to the stocks-in-play
+     study as a per-day feature once the backfill lands.
+  2. **Shorter selection windows (5/10 min)** plus a swept RVOL
+     threshold rather than a single assumed one.
+  3. **Multi-target with a runner (T1/T2/2R-close)** as the exit
+     family to test, since it is the construction that matches the
+     hypothesis being tested.
+  4. **Near-day-high/low** as a cheap additional filter.
+  5. **Index Movers** -- interesting bridge between the existing index
+     strategies and the stock work, but no clear use yet.
+
+NOT worth borrowing: the options-side features (Option Apex, OI Clock)
+duplicate what oi_analytics.py and the orderflow feed already do here.
+
+Nothing adopted. This is a hypothesis list for the stocks-in-play
+track, to be tested on the backfilled data like anything else.
+
 ## RESEARCHED, NOT BUILT: ORB on "stocks in play" (high relative-volume Indian stocks) (added 2026-08-19)
 
 Raised after index ORB came back null: does ORB work on individual
