@@ -17,6 +17,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 import banknifty_context
+from dhan_source import SESSION_FETCH_FROM_TIME
 from resilient_source import get_nifty_intraday_candles
 from models import Candle
 from atomic_state import atomic_write_json
@@ -28,7 +29,13 @@ STATE_PATH.parent.mkdir(exist_ok=True)
 def _window(lookback_days=10):
     to_date = datetime.now()
     from_date = to_date - timedelta(days=int(lookback_days * 1.6) + 3)
-    return from_date.strftime("%Y-%m-%d 09:15:00"), to_date.strftime("%Y-%m-%d %H:%M:%S")
+    # SESSION_FETCH_FROM_TIME (09:14), not 09:15 -- Dhan's fromDate is
+    # exclusive, and this module is the one most damaged by that: it
+    # takes day_candles[0].open as the day's OPEN and compares it to the
+    # prior close, so a missing first bar meant every gap was measured
+    # from the wrong price. See dhan_source.SESSION_FETCH_FROM_TIME.
+    return (from_date.strftime(f"%Y-%m-%d {SESSION_FETCH_FROM_TIME}"),
+            to_date.strftime("%Y-%m-%d %H:%M:%S"))
 
 
 def _aggregate_to_daily(candles: list) -> list:

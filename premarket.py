@@ -37,6 +37,7 @@ from pathlib import Path
 
 import config as cfg
 import global_cues
+from dhan_source import SESSION_FETCH_FROM_TIME
 import nse_source
 import news_source
 import banknifty_context
@@ -61,7 +62,13 @@ def _previous_trading_day_window(lookback_days: int):
     """
     to_date = datetime.now()
     from_date = to_date - timedelta(days=int(lookback_days * 1.6) + 3)
-    return from_date.strftime("%Y-%m-%d 09:15:00"), to_date.strftime("%Y-%m-%d %H:%M:%S")
+    # SESSION_FETCH_FROM_TIME (09:14), not 09:15 -- Dhan's fromDate is
+    # exclusive. _aggregate_to_daily() below takes day_candles[0].open as
+    # the day's open, and on the 60-minute candles this window feeds that
+    # meant reading the 10:15 bar's open as the daily open, an hour late.
+    # See dhan_source.SESSION_FETCH_FROM_TIME.
+    return (from_date.strftime(f"%Y-%m-%d {SESSION_FETCH_FROM_TIME}"),
+            to_date.strftime("%Y-%m-%d %H:%M:%S"))
 
 
 def _aggregate_to_daily(candles: list) -> list:

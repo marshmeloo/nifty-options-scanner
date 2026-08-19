@@ -1130,31 +1130,120 @@ Sources: [Zarattini & Aziz (SSRN)](https://papers.ssrn.com/sol3/papers.cfm?abstr
 [what the two ORB papers actually found](https://danfin.net/opening-range-breakout-research),
 [Concretum's ORB backtest writeup](https://concretumgroup.com/backtesting-the-opening-range-breakout-orb-strategy-using-polygon-io/).
 
-## Found: 2026-08-19 -- every candle fetch has been silently missing the session's first bar
+## Fixed: 2026-08-19 -- every candle fetch was silently missing the session's first bar
 
-Turned up while building the ORB study, and it affects live code, not
+Turned up while building the ORB study, and it affected live code, not
 just research. Dhan's `/charts/intraday` treats `fromDate` as
-**exclusive**, and `dhan_source.get_nifty_intraday_candles` defaults it
+**exclusive**, and `dhan_source.get_nifty_intraday_candles` defaulted it
 to `"YYYY-MM-DD 09:15:00"` — so the 09:15 bar, the first of the
-session, is dropped from every fetch. Requesting from 09:15 returns 74
-bars starting 09:20; requesting from 09:00 returns 75 starting 09:15.
+session, was dropped from every fetch. Requesting from 09:15 returns 74
+bars starting 09:20; requesting from 09:14 returns 75 starting 09:15.
 Confirmed by direct probe against both 5-minute and 1-minute data.
 
-Everything downstream of those candles has therefore been reading a
-session that begins one bar late: `price_action.analyze_with_context`,
-ATR (and so `plan_generator`'s volatility-based stops),
-`market_regime`, `volume_profile`, `anchored_vwap`, and every
-historical reconstruction in `logs/snapshots/`. The distortion is one
-bar in 75 for most of those, but it is specifically the OPENING bar,
-which is the most volatile of the session and carries the overnight
-gap — so it is not a uniformly negligible one.
+Everything downstream had therefore been reading a session that begins
+one bar late: `price_action.analyze_with_context`, ATR (and so
+`plan_generator`'s volatility-based stops), `market_regime`,
+`volume_profile`, `anchored_vwap`, and every historical reconstruction
+in `logs/snapshots/`.
 
-NOT FIXED in live code as part of this work. Changing the default
-alters what Anchor sees, which this project only does on live-data
-evidence (STRATEGY_VERSIONS.md's promotion policy), and the ORB study
-sidestepped it by fetching its own candles from 09:00
-(`orb_candle_cache.py`). Worth fixing deliberately, with the affected
-backtests re-run afterwards rather than pooled across the change.
+**Worse than one-bar-in-75 for the daily aggregators.** `opening_gap.py`,
+`premarket.py` and `shadow_price_action.py` each roll intraday bars into
+a daily candle using `day_candles[0].open` as the day's OPEN. They were
+therefore reading the **09:20** open — or on premarket's 60-minute
+candles, the **10:15** open — as "today's open", and `opening_gap`
+compares exactly that against the prior close, so every gap was measured
+from the wrong price.
+
+FIXED. One constant, `dhan_source.SESSION_FETCH_FROM_TIME = "09:14:00"`,
+carries the explanation and is used by all seven call sites
+(`dhan_source`, `banknifty_context`, `historical_source`'s backfill,
+`opening_gap`, `premarket`, and both `main_price_action*`). 09:14 rather
+than something earlier because NSE's 09:00–09:15 pre-open produces no
+bars here, so this widens the window by the minimum needed. The daily
+endpoint (`/charts/historical`) was checked and is **not** affected —
+its `fromDate` is inclusive. `tests/test_session_fetch_boundary.py`
+pins the behaviour, including a guard that fails if any module
+reintroduces a `09:15:00` fetch.
+
+### Re-running the affected backtests
+
+Two traps worth recording, because both would have produced a wrong
+read of the fix:
+
+  - The stored `logs/component_study.json` and `variant_comparison.json`
+    baselines were produced when only **493** historical days existed,
+    against today's **1,485**. Comparing a corrected run to them would
+    have measured "4x more data" far more than "opening bar restored".
+    So the A/B runs the same code over the same day set, with only the
+    candles differing (`rerun_with_fixed_candles.py --baseline`).
+  - The obvious route — `historical_source.backfill_candles()` to
+    rewrite the stored snapshots — was deliberately NOT taken. It
+    mutates ~1,485 recorded-history files in place (~2 GB), costs ~1,485
+    sequential Dhan calls, and destroys the before-state that makes the
+    A/B possible at all. The re-run patches `snapshot_recorder.load_day`
+    in memory instead, serving corrected candles from the ORB cache
+    (zero new API calls) with the same `c.timestamp <= snap.timestamp`
+    visibility rule backfill uses, so no cycle sees its own future.
+
+**Result: the fix changes no conclusion.** Component study, 1,485 days,
+identical code, candles the only difference:
+
+| | baseline (bar-short) | fixed (bar restored) |
+|---|---|---|
+| candidates | 1,498,622 | 1,499,722 |
+| base rate | -0.3363% | -0.3358% |
+| **Momentum aligned** | +7.2822% (z=+59.34) | **+7.1814% (z=+59.89)** |
+| **Momentum against** | -5.5210% (z=-68.11) | **-5.4222% (z=-68.09)** |
+
+No component changed sign, changed rank, or crossed the Bonferroni bar
+in either direction. Momentum alignment remains dominant — the finding
+that justified `SCORING_MODE = "momentum_only"`, which therefore
+stands. The GEX study re-ran to the same null (lift -0.6265%, z=-1.72
+against the original -0.6221%, z=-1.67).
+
+The effect is small for a defensible reason: the missing bar only
+shifts the series in the earliest cycles of a day, when the candle
+count is smallest. By mid-session the other 74 bars dominate ROC and
+structure. The bug was real and worth fixing; it was not load-bearing
+for these conclusions.
+
+**The variant comparison — the run that actually adopted
+`momentum_only` — re-confirms on 3x the data.** Re-run on corrected
+candles across 1,485 days (original: 493):
+
+| variant | original grossR / z / net Rs | corrected grossR / z / net Rs |
+|---|---|---|
+| baseline (legacy) | +0.0055R / +0.09 / -51,599 | +0.0013R / +0.03 / -119,138 |
+| combined | +0.2410R / +4.06 / +118,689 | +0.2420R / +7.57 / +535,988 |
+| **momentum_only (adopted)** | +0.1580R / +5.28 / **+470,031** | +0.1655R / **+10.33** / **+1,362,439** |
+
+The picture is unchanged in every respect that decided the adoption:
+baseline is still indistinguishable from zero, `combined` still wins on
+gross R per trade, and `momentum_only` still wins on the two criteria
+the decision actually rested on — total return and statistical
+confidence — now by a wider margin on a larger sample.
+
+**A trap worth recording, because the first attempt fell into it.** That
+re-run must force `config.SCORING_MODE = "legacy"`. Left at today's live
+value it returns nonsense: every variant came back with n within 0.4% of
+every other (11003 / 11002 / 11042 / 11046) and thresholds 5.5, 6.0 and
+6.5 gave byte-identical results. `scanner.scan()` under `"momentum_only"`
+overrides every candidate's score to 6.0 / 0.0 / 3.0 *before* any variant
+rescorer runs, so the rescorers can only add an offset to an
+already-flattened score and every variant selects the same candidates.
+The deeper problem is circularity: `"momentum_only"` is the mode this
+comparison ADOPTED, so re-running the comparison under it assumes its own
+conclusion. The original necessarily ran under `"legacy"` — the same
+reason `tests/conftest.py` forces `"legacy"` for the whole suite.
+
+NOT re-run, and why: `shadow_condor.py` and `shadow_long_strangle.py`
+barely touch candles and their sweeps concluded "nothing adopted"
+anyway — a null that a ~1% shift in component lift cannot flip.
+`shadow_price_action.py` and `shadow_directional_spread.py` ARE
+candle-dependent (and the former shares the `day_candles[0].open` bug
+above), so their numbers will have moved slightly; they were left for a
+deliberate re-run rather than folded into this one. The ORB study is
+unaffected — `orb_candle_cache.py` fetched from 09:00 from the start.
 
 ## Not adopted: 2026-08-19 -- Gamma Exposure (GEX) regime found no evidence of predicting momentum forward returns
 

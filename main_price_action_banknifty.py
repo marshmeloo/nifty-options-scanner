@@ -138,7 +138,10 @@ def _htf_ltf_for(pair: str, now: datetime = None) -> tuple:
         )
         htf = [c for c in daily if c.timestamp.date() < now.date()]
 
-        from_date = (now - timedelta(days=pcfg.LTF_HOURLY_LOOKBACK_DAYS)).strftime("%Y-%m-%d 09:15:00")
+        # 09:14, not 09:15 -- see main_price_action.py's own comment and
+        # dhan_source.SESSION_FETCH_FROM_TIME.
+        from_date = (now - timedelta(days=pcfg.LTF_HOURLY_LOOKBACK_DAYS)).strftime(
+            f"%Y-%m-%d {dhan_source.SESSION_FETCH_FROM_TIME}")
         to_date = now.strftime("%Y-%m-%d %H:%M:%S")
         five_min = get_banknifty_intraday_candles(interval="5", from_date=from_date, to_date=to_date)
         ltf = ps.resample_candles(five_min, tf["ltf_interval"], source_minutes=5)

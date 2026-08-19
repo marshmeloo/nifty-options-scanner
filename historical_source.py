@@ -657,7 +657,11 @@ def backfill_candles(days: list = None, interval: str = "5",
         try:
             day_candles = fetch(
                 interval=interval,
-                from_date=f"{day} 09:15:00",
+                # 09:14, not 09:15 -- Dhan's fromDate is exclusive, so
+                # 09:15 silently dropped each session's opening bar from
+                # every reconstructed day. See
+                # dhan_source.SESSION_FETCH_FROM_TIME.
+                from_date=f"{day} {dhan_source.SESSION_FETCH_FROM_TIME}",
                 to_date=f"{day} 15:30:00",
             )
         except Exception as e:

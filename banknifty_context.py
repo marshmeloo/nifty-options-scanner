@@ -26,7 +26,7 @@ from datetime import datetime
 import requests
 
 import config as cfg
-from dhan_source import _headers, DHAN_BASE_URL
+from dhan_source import _headers, DHAN_BASE_URL, SESSION_FETCH_FROM_TIME
 from models import Candle
 import price_action
 
@@ -44,7 +44,7 @@ def get_banknifty_candles(interval: str = None, from_date: str = None, to_date: 
     """
     interval = interval or cfg.CANDLE_INTERVAL_MINUTES
     if from_date is None:
-        from_date = datetime.now().strftime("%Y-%m-%d 09:15:00")
+        from_date = datetime.now().strftime(f"%Y-%m-%d {SESSION_FETCH_FROM_TIME}")
     if to_date is None:
         to_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 

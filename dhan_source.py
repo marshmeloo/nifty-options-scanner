@@ -68,6 +68,32 @@ NIFTY_UNDERLYING_SEG = "IDX_I"
 BANKNIFTY_UNDERLYING_SCRIP = 25
 BANKNIFTY_UNDERLYING_SEG = "IDX_I"
 
+# Time to pass as `fromDate` when fetching a full trading session's
+# intraday candles. 09:14, NOT the session's actual 09:15 open.
+#
+# BUG FIXED 2026-08-19. Dhan's /charts/intraday treats `fromDate` as
+# EXCLUSIVE, so asking for a session "from 09:15:00" returns the session
+# MINUS its own first bar -- confirmed by direct probe on both 5-minute
+# and 1-minute data (from 09:15 -> 74 bars starting 09:20; from 09:14 ->
+# 75 bars starting 09:15). Every caller in this project used the natural
+# -looking "09:15:00", so every candle series it has ever fetched, live
+# and historical, silently began one bar late.
+#
+# That is one bar in 75 for a 5-minute series, but it is specifically
+# the OPENING bar -- the most volatile of the session and the one
+# carrying the overnight gap -- and for consumers that aggregate
+# intraday bars into a daily candle it was materially worse: both
+# opening_gap.py and premarket.py take `day_candles[0].open` as "today's
+# open", so they were reading the 09:20 open (or, on 60-minute candles,
+# the 10:15 open) as the day's open, and opening_gap compares exactly
+# that against the prior close.
+#
+# 09:14 rather than something earlier: verified that no pre-open bars
+# are returned (NSE's 09:00-09:15 pre-open session produces none here),
+# so this widens the window by the minimum needed to make an exclusive
+# boundary fall before the real first bar.
+SESSION_FETCH_FROM_TIME = "09:14:00"
+
 STATE_DIR = Path(__file__).parent / "state"
 STATE_DIR.mkdir(exist_ok=True)
 IV_HISTORY_PATH = STATE_DIR / "iv_history.json"
@@ -473,7 +499,8 @@ def get_nifty_intraday_candles(interval: str = None, from_date: str = None, to_d
 
     interval: "1","5","15","25","60" (minutes)
     from_date/to_date: "YYYY-MM-DD HH:MM:SS" strings. Defaults to
-    today 09:15:00 through now.
+    today's full session (see SESSION_FETCH_FROM_TIME -- it is 09:14,
+    not 09:15, because Dhan's fromDate is exclusive) through now.
     security_id/exchange_seg default to Nifty's -- pass
     BANKNIFTY_UNDERLYING_SCRIP/_SEG for Bank Nifty.
     """
@@ -481,7 +508,7 @@ def get_nifty_intraday_candles(interval: str = None, from_date: str = None, to_d
 
     interval = interval or cfg.CANDLE_INTERVAL_MINUTES
     if from_date is None:
-        from_date = datetime.now().strftime("%Y-%m-%d 09:15:00")
+        from_date = datetime.now().strftime(f"%Y-%m-%d {SESSION_FETCH_FROM_TIME}")
     if to_date is None:
         to_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 

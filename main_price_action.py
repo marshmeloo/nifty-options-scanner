@@ -114,7 +114,12 @@ def _htf_ltf_for(pair: str, now: datetime = None) -> tuple:
         daily = dhan_source.get_nifty_daily_candles(days_back=pcfg.HTF_DAILY_LOOKBACK_DAYS)
         htf = [c for c in daily if c.timestamp.date() < now.date()]
 
-        from_date = (now - timedelta(days=pcfg.LTF_HOURLY_LOOKBACK_DAYS)).strftime("%Y-%m-%d 09:15:00")
+        # 09:14, not 09:15 -- Dhan's fromDate is exclusive (see
+        # dhan_source.SESSION_FETCH_FROM_TIME). Milder here than for the
+        # single-day fetchers: the boundary only bites on the OLDEST day
+        # of this multi-day window, not every day in it.
+        from_date = (now - timedelta(days=pcfg.LTF_HOURLY_LOOKBACK_DAYS)).strftime(
+            f"%Y-%m-%d {dhan_source.SESSION_FETCH_FROM_TIME}")
         to_date = now.strftime("%Y-%m-%d %H:%M:%S")
         five_min = get_nifty_intraday_candles(interval="5", from_date=from_date, to_date=to_date)
         ltf = ps.resample_candles(five_min, tf["ltf_interval"], source_minutes=5)
