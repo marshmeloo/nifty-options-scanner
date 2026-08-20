@@ -90,6 +90,27 @@ def fetch_quotes(security_ids: list) -> dict:
         json={"NSE_EQ": list(security_ids)},
         timeout=20,
     )
+    if resp.status_code == 401:
+        # FATAL, not retried. Learned the hard way 2026-08-20: this
+        # recorder was launched from a shell holding YESTERDAY's token,
+        # every sample 401'd, and the loop dutifully logged "sample
+        # failed" once a minute for 25 minutes while recording nothing
+        # -- including straight through the 09:30 window this whole
+        # exercise exists to measure. A stale credential is not a
+        # transient error and retrying it is pure waste, so it aborts
+        # loudly instead.
+        #
+        # Cause worth knowing: automation/update_token.ps1 uses setx,
+        # which writes the PERSISTENT user environment. Already-running
+        # shells keep the old value, so any long-lived process launched
+        # before the daily token refresh inherits a dead token while the
+        # freshly-started trading processes are perfectly healthy.
+        raise SystemExit(
+            "FATAL: Dhan returned 401 (stale access token).\n"
+            "  This process was almost certainly launched from a shell predating today's\n"
+            "  update_token.ps1 run. Relaunch it from a NEW shell, or re-read the token\n"
+            "  from HKCU:\\Environment before starting."
+        )
     resp.raise_for_status()
     seg = (resp.json().get("data") or {}).get("NSE_EQ") or {}
 
