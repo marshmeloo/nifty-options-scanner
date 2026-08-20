@@ -68,6 +68,78 @@ def opening_volume_baseline(symbol: str, before_day: str) -> float:
     return statistics.mean(vols) if len(vols) >= sip.MIN_LOOKBACK_DAYS else 0.0
 
 
+def selection_from_candles(day: str, symbols: list = None) -> dict:
+    """
+    {symbol: {rvol, open_move_pct}} for `day`, computed from that day's
+    own 09:15-09:30 CANDLES rather than from a quote sample.
+
+    Why this exists: the quote feed only gives CUMULATIVE session volume,
+    so reconstructing the 15-minute RVOL from it requires a sample taken
+    at exactly 09:30. Miss that sample -- as happened on 2026-08-20, when
+    a stale token killed the recorder until 09:41 -- and the selection is
+    simply not recoverable from the recording.
+
+    Candles are recoverable after the fact, so this rebuilds the exact
+    selection the strategy would have made, retroactively, for any day.
+    It costs one API call per symbol (~12 minutes for the universe), so
+    it is the fallback rather than the default -- but it means a missed
+    09:30 sample costs the SPREAD timing, not the whole day.
+
+    Still look-ahead-safe: only 09:15-09:30 bars and a baseline built
+    from strictly prior days feed the result.
+    """
+    from research import stock_spread_recorder as _rec
+    # Pick up today's token before fetching anything. Learned twice on
+    # 2026-08-20: setx-written credentials never reach an already-running
+    # shell, so anything invoked from a session older than the daily
+    # refresh authenticates with a dead token.
+    _rec.refresh_token_from_registry()
+
+    universe = {u["symbol"]: u["security_id"] for u in stock_data.universe()}
+    symbols = symbols or list(universe)
+    out = {}
+    failures = 0
+    for sym in symbols:
+        sid = universe.get(sym)
+        if not sid:
+            continue
+        try:
+            fetched = stock_data.fetch_month(sid, date.fromisoformat(day), date.fromisoformat(day))
+        except Exception as e:
+            # A broad swallow here previously turned a 401 on EVERY symbol
+            # into a silent "0 symbols computed" that read like a quiet
+            # market. Auth failures are fatal; anything else is counted
+            # and surfaced rather than hidden.
+            if "401" in str(e):
+                raise SystemExit(
+                    f"FATAL: Dhan 401 while fetching {sym} -- stale access token.\n"
+                    f"  Run from a shell started AFTER today's update_token.ps1, or let\n"
+                    f"  refresh_token_from_registry() pick it up (it just tried and the\n"
+                    f"  token is still being rejected)."
+                )
+            failures += 1
+            continue
+        bars = fetched.get(day)
+        if not bars:
+            continue
+        head = sip.opening_slice(bars, sip.SELECTION_MINUTES)
+        if len(head) < sip.SELECTION_MINUTES // 5:
+            continue
+        baseline = opening_volume_baseline(sym, day)
+        if baseline <= 0:
+            continue
+        day_open, ref = head[0][1], head[-1][4]
+        if not day_open:
+            continue
+        out[sym] = {
+            "rvol": sum(b[5] or 0 for b in head) / baseline,
+            "open_move_pct": (ref - day_open) / day_open * 100,
+        }
+    if failures:
+        print(f"  ({failures} symbols failed to fetch and were skipped)", flush=True)
+    return out
+
+
 def sample_nearest(rows: list, hhmm: str):
     """The recorded sample closest to `hhmm`, or None."""
     if not rows:
