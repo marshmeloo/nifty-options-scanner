@@ -59,6 +59,43 @@ import dhan_rate_limiter
 import dhan_source
 from research import stock_data
 
+
+def refresh_token_from_registry() -> bool:
+    """
+    Re-read DHAN_ACCESS_TOKEN / DHAN_CLIENT_ID from the PERSISTENT user
+    environment into this process, on Windows.
+
+    Exists because automation/update_token.ps1 uses `setx`, which writes
+    the persistent environment but does NOT touch already-running
+    processes. A recorder launched before the daily token refresh
+    therefore holds a dead token while every freshly-started trading
+    process is fine -- which is exactly what happened on 2026-08-20 and
+    silently cost the whole 09:30 measurement window.
+
+    Reading it here means the recorder picks up the current token
+    whenever it starts, regardless of how stale the shell that launched
+    it is. Returns True if a value was found and applied. Never logs the
+    token itself.
+    """
+    try:
+        import winreg
+    except ImportError:
+        return False
+    applied = False
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            for name in ("DHAN_ACCESS_TOKEN", "DHAN_CLIENT_ID"):
+                try:
+                    value, _ = winreg.QueryValueEx(key, name)
+                except FileNotFoundError:
+                    continue
+                if value and value != os.environ.get(name):
+                    os.environ[name] = value
+                    applied = True
+    except OSError:
+        return False
+    return applied
+
 OUT_DIR = Path(__file__).parent.parent / "logs" / "stock_spreads"
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
@@ -122,10 +159,20 @@ def fetch_quotes(security_ids: list) -> dict:
         bid, ask = buy.get("price") or 0, sell.get("price") or 0
         if bid <= 0 or ask <= 0 or ask < bid:
             continue
+        ohlc = q.get("ohlc") or {}
         out[int(sid)] = {
             "b": bid, "a": ask,
             "bq": buy.get("quantity") or 0, "aq": sell.get("quantity") or 0,
-            "ltp": q.get("last_price"), "vol": q.get("volume"),
+            "ltp": q.get("last_price"),
+            # `vol` is cumulative session volume, so the 09:30 sample's
+            # value IS the first-15-minutes volume -- exactly the RVOL
+            # numerator. `o` is the day's open, giving the opening move.
+            # Recording both means ONE quote call yields the selection
+            # AND the spread for the selected names at the same instant,
+            # with no separate 208-call candle fetch that would take 12
+            # minutes and miss the window it was trying to measure.
+            "vol": q.get("volume"),
+            "o": ohlc.get("open"),
         }
     return out
 
@@ -147,6 +194,11 @@ def record_session(sample_seconds: int = SAMPLE_SECONDS):
     ids = [u["security_id"] for u in stock_data.universe()]
     print(f"recording spreads for {len(ids)} symbols every {sample_seconds}s", flush=True)
 
+    # Pick up today's token before waiting for the open. A recorder armed
+    # the night before is guaranteed to be holding a stale one otherwise.
+    if refresh_token_from_registry():
+        print("  refreshed Dhan credentials from the persistent environment", flush=True)
+
     while not market_is_open():
         now = datetime.now()
         if now.weekday() >= 5:
@@ -155,6 +207,9 @@ def record_session(sample_seconds: int = SAMPLE_SECONDS):
             print("session already over for today"); return
         time.sleep(30)
 
+    # Re-read once more at the open: if this process waited overnight,
+    # the token may have been refreshed while it slept.
+    refresh_token_from_registry()
     print(f"market open at {datetime.now():%H:%M:%S} -- sampling", flush=True)
     n = 0
     while market_is_open():
