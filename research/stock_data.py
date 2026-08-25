@@ -163,7 +163,16 @@ def backfill(start: str = DEFAULT_START, end: str = None, symbols: list = None):
     Fetch month-by-month per symbol. RESUMABLE: a symbol/month already
     present is skipped, so an interrupted run continues where it stopped
     rather than restarting an ~8-hour job.
+
+    Refreshes the Dhan token from the registry before EVERY symbol, not
+    just at startup. A run launched from a fresh token can still outlive
+    that token -- the 2017-2023 backfill on 2026-08-24 died 28/208
+    symbols in with every call 401ing, the same stale-token pattern
+    already hit twice on stock_spread_recorder.py, just on a run long
+    enough (hours) to reach it from the OTHER end: not a stale token at
+    launch, but the token going stale mid-run.
     """
+    from research.stock_spread_recorder import refresh_token_from_registry
     end_date = date.fromisoformat(end) if end else date.today()
     start_date = date.fromisoformat(start)
     names = symbols or [u["symbol"] for u in universe()]
@@ -174,6 +183,7 @@ def backfill(start: str = DEFAULT_START, end: str = None, symbols: list = None):
           flush=True)
 
     for n, sym in enumerate(names, 1):
+        refresh_token_from_registry()
         sid = by_symbol.get(sym)
         if not sid:
             continue

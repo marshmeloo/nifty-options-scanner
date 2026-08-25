@@ -3,6 +3,53 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## SCOPED, NOT BUILT: "Hero-Zero" expiry-day deep-OTM lottery trade (added 2026-08-24)
+
+Raised for later, not built yet -- logging the shape of the question
+so it doesn't need re-deriving.
+
+### The idea
+
+A popular Indian retail expiry-day play: buy deep OTM NIFTY/Bank Nifty
+options (often both a far call and a far put together) while they are
+trading near-worthless (Rs 1-5) on the weekly expiry day itself. Most
+days they decay to zero -- the defined, small, known loss. Occasionally
+a late move (news, a squeeze, gamma suddenly mattering as spot nears
+that strike in the final hours) sends one leg from a couple of rupees
+to tens of rupees, a large percentage move on a tiny base. No stop-loss
+is typically used, since there is nothing left to stop out of once the
+premium is already near zero.
+
+### Why it's a real, testable question rather than a lottery-ticket dismissal
+
+This project already has 3+ years of NIFTY and Bank Nifty options data
+and expiry-day awareness (the existing conviction-bar discussion covers
+some of the same "options behave differently on expiry" ground). A
+proper test would need:
+
+  - Historical premiums for strikes far enough OTM to be genuinely
+    cheap (Rs 1-5 range) at some fixed point on expiry morning/midday --
+    NOT the deepest strike available (that's arbitrary), but a rule
+    tied to actual moneyness/premium level the same way this project's
+    other selection rules are defined explicitly rather than eyeballed.
+  - How often, and by how much, such a leg spikes before expiry close --
+    the tail-event frequency and payoff size is the entire strategy,
+    same as `stock_strategies.py`'s "runner" exit exists specifically to
+    harvest a fat right tail rather than cap it.
+  - A control: repeated small-premium purchases have a structurally
+    negative expected value from theta alone absent a real tail --
+    the "random deep-OTM buy" control this project has used everywhere
+    else (index ORB, stocks-in-play) is the right comparison here too,
+    not a raw win-rate.
+  - Real costs at this premium level: brokerage is often a larger
+    fraction of a Rs 2-3 premium than of a normal trade, which could
+    dominate the result the way spread dominated stocks-in-play.
+
+Not started. Comes after the stocks-in-play spread measurement finishes
+(that one already has live data collection running) and the Hero-Zero
+backtest, if pursued, should get the same rigor: real controls,
+Bonferroni correction across any parameter sweep, out-of-sample check.
+
 ## Stocks in play: FIRST REAL RESULT -- pullback on high-RVOL decliners beats its controls, but is cost-marginal (added 2026-08-20)
 
 Backfill finished: 208 F&O stocks, 155,234 symbol-days, 2023-08..2026-08,
