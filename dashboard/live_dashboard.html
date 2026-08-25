@@ -214,6 +214,11 @@
   <div id="sentinel-container"></div>
 </div>
 
+<div class="panel" id="sentinel-panel-onetrade" style="display:none;">
+  <h2>One Trade/Day v0.1-research <span style="font-weight:400; color:var(--muted); font-size:12px;">— Anchor's own logic, capped at 1 new trade/day (research/one_trade_per_day_study.py); own live process, never pooled with Anchor or Sentinel above</span></h2>
+  <div id="sentinel-container-onetrade"></div>
+</div>
+
 <div class="panel" id="condor-panel" style="display:none;">
   <h2>Iron Condor Position</h2>
   <div id="condor-container"></div>
@@ -661,8 +666,9 @@ function renderClosedToday(trades, suffix) {
 // Shown in its own panel and never merged into Anchor's tables above --
 // pooling two different strategies' trades would make either one's
 // numbers meaningless (see STRATEGY_VERSIONS.md's promotion policy).
-function renderSentinel(sentinel, suffix) {
+function renderSentinel(sentinel, suffix, label) {
   suffix = suffix || "";
+  label = label || "Sentinel";
   const panel = document.getElementById("sentinel-panel" + suffix);
   const container = document.getElementById("sentinel-container" + suffix);
   if (!sentinel) { panel.style.display = "none"; return; }
@@ -705,7 +711,7 @@ function renderSentinel(sentinel, suffix) {
 
   parts.push(`
     <div class="grid" style="margin-top:14px;">
-      <div class="card"><h3>Sentinel today</h3>
+      <div class="card"><h3>${label} today</h3>
         <div class="row"><span class="k">Open P&amp;L</span><span class="v ${pnlClass(totals.open_pnl_inr)}">${fmtInr(totals.open_pnl_inr)}</span></div>
         <div class="row"><span class="k">Realised today</span><span class="v ${pnlClass(totals.realized_pnl_inr)}">${fmtInr(totals.realized_pnl_inr)}</span></div>
         <div class="row"><span class="k">Total today</span><span class="v ${pnlClass(totals.total_pnl_today_inr)}">${fmtInr(totals.total_pnl_today_inr)}</span></div>
@@ -960,6 +966,7 @@ async function refresh() {
     renderRRStats(data.rr_stats);
     renderClosedToday(data.closed_today);
     renderSentinel(data.sentinel);
+    renderSentinel(data.onetrade, "-onetrade", "One Trade/Day");
     renderCondor(data.condor_position, data.condor_position_age_seconds, data.condor_poll_interval_seconds);
     renderDirectionalSpread(data.directional_spread_position, data.directional_spread_position_age_seconds, data.directional_spread_poll_interval_seconds);
     renderPriceAction(data.price_action_trades, data.price_action_closed_today, data.price_action_log_age_seconds, data.price_action_poll_interval_seconds);

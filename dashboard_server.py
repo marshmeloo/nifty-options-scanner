@@ -66,6 +66,14 @@ SENTINEL_TRADE_JOURNAL_PATH = LOGS_DIR / "trade_journal_sentinel.jsonl"
 BN_SENTINEL_OPEN_TRADES_PATH = STATE_DIR / "open_trades_banknifty_sentinel.json"
 BN_SENTINEL_TRADE_JOURNAL_PATH = LOGS_DIR / "trade_journal_banknifty_sentinel.jsonl"
 
+# main_live_onetrade.py -- NIFTY only, capped at 1 new trade/day (see
+# research/one_trade_per_day_study.py for the backtest behind it). Reuses
+# _sentinel_block() below unchanged; this is not a Sentinel variant, just
+# the same "read a state+journal pair the same way Anchor's own is read"
+# pattern applied to a third process.
+ONETRADE_OPEN_TRADES_PATH = STATE_DIR / "open_trades_onetrade.json"
+ONETRADE_TRADE_JOURNAL_PATH = LOGS_DIR / "trade_journal_onetrade.jsonl"
+
 
 def _read_todays_closed_trades() -> list:
     """
@@ -312,6 +320,11 @@ PNL_JOURNALS = [
     # just a distinct label so the two never get pooled together.
     (LOGS_DIR / "trade_journal_sentinel.jsonl", "NIFTY", "Momentum (Sentinel)"),
     (LOGS_DIR / "trade_journal_banknifty_sentinel.jsonl", "Bank Nifty", "Momentum (Sentinel)"),
+    # One Trade/Day v0.1-research: Anchor's own logic capped at 1 new
+    # trade/day (main_live_onetrade.py) -- see
+    # research/one_trade_per_day_study.py for the backtest behind it.
+    # NIFTY only; same journal shape as Anchor/Sentinel, no new parsing.
+    (LOGS_DIR / "trade_journal_onetrade.jsonl", "NIFTY", "Momentum (One Trade/Day)"),
 ]
 
 
@@ -666,6 +679,10 @@ def build_state() -> dict:
         "price_action_log_age_seconds": price_action_log_age_seconds,
         "sentinel": _sentinel_block(
             SENTINEL_OPEN_TRADES_PATH, SENTINEL_TRADE_JOURNAL_PATH,
+            getattr(config, "NIFTY_LOT_SIZE", 65),
+        ),
+        "onetrade": _sentinel_block(
+            ONETRADE_OPEN_TRADES_PATH, ONETRADE_TRADE_JOURNAL_PATH,
             getattr(config, "NIFTY_LOT_SIZE", 65),
         ),
         "banknifty": banknifty,
