@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Runs the pre-market brief, then starts the order-flow feed, all nine
+  Runs the pre-market brief, then starts the order-flow feed, all ten
   live/paper strategy loops, and the read-only dashboard in parallel,
   hidden (no visible console windows).
 
@@ -9,7 +9,7 @@
   this project is analytics/paper-tracking only (see each script's own
   docstring), and dashboard_server.py is read-only (never writes state,
   never talks to Dhan/NSE itself). This just automates what you'd
-  otherwise do by opening thirteen terminals by hand each morning.
+  otherwise do by opening fourteen terminals by hand each morning.
 
   REQUIRES DHAN_ACCESS_TOKEN / DHAN_CLIENT_ID to already be set as
   PERSISTENT Windows USER environment variables (via `setx`, run in
@@ -115,6 +115,17 @@ if ($premarketExit -eq 0) {
 # after the Sentinel files were added; STRATEGY_NAME stayed "Anchor",
 # CLUSTER_CAP_ENABLED stayed False).
 #
+# main_live_onetrade.py (added 2026-08-25): "One Trade/Day" v0.1-research
+# -- Anchor's own scan -> plan -> risk -> breakeven pipeline with ONE
+# change, config.MAX_NEW_TRADES_PER_DAY patched to 1 (default is 999,
+# effectively uncapped). Backtested in research/one_trade_per_day_study.py:
+# meaningfully lower drawdown and a higher win rate than Anchor's full
+# ~9-trades/day volume, on a realistic Rs1L account. Own state/journal/log,
+# started alongside Anchor and Sentinel, not instead of either. Status is
+# research/experimental (not in STRATEGY_VERSIONS.md's promoted registry) --
+# this starts it FORWARD-TRACKING so there is real evidence to eventually
+# decide on, same as Sentinel was before it.
+#
 # position_notifier.py (added 2026-08-16): posts open positions,
 # today's pre-market summary, and intraday bias-shift alerts to
 # Telegram -- see that file's own docstring. Deliberately started AFTER
@@ -132,6 +143,7 @@ $scripts = @(
     @{ file = "orderflow_feed_banknifty.py"; args = @("--strike-range", "600") },
     @{ file = "main_live.py"; args = @() },
     @{ file = "main_live_sentinel.py"; args = @() },
+    @{ file = "main_live_onetrade.py"; args = @() },
     @{ file = "main_condor.py"; args = @() },
     @{ file = "main_directional_spread.py"; args = @() },
     @{ file = "main_price_action.py"; args = @() },
