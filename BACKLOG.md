@@ -3,6 +3,77 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## CLOSED, NOT ADOPTED: "Hero-Zero" -- deliberately picking the cheapest option is WORSE than picking a random one nearby, and expiry day confers no measurable edge (added 2026-08-26)
+
+Follow-through on "SCOPED, NOT BUILT: Hero-Zero" --
+`research/hero_zero_study.py`, full 2020-08..2026-07 reconstruction
+(1,485 days, 3,693 candidate legs). Feasibility probe first (see the
+script's own docstring): Rs1-5 candidates cluster toward the edge of
+the ATM+/-10 fetch window, the same zone the 2026-08-04 corruption
+study flagged, so selection was capped at 300pts from spot to stay in
+the measurably cleaner band -- at the cost of dropping the very
+deepest candidates and undersampling high-IV expiry days where nothing
+inside 300pts is cheap enough. Stated as a real limitation, not fixed.
+
+DESIGN: at 10:25 each day, for CE and PE independently, compare (a)
+"hero_zero" -- the farthest-OTM strike inside 300pts whose LTP sits in
+Rs1-5, against (b) "random" -- any strike in the same 300pt band,
+any premium, same day. Run on EVERY trading day, not just expiry days,
+splitting by whether that contract expires that same day (DTE=0) or
+not (DTE 1-5) -- free from the reconstruction's own weekly-cycle
+structure, no extra machinery needed. Real Indian options costs
+(costs.py: flat per-order brokerage + STT + exchange + GST) applied to
+every leg at 1 lot.
+
+RESULT -- every comparison points the SAME direction, and it is the
+OPPOSITE of the idea's premise:
+
+    group                 n   meanRet%  win%   >=5x   >=10x  lost80%+  netP&L/lot   t
+    expiry, hero_zero    514    -52.75%  1.6%  4.47%   2.72%    97.7%     -Rs107     -3.07
+    expiry, random       598    -35.66%  9.7%  8.19%   2.51%    86.8%     -Rs128     -1.15
+    non-expiry, hero_zero 209   -26.97% 15.3%  0.96%   0.00%    12.9%     -Rs100     -9.85
+    non-expiry, random  2,372    -2.93% 34.2%  0.63%   0.08%     2.4%     -Rs156     -2.69
+
+  - **Is expiry day special?** No -- hero_zero on expiry vs non-expiry:
+    edge -25.78pp, z=-1.36. Point estimate goes the WRONG way (expiry
+    day is worse, not better) and isn't even significant.
+  - **Does deliberately picking the cheapest candidate help?** No --
+    the opposite. vs random at the same distance, expiry day: edge
+    -17.09pp (z=-0.79, not significant); non-expiry day: edge -24.04pp
+    (z=-4.94, clearly significant). The cheap-filtered pick LOSES to a
+    same-band random pick everywhere it was tested, worst where there
+    was enough data to tell (non-expiry).
+  - Win rate on the actual hero_zero/expiry combination -- the
+    strategy exactly as described -- is **1.6%**: 8 wins in 514
+    legs. 97.7% of legs lost 80% or more of the premium paid.
+  - All four groups are net-negative after realistic costs; two of
+    four (expiry_hero_zero, nonexpiry_hero_zero, nonexpiry_random)
+    clear their own t-bar for "significantly negative," not merely
+    unprofitable by chance.
+
+WHY THE FILTER BACKFIRES, PLAUSIBLY: a strike whose premium has
+ALREADY decayed to Rs1-5 by mid-morning has already lost most of the
+gamma/vega sensitivity a tail spike needs to work through -- it isn't
+"about to explode," it's already mostly dead. A random pick in the
+same distance band sometimes catches a strike that still has real
+premium (and therefore real sensitivity) left, which is why random
+beats the deliberate cheap-pick everywhere. The retail intuition
+("small known loss, occasional huge win") has the causality backwards:
+picking for smallness of loss selects against the very property that
+would produce the win.
+
+CAVEATS carried forward, not resolved: the 300pt cap means this
+doesn't speak to the very deepest lottery tickets some retail traders
+chase beyond that distance (though those sit in the flagged-corrupt
+zone, so testing them cleanly needs a data fix first, see 2026-08-04's
+entry); tail-event percentages (>=5x, >=10x) are thin at ~500 legs per
+group, so their precision is limited even though the headline
+comparisons (mean return, win rate, net P&L) are not.
+
+VERDICT: closed, not adopted. The idea as scoped does not clear this
+project's bar (real edge vs. a control, positive after costs) on
+either of its two testable claims.
+
 ## CLOSED, NOT ADOPTED: ORB on stocks in play -- the entry rule loses to a coin flip; the RVOL filter is real but it's the SAME decliner signal already flagged elsewhere (added 2026-08-26)
 
 Follow-through on "RESEARCHED, NOT BUILT: ORB on stocks in play" --
