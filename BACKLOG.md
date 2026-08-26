@@ -74,6 +74,38 @@ VERDICT: closed, not adopted. The idea as scoped does not clear this
 project's bar (real edge vs. a control, positive after costs) on
 either of its two testable claims.
 
+ADDENDUM 2026-08-26, `research/hero_zero_premium_sweep.py`: tested the
+obvious follow-up -- if cheapness itself is the problem, does a HIGHER
+premium band do better? Swept Rs1-5 / 5-10 / 10-20 / 20-40 / 40-80 /
+80-150 on expiry day (18,630 legs), same selection rule against a
+band-MATCHED random control this time (not the original study's any-
+premium random, which conflated price level with strike choice).
+
+    band(Rs)   meanRet%   win%   netP&L/lot     t
+    1-5          -52.6%    1.6%      -Rs106   -3.03
+    5-10         -17.1%    8.6%      -Rs134   -1.98
+    10-20         -7.7%   15.2%      -Rs140   -1.34
+    20-40        -13.5%   20.9%      -Rs293   -1.95
+    40-80         -0.5%   28.5%      -Rs151   -0.38
+    80-150       -26.7%   25.0%    -Rs1,544   -1.13  (n=16, thin)
+
+Confirms the mechanism: return and win rate climb almost monotonically
+with premium, approaching breakeven around Rs40-80. But net P&L stays
+negative at every single band tested and none clear even a nominal
+significance bar (best t=-0.38, indistinguishable from zero). The
+deepest-vs-random edge that looked real in the original study (-17pp)
+shrinks to noise (-6pp, z=-0.23) once the random control is matched to
+the same premium band -- it was the PRICE LEVEL driving the original
+result, not which specific strike within a band gets picked.
+
+Net effect: "select a better premium" doesn't manufacture an edge, it
+walks the trade back toward an ordinary, roughly-fairly-priced option
+-- at which point it's no longer a lottery ticket, it's a plain
+directional bet with no selection edge, which is a strictly worse
+version of what Anchor/Sentinel's near-ATM, properly-scored selection
+already does with a real, tested edge. No undiscovered middle ground.
+Verdict unchanged: closed, not adopted.
+
 ## CLOSED, NOT ADOPTED: ORB on stocks in play -- the entry rule loses to a coin flip; the RVOL filter is real but it's the SAME decliner signal already flagged elsewhere (added 2026-08-26)
 
 Follow-through on "RESEARCHED, NOT BUILT: ORB on stocks in play" --

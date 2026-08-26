@@ -157,6 +157,72 @@ def build_candidates(day: str) -> list:
     return records
 
 
+def build_candidates_for_bands(day: str, bands: list) -> list:
+    """
+    Same mechanics as build_candidates(), generalised to test several
+    premium bands in ONE pass over the day (avoids reloading/rewalking
+    the day's cycles per band). For each band (lo, hi):
+      - "deepest": the farthest-OTM strike inside MAX_DISTANCE_PTS whose
+        LTP falls in [lo, hi) -- same selection rule build_candidates()
+        uses, just parameterised.
+      - "random_in_band": a uniformly random strike from the SAME set
+        (same premium band, same distance cap) -- a band-matched
+        control, tighter than build_candidates()'s any-premium random
+        control, for isolating whether "farthest-OTM within this
+        specific premium band" adds anything at THAT price level.
+    """
+    cycles = list(snapshot_recorder.load_day(day))
+    if not cycles:
+        return []
+    snap0, _ = _select_cycle(cycles, SELECTION_TIME)
+    if snap0 is None or not snap0.spot:
+        return []
+    spot = snap0.spot
+    is_expiry = hs.nominal_expiry_date(snap0.timestamp.date()).isoformat() == day
+
+    later = [(s.timestamp, s.chain) for s, _c, _m in cycles if s.timestamp >= snap0.timestamp]
+    if len(later) < 2:
+        return []
+
+    records = []
+    for option_type in ("CE", "PE"):
+        strikes = _side_strikes(snap0.chain, option_type, spot)
+        if not strikes:
+            continue
+
+        for lo, hi in bands:
+            in_band = [s for s in strikes if lo <= s[1] < hi]
+            if not in_band:
+                continue
+            deepest_strike = max(in_band, key=lambda s: s[2])[0]
+            rng = _random.Random(f"{RANDOM_SEED}:{day}:{option_type}:{lo}:{hi}")
+            random_strike = rng.choice(in_band)[0]
+
+            for label, strike in (("deepest", deepest_strike), ("random_in_band", random_strike)):
+                entry_ltp = next((ltp for s, ltp, _d in in_band if s == strike), None)
+                if not entry_ltp:
+                    continue
+                path = []
+                for ts, chain in later:
+                    q = next((q for q in chain if q.strike == strike and q.option_type == option_type), None)
+                    if q is not None and q.ltp is not None and q.ltp >= 0:
+                        path.append(q.ltp)
+                if len(path) < 2:
+                    continue
+                eod_ltp = path[-1]
+                max_ltp = max(path)
+                records.append({
+                    "day": day, "is_expiry": is_expiry, "option_type": option_type,
+                    "band": f"{lo}-{hi}", "selection": label, "strike": strike,
+                    "distance_pts": round(abs(strike - spot), 1),
+                    "entry_ltp": entry_ltp, "eod_ltp": eod_ltp, "max_ltp": max_ltp,
+                    "ret_eod_pct": round((eod_ltp - entry_ltp) / entry_ltp * 100, 2),
+                    "max_multiple": round(max_ltp / entry_ltp, 3),
+                    "gross_pnl_inr_per_lot": round((eod_ltp - entry_ltp) * LOT_SIZE, 2),
+                })
+    return records
+
+
 def _skew(xs: list) -> float:
     if len(xs) < 3:
         return 0.0
