@@ -3,6 +3,73 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## CLOSED, NOT ADOPTED: ORB on stocks in play -- the entry rule loses to a coin flip; the RVOL filter is real but it's the SAME decliner signal already flagged elsewhere (added 2026-08-26)
+
+Follow-through on "RESEARCHED, NOT BUILT: ORB on stocks in play" --
+`research/orb_stocks_in_play_study.py`, run on the full 208-symbol,
+~9-year backfill (2017-08..2026-08, 2,219 RVOL-eligible trading days).
+OR=15min only (matches the RVOL selection window; see the script's own
+docstring for why the full 4-length grid wasn't run). Two selection
+sizes (top10, top20 by cross-sectional RVOL rank each day), each with
+its own random-N control, x 4 real entry rules + 3 benchmarks.
+
+REAL, ROBUST FINDING: the RVOL FILTER ITSELF adds a genuine edge.
+Same entry rule, RVOL-ranked selection vs random selection at the same
+N: +0.030 to +0.044R per trade, z = +3.56 to +5.32 (3 of 4 entries;
+`or_direction` shows none). This is a direct, positive confirmation of
+the literature's central claim ("the filter IS the strategy") on this
+dataset -- worth keeping in mind for anything else that wants a
+volume-based stock universe filter.
+
+BUT: ORB's actual ENTRY RULE does not clear its own bar. Every real
+entry (breakout, breakout_or_direction, close_confirm, or_direction)
+UNDERPERFORMS a coin-flip entry with the identical opening-range stop
+geometry, within the SAME RVOL-selected population -- top10/top20 vs
+random z from -2.17 to -6.21, all in the wrong direction. On the
+random-N selection the real entries are merely indistinguishable from
+random (z -3.15 to +0.04), not better. Waiting for a break of the
+opening range, in any of the four published forms, is not adding
+signal here -- if anything the entries fight whatever the real edge is.
+
+WHAT THE REAL EDGE ACTUALLY IS: ALWAYS_SHORT (short every RVOL-selected
+name at the open, stop at the OR high, no entry logic at all) is the
+single best performer in every selection -- mean R +0.22 to +0.31,
+dwarfing every directional entry rule. That is a persistent short bias
+in high-RVOL Indian F&O names, i.e. the SAME "pullback on high-RVOL
+DECLINERS" signal the sibling stocks-in-play study already found and
+flagged as cost-marginal, not a new discovery specific to ORB.
+
+COSTS: break-even slippage for the entry rules and ALWAYS_SHORT runs
+~2-8bps (fixed Rs5,000 risk/trade, real Indian intraday-equity
+statutory rates from stock_costs.py). Measured real spreads
+(stock_spread_recorder.py, only 4 trading days recorded so far):
+universe median ~3.3bps, selected high-RVOL names sometimes much lower
+(one example: DIXON at 0.69bps). Not a clean kill the way the QQQ
+literature replication was (break-even far below the realistic
+spread) -- closer, worth re-checking once the spread recorder has more
+days -- but the entry-rule question is already closed regardless of
+the cost answer, since the entry loses to random before costs are even
+applied.
+
+OOS DECAY, another caution flag: every positive number here weakens
+substantially out-of-sample (roughly halves or worse; top10 RANDOM's
+OOS mean R is ~0, down from +0.18 in-sample). Consistent with a real
+but decaying historical bias, not a stable structural edge.
+
+METHODOLOGY NOTE: orb.py's RANDOM entry seeds on `day` alone, which is
+fine for the single-instrument index study it was built for but gives
+every stock the SAME coin-flip direction on a shared day in this
+multi-symbol context. Caught before trusting the first run (RANDOM's
+own mean R was inflated); fixed by seeding on `symbol:day` while still
+recording the true calendar day for the OOS split.
+
+VERDICT: closed. Does not add a new validated strategy -- confirms the
+RVOL filter's own value (useful elsewhere) and reconfirms the existing
+decliner-pullback signal through ORB's stop/cost lens, while directly
+refuting "waiting for an opening-range breakout has signal" on this
+dataset. Anyone revisiting the short-bias finding should treat it as
+the same thread as the stocks-in-play pullback study, not a new one.
+
 ## Order-flow imbalance: real but weak, thin, and horizon-inconsistent signal -- NOT ready to gate on (added 2026-08-26)
 
 Follow-up to "Order flow: wired for reliability, book_imbalance recorded
