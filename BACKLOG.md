@@ -3,6 +3,40 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## TODO: correct config.py / STRATEGY_VERSIONS.md's breakeven-arm citation -- not verifiable, and partly contradicted (added 2026-08-26)
+
+`config.BREAKEVEN_ARM_R`'s comment and `STRATEGY_VERSIONS.md` both cite a
+2026-08-15 backtest: net P&L +Rs16.6L -> +Rs39.2L (STT-only) / +Rs14.3L
+-> +Rs36.8L ("real spread-inclusive"), drawdown 44.8% -> 15.8%, "never
+made a single one of 73 months worse." The script that produced those
+numbers was never committed -- only the finished HTML report survives
+(`research/nifty_momentum_breakeven_0.5R.html`).
+
+`research/breakeven_arm_study.py` (committed 2026-08-25, rerunnable)
+reproduces the same comparison from scratch and does not match it:
+
+  - The "spread-inclusive" figure cannot be honestly reproduced from
+    this data AT ALL -- reconstructed historical quotes carry no real
+    bid/ask book (`has_book` is False on every quote, checked directly),
+    so `config.USE_BID_ASK_FILLS` has zero effect on any backtest run
+    against this dataset. The old 36.8L figure should be compared
+    against nothing this project can currently produce.
+  - Even against the fair comparison (STT-only, +Rs39.2L), the
+    no-rule baseline matches almost exactly (Rs16.57L reproduced vs
+    Rs16.6L documented) but the rule's benefit does not: +Rs1.9L
+    reproduced vs the documented +Rs22.6L.
+  - The "never a worse month" claim does NOT hold in the rebuild: 31 of
+    72 months are worse with the rule, not zero.
+
+Not urgent enough to have blocked deploying `main_live_onetrade.py`
+this session, since the rule is still net-positive and cuts drawdown in
+the reproduction too -- but the specific number and the "never worse"
+guarantee currently in both docs are unverified at best, partially
+false at worst. Fix: point both docs at
+`research/breakeven_arm_study.py`'s own numbers instead, with a note on
+why the old figure can't be reconciled (see above). Deferred at the
+user's request 2026-08-26 -- do this later, not now.
+
 ## SCOPED, NOT BUILT: "Hero-Zero" expiry-day deep-OTM lottery trade (added 2026-08-24)
 
 Raised for later, not built yet -- logging the shape of the question
@@ -1505,6 +1539,15 @@ STATUS: main_condor.py is still in the daily automation with an open
 paper position. This is now the only strategy here running live
 against measured negative evidence at every config tested. Flagged for
 a decision -- not silently disabled, since that is the user's call.
+
+RESOLVED 2026-08-26: decision made -- pull it. Removed main_condor.py
+from automation/start_trading.ps1's $scripts array (no open position
+existed at removal time -- state/condor_position.json was already
+null). condor_*.py source, config_condor.py, and the research/*condor*
+backtests are untouched, only the live automation entry is gone, same
+treatment Bank Nifty condor already got. Bank Nifty condor was never
+added to $scripts in the first place, so this closes out the only
+condor variant that WAS live.
 
 ## Directional spread: PASSES walk-forward validation -- edge is real, config choice was noise (added 2026-08-07)
 
