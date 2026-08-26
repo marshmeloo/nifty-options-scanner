@@ -3,6 +3,65 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Order-flow imbalance: real but weak, thin, and horizon-inconsistent signal -- NOT ready to gate on (added 2026-08-26)
+
+Follow-up to "Order flow: wired for reliability, book_imbalance recorded
+but NOT gated on" -- that entry deliberately left the predictive
+question open until there was real recorded data to test, "the same
+forward-return treatment component_study.py applied to the momentum
+scorer." `research/order_flow_predictive_study.py` is that treatment.
+
+METHOD: can't replay this historically the way component_study.py does
+(book_imbalance comes from Dhan's live WebSocket depth, not anything in
+the reconstructed chains) -- so this replays decision_log.jsonl's own
+live candidate history instead. Every logged candidate already carries
+book_imbalance, total_quantity_imbalance, and its own entry price;
+forward return of THAT SAME CONTRACT is found by matching the same
+(strike, option_type) key in a candidate list >= horizon minutes later.
+
+DATA IS THINNER THAN IT LOOKED: decision_log.py has recorded the field
+since 2026-08-07, but readings are only actually non-null starting
+2026-08-17 -- root cause not chased down (tangential to this question).
+Effective usable window is ~10 trading days (2026-08-17 -> 2026-08-26),
+not the ~3 weeks the field's presence alone suggested.
+
+RESULT (30min horizon, n=13,187 candidate rows):
+
+    signal                      Q5-vs-Q1 z   pearson r (t)   shape
+    book_imbalance (top-5)          +2.85    +0.0304 (+3.49)  clean, monotonic Q1->Q5
+    total_quantity_imbalance        +3.11    +0.0352 (+4.04)  Q4 spikes above Q5, not monotonic
+
+Both nominally significant, both directionally sane (more buy pressure
+-> more positive forward return of that contract). But:
+
+  - AT 15min HORIZON, book_imbalance is NOT significant (z=+0.82,
+    non-monotonic) -- backwards from what a real order-flow signal
+    should do (strongest close to the reading, decaying, not the
+    reverse). total_quantity_imbalance holds up better at 15min
+    (z=+4.77) but that inconsistency between the two signals is itself
+    a flag.
+  - SPLIT-HALF CHECK (first ~4 days vs last ~6 days of the 10-day
+    window): book_imbalance's Q5-vs-Q1 lift is POSITIVE in both halves
+    (directionally consistent) but only clears significance in the
+    second, larger half (z=1.45 vs z=2.58) -- could be a real effect
+    that needed more days to separate from noise, or could just be an
+    artifact of unequal sample sizes. Ten trading days can't tell them
+    apart.
+  - Rows within a cycle are NOT independent (many candidates share the
+    same underlying move) -- same simplification component_study.py
+    also makes, but worth flagging here since the effect sizes are
+    small (pearson r ~ 0.03-0.04) and pseudo-replication inflates z
+    more than it inflates r.
+
+STATUS: real, non-zero, directionally consistent signal -- but thin
+(10 days), horizon-inconsistent, and not yet the kind of clean,
+monotonic, stable result this project has required before adopting
+anything else (cluster cap, direction-chase cooldown, profit-target
+exit). NOT wired into scoring or a gate. Let the feed keep recording
+and re-run this study in a few more weeks once there's 4-6x the data;
+don't decide off 10 days the same way the expiry-day rule shouldn't
+have been decided off one trade.
+
 ## TODO: correct config.py / STRATEGY_VERSIONS.md's breakeven-arm citation -- not verifiable, and partly contradicted (added 2026-08-26)
 
 `config.BREAKEVEN_ARM_R`'s comment and `STRATEGY_VERSIONS.md` both cite a
