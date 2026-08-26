@@ -1097,11 +1097,15 @@ def expiry_day_rules(expiry: str, now: datetime) -> tuple:
     expiring on `expiry`, evaluated at `now`.
 
     Only applies when the contract expires TODAY. See the config comment
-    on EXPIRY_DAY_* for why same-day expiry is treated differently: this
-    tool only buys premium, and on expiry day that premium is nearly all
-    extrinsic value decaying to zero by the close.
+    on EXPIRY_DAY_* for why same-day expiry was originally treated
+    differently, and on EXPIRY_DAY_RULES_ENABLED for why it's currently
+    OFF: research/expiry_day_rule_study.py (2026-08-26) found the
+    population this rule blocks outperforms the system average, not
+    underperforms it.
     """
     bar = config.MIN_CONVICTION_SCORE_TO_TRACK
+    if not getattr(config, "EXPIRY_DAY_RULES_ENABLED", True):
+        return bar, None
     if expiry != now.date().isoformat():
         return bar, None
 

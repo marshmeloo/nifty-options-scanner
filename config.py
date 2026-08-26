@@ -546,6 +546,30 @@ MIN_CONVICTION_SCORE_TO_TRACK = 5.0  # well above the 1.5 watchlist bar — only
 EXPIRY_DAY_EXTRA_CONVICTION = 1.5   # added to MIN_CONVICTION_SCORE_TO_TRACK on expiry day
 EXPIRY_DAY_NO_NEW_TRADES_AFTER = "14:00"   # IST; no new same-day-expiry longs after this
 
+# TURNED OFF 2026-08-26. This rule was never actually backtested before
+# being adopted -- it generalized from that single -16.8% trade above,
+# and shadow.py (the backtest engine) never even called
+# expiry_day_rules() at all until this same investigation, so nothing
+# had checked it since either. Tested properly for the first time
+# 2026-08-26 (research/expiry_day_rule_study.py, full 6-year reconstructed
+# NIFTY history, 1,672 trades this rule would have blocked, isolated and
+# measured entirely on their own): that population's win rate is 44.1%
+# (vs 41.4% for the whole system), mean R +0.328 (vs +0.122 overall),
+# t=+5.82 -- a random-direction control on the SAME trades comes back at
+# essentially zero (mean R -0.055, t=-0.96), confirming the edge is real
+# direction, not payoff-geometry luck. Net effect of keeping the rule:
+# -Rs4,97,441 over 6 years. The theta-decay reasoning above is sound in
+# principle; empirically it's outweighed by something else, plausibly
+# that a setup which is still scoring well late in the day is more
+# confirmed than an early guess, even after paying the extra decay.
+# When False, expiry_day_rules() returns
+# (config.MIN_CONVICTION_SCORE_TO_TRACK, None) unconditionally -- same
+# bar, never blocked, regardless of expiry. Flip back to True is a
+# one-line change if a narrower version (e.g. just the 14:00 cutoff,
+# without the raised bar, or vice versa -- this study tested them
+# bundled together, not separately) turns out to test better later.
+EXPIRY_DAY_RULES_ENABLED = False
+
 JOURNAL_LOOKBACK_FOR_LEARNING = 100  # how many recent journal entries to consider for tag win-rate adjustment
 
 # --- Learned tag adjustment (see trade_tracker.apply_learned_adjustment) ---

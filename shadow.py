@@ -52,6 +52,7 @@ from typing import Optional
 
 import config
 import costs
+import historical_source as hs
 import oi_analytics
 import price_action
 import snapshot_recorder
@@ -89,6 +90,27 @@ class Policy:
     one_at_a_time: bool = False        # no new entry while a position is open
     allow_repeat_strike: bool = False  # re-enter the same strike+type later the same day
     use_bias_gate: bool = True
+    # Live's expiry-day discipline (trade_tracker.expiry_day_rules(): a
+    # higher conviction bar on same-day-expiry contracts, and a hard
+    # cutoff blocking new same-day-expiry entries after 14:00). Found
+    # 2026-08-26 to be MISSING from run_policy() entirely -- every
+    # backtest ever run through shadow.py, including the ones that
+    # validated the cluster cap and the original breakeven-arm figure,
+    # used a flat bar all day regardless of expiry, unlike every live
+    # process (which calls trade_tracker.try_open_new_trade(), which DOES
+    # enforce this). Defaults to True so shadow.py now matches live by
+    # default; set False to reproduce the old (undocumented) behaviour,
+    # which is also what this flag exists to let research/
+    # expiry_day_rule_study.py test the rule itself against.
+    #
+    # NOTE (2026-08-26): the rule itself is now OFF live
+    # (config.EXPIRY_DAY_RULES_ENABLED = False -- see that comment for
+    # why), and tt.expiry_day_rules() checks that flag before anything
+    # else. Same interaction as Policy.use_learned_adjustment already
+    # has with config.LEARNED_TAG_ADJUSTMENT_ENABLED: this Policy switch
+    # is currently inert regardless of its own value, and becomes
+    # load-bearing again only if the live flag is ever turned back on.
+    use_expiry_day_rules: bool = True
     # Learned tag adjustment reads the LIVE trade journal, which is a
     # record of a specific (recent) period. Applying it to reconstructed
     # history from an earlier period is look-ahead bias: 2026 tag win
@@ -482,6 +504,38 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
                 if correlated_cluster_blocked(setup, positions, ts, policy):
                     continue
 
+                # Live's expiry-day discipline: a raised bar and a 14:00
+                # cutoff on same-day-expiry contracts (trade_tracker.
+                # expiry_day_rules(), enforced live by try_open_new_trade()
+                # -- see Policy.use_expiry_day_rules' own comment for why
+                # this was missing from here until 2026-08-26). The bar
+                # returned is anchored to config.MIN_CONVICTION_SCORE_TO_TRACK,
+                # not this policy's own min_score, matching exactly what
+                # expiry_day_rules() computes for every live process --
+                # correct for the default policy (min_score=None), and
+                # the one thing to know if testing a policy with a custom
+                # min_score alongside this flag.
+                #
+                # setup.expiry on RECONSTRUCTED data is the raw request
+                # label historical_source.py stores ("rolling:week1"),
+                # never a real calendar date -- confirmed directly against
+                # a live sample. expiry_day_rules() compares its `expiry`
+                # argument to now.date().isoformat(), so passed the raw
+                # label it can NEVER match and silently never fires. Every
+                # backtest ever run through shadow.py before this fix
+                # therefore also never actually detected an expiry day,
+                # even after use_expiry_day_rules was added above in this
+                # same investigation. Resolved via the same function
+                # gamma_exposure.py already uses for this exact problem.
+                effective_min_score = min_score
+                if policy.use_expiry_day_rules:
+                    real_expiry = (setup.expiry if not setup.expiry.startswith("rolling:")
+                                  else hs.nominal_expiry_date(ts.date()).isoformat())
+                    conviction_bar, expiry_blocked = tt.expiry_day_rules(real_expiry, ts)
+                    if expiry_blocked:
+                        continue
+                    effective_min_score = conviction_bar
+
                 base_score = policy.rescore(setup) if policy.rescore else setup.score
                 if policy.use_learned_adjustment:
                     adjusted, _notes = tt.apply_learned_adjustment(base_score, setup.reasons)
@@ -493,7 +547,7 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
                     if blocked:
                         continue
                     adjusted -= penalty
-                if adjusted < min_score:
+                if adjusted < effective_min_score:
                     continue
 
                 try:

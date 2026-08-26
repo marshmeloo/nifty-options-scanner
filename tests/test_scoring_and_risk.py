@@ -402,14 +402,30 @@ def test_non_expiry_day_uses_the_normal_bar():
     assert blocked is None
 
 
-def test_expiry_day_raises_the_conviction_bar():
+def test_expiry_day_rules_disabled_by_default(monkeypatch):
+    """TURNED OFF 2026-08-26 (see config.py's own comment):
+    research/expiry_day_rule_study.py found the population this rule
+    blocks outperforms the system average, not underperforms it. The
+    live default must stay off until/unless that changes -- this guards
+    against it silently flipping back on."""
+    assert config.EXPIRY_DAY_RULES_ENABLED is False
+    bar, blocked = tt.expiry_day_rules("2026-07-28", datetime(2026, 7, 28, 14, 32))
+    assert bar == config.MIN_CONVICTION_SCORE_TO_TRACK
+    assert blocked is None
+
+
+def test_expiry_day_raises_the_conviction_bar(monkeypatch):
+    monkeypatch.setattr(config, "EXPIRY_DAY_RULES_ENABLED", True)
     bar, blocked = tt.expiry_day_rules("2026-07-28", datetime(2026, 7, 28, 10, 21))
     assert bar == config.MIN_CONVICTION_SCORE_TO_TRACK + config.EXPIRY_DAY_EXTRA_CONVICTION
     assert blocked is None
 
 
-def test_expiry_day_blocks_new_trades_after_cutoff():
-    """The real third entry was opened at 14:32 on expiry day and lost 16.8%."""
+def test_expiry_day_blocks_new_trades_after_cutoff(monkeypatch):
+    """The real third entry was opened at 14:32 on expiry day and lost
+    16.8% -- the mechanism this tests still works correctly when the
+    flag is on; it's just off by default now (see the test above)."""
+    monkeypatch.setattr(config, "EXPIRY_DAY_RULES_ENABLED", True)
     _, blocked = tt.expiry_day_rules("2026-07-28", datetime(2026, 7, 28, 14, 32))
     assert blocked is not None
     assert "theta" in blocked
