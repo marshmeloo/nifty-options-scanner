@@ -4,21 +4,25 @@ counterpart of shadow.opposite_direction_blocked(), same rule applied
 to state["trades"] instead of a backtest's `positions` list.
 
 CRITICAL PROPERTY: ships ON by default in config.py (Anchor's real,
-live value -- STRATEGY_VERSION bumped 1.0 -> 1.1 for it), but Sentinel
-explicitly OPTS OUT (main_live_sentinel.py / main_live_banknifty_sentinel.py
-override it back to False). Opposite split from CLUSTER_CAP_ENABLED,
-which defaults OFF and Sentinel opts INTO -- here Anchor is the one
-that gets it. Both directions are tested: the raw config default, AND
-that importing Sentinel's process files actually flips it back off.
+live value -- STRATEGY_VERSION bumped 1.0 -> 1.1 for it). Sentinel's
+own process files (main_live_sentinel.py / main_live_banknifty_sentinel.py)
+ALSO set it True, as of 2026-08-27 same day -- see below for why that
+was a reversal of an earlier same-day decision, not the original one.
 
 Origin: 2026-08-27, a real Bank Nifty session (5 CE positions opened,
 then 12 PE positions opened while the CE side was still open, as spot
 round-tripped ~1,700pts) -- see BACKLOG.md. Real backtest
 (research/opposite_direction_gate_backtest.py, the actual gate wired
 into shadow.py, not an approximation): net positive for Anchor (total
-return +331.4% -> +362.1%, max drawdown 44.8% -> 24.1%) but a net LOSS
-in total return for Sentinel (+335.8% -> +300.4%) despite improving
-every per-trade/risk metric -- hence the Anchor-only split.
+return +331.4% -> +362.1%, max drawdown 44.8% -> 24.1%). Sentinel with
+the gate ALONE was a net LOSS in total return (+335.8% -> +300.4%)
+despite improving every per-trade/risk metric -- Sentinel shipped
+WITHOUT the gate at first, on that evidence. Retested as the full
+package alongside research/reversal_exit_study.py's reversal-exit idea
+(gate + exit TOGETHER, not gate alone): +335.8% -> +485.3% total
+return, 16.2% -> 5.5% max drawdown, Calmar 1.72 -> 6.30 -- reversed the
+earlier decision the same day. See tests/test_reversal_exit.py for the
+reversal-exit side of this and BACKLOG.md for the full numbers.
 
 Run: python -m pytest tests/ -q
 """
@@ -47,11 +51,13 @@ def test_enabled_by_default():
     assert config.OPPOSITE_DIRECTION_GATE_ENABLED is True
 
 
-def test_sentinel_process_files_opt_out():
-    """Importing Sentinel's own process files must flip this back to
-    False -- the real guarantee that Sentinel does NOT get this gate,
-    checked the same way Anchor's isolation from CLUSTER_CAP_ENABLED
-    was originally verified when Sentinel was first built.
+def test_sentinel_process_files_opt_in():
+    """Importing Sentinel's own process files must leave this True --
+    Sentinel adopted the gate (as part of the full gate+reversal-exit
+    package) 2026-08-27, reversing an earlier same-day decision to ship
+    without it. Checked the same way Anchor's isolation from
+    CLUSTER_CAP_ENABLED was originally verified when Sentinel was first
+    built, just with the opposite expected value now.
 
     Restores the ENTIRE config module's attribute set, not a hand-picked
     list -- the import itself only ever runs once (module caching), and
@@ -84,8 +90,8 @@ def test_sentinel_process_files_opt_out():
     tt_before = dict(vars(tt))
     try:
         import main_live_sentinel  # noqa: F401 -- import for its config-patching side effect
-        assert config.OPPOSITE_DIRECTION_GATE_ENABLED is False
-        assert config.REVERSAL_EXIT_ENABLED is False
+        assert config.OPPOSITE_DIRECTION_GATE_ENABLED is True
+        assert config.REVERSAL_EXIT_ENABLED is True
     finally:
         for name, value in config_before.items():
             setattr(config, name, value)

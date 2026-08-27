@@ -10,8 +10,14 @@ max drawdown 24.1% -> 26.2% -- worse, the one thing the retrospective
 measurement couldn't see). See config.REVERSAL_EXIT_ENABLED's own
 comment and BACKLOG.md for the full numbers.
 
-CRITICAL PROPERTY: ships ON by default (Anchor v1.2), Sentinel opts out
--- same split as the gate itself, tested the same two ways here.
+CRITICAL PROPERTY: ships ON by default (Anchor v1.2). Sentinel also
+opts IN, as of 2026-08-27 same day, once tested as the FULL package
+alongside the gate rather than alone -- see
+tests/test_opposite_direction_gate.py's own
+test_sentinel_process_files_opt_in for that combined result (gate
+alone was a net loss for Sentinel; gate + reversal exit together
+reversed it: +335.8% -> +485.3% total return, 16.2% -> 5.5% max
+drawdown).
 
 Run: python -m pytest tests/ -q
 """
@@ -200,14 +206,14 @@ def test_try_open_new_trade_leaves_blocker_open_when_disabled(journal_paths, mon
 
 
 # --------------------------------------------------------------------------
-# Sentinel opts out -- same isolation check as the gate itself
+# Sentinel opts in -- same isolation check as the gate itself
 # --------------------------------------------------------------------------
 
-def test_sentinel_process_files_opt_out():
+def test_sentinel_process_files_opt_in():
     """
-    Real-import verification of Sentinel's opt-out already lives in
+    Real-import verification of Sentinel's adoption already lives in
     tests/test_opposite_direction_gate.py's own
-    test_sentinel_process_files_opt_out -- deliberately NOT duplicated
+    test_sentinel_process_files_opt_in -- deliberately NOT duplicated
     here as a second real import. main_live_sentinel is a heavy module
     with its own import-order assertions and real side effects
     (including direct, non-monkeypatch reassignment of
@@ -222,9 +228,9 @@ def test_sentinel_process_files_opt_out():
     covered by test_enabled_by_default reading the live config.py value
     directly), but a source-text check is a real, honest guarantee for
     what THIS test cares about: does the shipped file contain the
-    opt-out line at all.
+    opt-in line at all.
     """
     from pathlib import Path
     source_path = Path(__file__).parent.parent / "main_live_sentinel.py"
     source = source_path.read_text(encoding="utf-8")
-    assert "config.REVERSAL_EXIT_ENABLED = False" in source
+    assert "config.REVERSAL_EXIT_ENABLED = True" in source

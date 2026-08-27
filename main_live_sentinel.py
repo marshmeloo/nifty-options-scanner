@@ -59,35 +59,30 @@ from pathlib import Path
 import config
 import dhan_source
 
-# --- Sentinel v1.1-dev identity + cluster-cap config, patched before any
+# --- Sentinel v1.2-dev identity + cluster-cap config, patched before any
 # strategy module is used. See STRATEGY_VERSIONS.md for what these mean
 # and the backtest evidence behind the 200pt/30min values.
 config.STRATEGY_NAME = "Sentinel"
-config.STRATEGY_VERSION = "1.1-dev"
+config.STRATEGY_VERSION = "1.2-dev"
 config.CLUSTER_CAP_ENABLED = True
 config.CLUSTER_CAP_ADJACENCY_POINTS = 200
 config.CLUSTER_CAP_WINDOW_MINUTES = 30
 config.RECORD_SNAPSHOTS = False
-# Opposite-direction gate (added 2026-08-27, config.py default True since
-# it shipped to Anchor -- see that flag's own comment): explicitly OFF
-# for Sentinel. Real 6-year backtest (research/opposite_direction_gate_backtest.py)
-# showed a net LOSS in total return with it on (+335.8% -> +300.4%),
-# despite every per-trade/risk metric improving slightly -- the gate
-# removes enough real winning trades, on top of the cluster cap already
-# above, that the compounded total falls. A deliberate NO, not an
-# oversight.
-config.OPPOSITE_DIRECTION_GATE_ENABLED = False
-# Reversal exit (added 2026-08-27, config.py default True since it
-# shipped to Anchor as v1.2): explicitly OFF for Sentinel too. Currently
-# INERT regardless of this value, same interaction
-# use_learned_adjustment/LEARNED_TAG_ADJUSTMENT_ENABLED already has --
-# the reversal-exit trigger only ever fires from inside the
-# opposite-direction-gate branch, which is already off above. Set
-# explicitly anyway rather than left to that inert interaction, pending
-# Sentinel's own evaluation of the FULL package (gate + reversal exit
-# together, not just the gate alone) -- see BACKLOG.md for that result
-# once run.
-config.REVERSAL_EXIT_ENABLED = False
+# Opposite-direction gate + reversal exit (added 2026-08-27, config.py
+# defaults True since both shipped to Anchor first -- see those flags'
+# own comments). Sentinel v1.1-dev tested the GATE ALONE and declined it
+# (real 6-year backtest: net LOSS in total return, +335.8% -> +300.4%,
+# despite every per-trade/risk metric improving slightly). Retested as
+# the FULL package -- gate + reversal exit TOGETHER -- and the story
+# completely reversed: +335.8% -> +485.3% total return, 16.2% -> 5.5%
+# max drawdown, Calmar 1.72 -> 6.30, every year better with no
+# exceptions. The two features needed each other for Sentinel: the gate
+# alone just removes trades from an already-curated population; adding
+# the exit is what turns that removal into a net win. Both ON, v1.1-dev
+# -> v1.2-dev, same day as the gate-alone rejection -- see BACKLOG.md
+# and STRATEGY_VERSIONS.md for the full numbers and decision trail.
+config.OPPOSITE_DIRECTION_GATE_ENABLED = True
+config.REVERSAL_EXIT_ENABLED = True
 
 from resilient_source import get_nifty_snapshot, get_nearest_expiry, get_nifty_intraday_candles
 from scanner import scan, compute_market_bias, tag_bias_conflicts

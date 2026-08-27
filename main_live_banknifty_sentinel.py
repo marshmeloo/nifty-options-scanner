@@ -64,32 +64,32 @@ config.PREMIUM_MIN = 300.0
 config.PREMIUM_MAX = 800.0
 config.STRIKE_RANGE_POINTS = 2000
 
-# --- Sentinel v1.1-dev identity + cluster-cap config -- see
+# --- Sentinel v1.2-dev identity + cluster-cap config -- see
 # main_live_sentinel.py's docstring for the full reasoning, and the
 # module docstring above for the Bank-Nifty-specific caveat.
 config.STRATEGY_NAME = "Sentinel"
-config.STRATEGY_VERSION = "1.1-dev"
+config.STRATEGY_VERSION = "1.2-dev"
 config.CLUSTER_CAP_ENABLED = True
 # 500, NOT NIFTY's 200 -- backtested on Bank Nifty's own history
 # 2026-08-19, see this file's module docstring and BACKLOG.md.
 config.CLUSTER_CAP_ADJACENCY_POINTS = 500
 config.CLUSTER_CAP_WINDOW_MINUTES = 30
 config.RECORD_SNAPSHOTS = False
-# Opposite-direction gate (added 2026-08-27, config.py default True since
-# it shipped to Anchor -- see that flag's own comment): explicitly OFF
-# for Sentinel. Real 6-year NIFTY backtest (research/opposite_direction_gate_backtest.py,
-# the closest available evidence -- shadow.py has no Bank Nifty replay)
-# showed a net LOSS in total return with it on (+335.8% -> +300.4%),
-# despite every per-trade/risk metric improving slightly. A deliberate
-# NO, not an oversight -- applied here too since Bank Nifty Sentinel
-# shares the same cluster-cap-plus-gate interaction risk.
-config.OPPOSITE_DIRECTION_GATE_ENABLED = False
-# Reversal exit (added 2026-08-27, config.py default True since it
-# shipped to Anchor as v1.2): explicitly OFF for Sentinel too, same
-# reasoning as main_live_sentinel.py -- currently inert given the gate
-# above is already off, set explicitly rather than left to that
-# interaction, pending Sentinel's own evaluation of the full package.
-config.REVERSAL_EXIT_ENABLED = False
+# Opposite-direction gate + reversal exit (added 2026-08-27, config.py
+# defaults True since both shipped to Anchor first): NIFTY Sentinel
+# (main_live_sentinel.py) tested the gate ALONE and declined it, then
+# retested as the FULL package (gate + reversal exit together) and
+# reversed that: +335.8% -> +485.3% total return, 16.2% -> 5.5% max
+# drawdown, Calmar 1.72 -> 6.30, every year better. Applied here too,
+# same EXTRAPOLATION already made for Anchor's own Bank Nifty process --
+# shadow.py has no Bank Nifty replay, so this is NOT independently
+# tested on Bank Nifty's own data or its 500pt band specifically, only
+# reasoned to generalise from NIFTY's result and the mechanism itself
+# (which has nothing NIFTY-specific in its logic). Flag this if a Bank
+# Nifty-specific reversal looks different from what NIFTY Sentinel
+# shows going forward.
+config.OPPOSITE_DIRECTION_GATE_ENABLED = True
+config.REVERSAL_EXIT_ENABLED = True
 
 dhan_source.get_nifty_daily_candles = functools.partial(
     dhan_source.get_nifty_daily_candles,

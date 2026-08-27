@@ -45,10 +45,14 @@ NIFTY_LOT_SIZE = 65             # update if NSE revises lot size
 # improvement than the real gate actually delivers -- see BACKLOG.md).
 # The real gate is a genuine net positive for Anchor (total return
 # +331.4% -> +362.1%, max drawdown 44.8% -> 24.1%, Calmar 0.62 -> 1.21)
-# but not unanimous (3 of 7 years worse) and NOT shipped to Sentinel,
-# whose real backtest showed a net LOSS in total return (+335.8% ->
-# +300.4%) despite improving every per-trade/risk metric -- see
-# main_live_sentinel.py's own override. This exception was made on
+# but not unanimous (3 of 7 years worse). Sentinel with the gate ALONE
+# was a net LOSS in total return (+335.8% -> +300.4%) despite improving
+# every per-trade/risk metric, so it shipped WITHOUT the gate at first
+# -- but retested as the FULL package alongside REVERSAL_EXIT_ENABLED
+# below (gate + reversal exit TOGETHER, not gate alone), that reversed:
+# +335.8% -> +485.3%, drawdown 16.2% -> 5.5%. Sentinel now carries both
+# too, same day -- see main_live_sentinel.py's own override and
+# REVERSAL_EXIT_ENABLED's comment below. This exception was made on
 # explicit user instruction, not a default this project's own process
 # would otherwise have taken.
 # v1.1 -> v1.2, 2026-08-27: same kind of exception as v1.0->v1.1 above,
@@ -784,15 +788,25 @@ CLUSTER_CAP_WINDOW_MINUTES = 30
 #      removes enough of Sentinel's real winning trades, on top of its
 #      existing cluster cap, that the compounded total falls.
 #
-# DECISION: Anchor only (STRATEGY_VERSION bumped 1.0 -> 1.1, see that
-# comment for the explicit, acknowledged exception this required to the
-# promotion policy -- this shipped on backtest evidence, not live
-# evidence). Sentinel explicitly opts OUT (see main_live_sentinel.py /
-# main_live_banknifty_sentinel.py) and stays v1.1-dev, unchanged --
-# real backtest evidence here says NO for Sentinel, not "not yet
-# decided". No adjacency/window parameters, unlike the cluster cap --
-# ANY opposite-direction position currently open blocks a new entry,
-# for its full open lifetime (trade_tracker.opposite_direction_blocks).
+# DECISION (gate alone, the question this section tested): Anchor only
+# (STRATEGY_VERSION bumped 1.0 -> 1.1, see that comment for the
+# explicit, acknowledged exception this required to the promotion
+# policy -- this shipped on backtest evidence, not live evidence).
+# Sentinel shipped WITHOUT the gate at first on this evidence.
+#
+# SUPERSEDED, same day: Sentinel's own process files now set
+# config.OPPOSITE_DIRECTION_GATE_ENABLED = True too -- see
+# REVERSAL_EXIT_ENABLED's own comment below.
+# Retested as the FULL package (gate + reversal exit TOGETHER, not gate
+# alone) and the earlier "no" reversed: Sentinel's total return
+# +335.8% -> +485.3%, max drawdown 16.2% -> 5.5%. The gate-alone
+# numbers directly above remain accurate for the QUESTION they
+# answered (does the gate by itself help Sentinel -- no), just not for
+# what Sentinel's process files actually run today.
+#
+# No adjacency/window parameters, unlike the cluster cap -- ANY
+# opposite-direction position currently open blocks a new entry, for
+# its full open lifetime (trade_tracker.opposite_direction_blocks).
 OPPOSITE_DIRECTION_GATE_ENABLED = True
 
 # --- Reversal exit (added 2026-08-27) ---
@@ -827,4 +841,16 @@ OPPOSITE_DIRECTION_GATE_ENABLED = True
 #      positive, in both the retrospective and the real run. See
 #      BACKLOG.md for the full numbers and STRATEGY_VERSIONS.md for the
 #      version history.
+#
+# SENTINEL, same day: the gate ALONE (OPPOSITE_DIRECTION_GATE_ENABLED's
+# own comment above) was a net loss for Sentinel, so it shipped without
+# either flag at first. Retested as the FULL package -- gate + reversal
+# exit TOGETHER -- and the story reversed completely: total return
+# +335.8% -> +485.3%, max drawdown 16.2% -> 5.5%, Calmar 1.72 -> 6.30,
+# every year better with no exceptions. The two features needed each
+# other for Sentinel: the gate alone just removes trades from an
+# already cluster-cap-curated population; adding the exit is what
+# turns that removal into a net win rather than a net loss. Sentinel's
+# own process files now set this True too (main_live_sentinel.py /
+# main_live_banknifty_sentinel.py, v1.1-dev -> v1.2-dev).
 REVERSAL_EXIT_ENABLED = True

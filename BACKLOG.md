@@ -97,12 +97,37 @@ same fact reads the file's source text directly instead of importing
 it a second time, avoiding the fragility entirely rather than working
 around it twice.
 
-STILL OPEN: not yet tested on Sentinel. The gate alone was a net loss
-for Sentinel's total return despite improving its risk metrics --
-whether reversal exit changes that story is a separate question, not
-answered by this entry.
+RESOLVED, same day: tested on Sentinel (gate + reversal exit TOGETHER,
+not gate alone). Completely reversed the gate-alone verdict:
 
-## RESOLVED (Anchor only): Bank Nifty 2026-08-27 -- Anchor stacked 19 trades (5 CE + 12 PE, simultaneously open); opposite-direction gate shipped to Anchor v1.1, Sentinel opts out on real backtest evidence (added 2026-08-27, resolved same day)
+    metric                baseline (live)   + gate only   + gate+exit
+    trades                          7,203         6,020         7,089
+    total return                  +335.8%       +300.4%       +485.3%
+    max drawdown                    16.2%         14.0%          5.5%
+    Calmar                           1.72          1.87          6.30
+    profit factor                    1.40          1.43          1.80
+    expectancy/trade              +0.1889       +0.1999       +0.2642
+
+Every year better, no exceptions (2022: 53.1% -> 105.6%). 1,633 of
+7,089 trades (23%) closed via reversal exit, consistent with Anchor's
+own rate. The gate alone just removes trades from Sentinel's already
+cluster-cap-curated population, cutting real winners along with
+whatever it targets; adding the reversal exit is what turns that
+removal into a net win rather than a net loss -- the two features
+needed each other for Sentinel specifically, unlike Anchor where the
+gate alone was already a clear win before reversal exit was even
+considered.
+
+SHIPPED to Sentinel, same day as the gate-alone rejection:
+`config.OPPOSITE_DIRECTION_GATE_ENABLED = True` and
+`config.REVERSAL_EXIT_ENABLED = True`, both `main_live_sentinel.py`
+and `main_live_banknifty_sentinel.py` (Bank Nifty's own 500pt band not
+independently retested -- shadow.py has no Bank Nifty replay,
+extrapolated the same way Anchor's Bank Nifty process already was).
+Sentinel promoted v1.1-dev -> v1.2-dev. See STRATEGY_VERSIONS.md for
+the full entry.
+
+## RESOLVED (shipped to Anchor v1.1 AND Sentinel v1.2-dev, see the reversal-exit entry above for why Sentinel needed the combo): Bank Nifty 2026-08-27 -- Anchor stacked 19 trades (5 CE + 12 PE, simultaneously open); opposite-direction gate built (added 2026-08-27, resolved same day)
 
 Real live session, not a backtest. Bank Nifty round-tripped ~1,700pts:
 spot rallied through 58000->58400 (13:12-13:14), then reversed hard and
