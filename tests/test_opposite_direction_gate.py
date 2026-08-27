@@ -53,26 +53,44 @@ def test_sentinel_process_files_opt_out():
     checked the same way Anchor's isolation from CLUSTER_CAP_ENABLED
     was originally verified when Sentinel was first built.
 
-    Restores EVERY config attribute main_live_sentinel.py patches, not
-    just the one under test -- the import itself only ever runs once
-    (module caching), and every mutation it makes is real and
-    process-global. Missing even one (e.g. CLUSTER_CAP_ENABLED) would
-    silently leak into every OTHER test in this suite that runs
-    afterward, in this file or any other -- caught exactly this way
-    while writing this test, see git history if curious.
+    Restores the ENTIRE config module's attribute set, not a hand-picked
+    list -- the import itself only ever runs once (module caching), and
+    every mutation it makes is real and process-global. A hand-picked
+    list of "attributes main_live_sentinel.py patches" already went
+    stale ONCE (config.REVERSAL_EXIT_ENABLED, added later, leaked False
+    into every test after this one across the whole suite until
+    tests/test_reversal_exit.py caught it) -- a full-module snapshot
+    can't go stale the same way when a new attribute is added later.
+
+    ALSO restores trade_tracker's module attributes -- main_live_sentinel.py
+    doesn't only patch `config`, it directly reassigns
+    tt.OPEN_TRADES_PATH / tt.JOURNAL_PATH too (real module-level
+    assignments, not monkeypatch, so nothing reverts them
+    automatically). Missing this was the second, deeper bug behind the
+    same investigation as the config fix above: once left un-restored,
+    trade_tracker.JOURNAL_PATH stayed "trade_journal_sentinel.jsonl" for
+    the rest of the process, which then tripped main_live_sentinel.py's
+    OWN import-order assertion (line ~108) on any later attempt to
+    import/reload it, for a reason that had nothing to do with whatever
+    that later test was actually checking.
+
+    This is the ONE place in the suite that actually imports
+    main_live_sentinel -- deliberately not duplicated elsewhere (see
+    tests/test_reversal_exit.py's own version of this test, which reads
+    the file's source directly instead of importing it, specifically to
+    avoid needing a second copy of this restore dance).
     """
-    patched_attrs = [
-        "STRATEGY_NAME", "STRATEGY_VERSION", "CLUSTER_CAP_ENABLED",
-        "CLUSTER_CAP_ADJACENCY_POINTS", "CLUSTER_CAP_WINDOW_MINUTES",
-        "RECORD_SNAPSHOTS", "OPPOSITE_DIRECTION_GATE_ENABLED",
-    ]
-    originals = {name: getattr(config, name) for name in patched_attrs}
+    config_before = dict(vars(config))
+    tt_before = dict(vars(tt))
     try:
         import main_live_sentinel  # noqa: F401 -- import for its config-patching side effect
         assert config.OPPOSITE_DIRECTION_GATE_ENABLED is False
+        assert config.REVERSAL_EXIT_ENABLED is False
     finally:
-        for name, value in originals.items():
+        for name, value in config_before.items():
             setattr(config, name, value)
+        for name, value in tt_before.items():
+            setattr(tt, name, value)
 
 
 def test_blocks_a_new_pe_while_a_ce_is_open():

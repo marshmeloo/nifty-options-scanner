@@ -51,8 +51,22 @@ NIFTY_LOT_SIZE = 65             # update if NSE revises lot size
 # main_live_sentinel.py's own override. This exception was made on
 # explicit user instruction, not a default this project's own process
 # would otherwise have taken.
+# v1.1 -> v1.2, 2026-08-27: same kind of exception as v1.0->v1.1 above,
+# same day. Added REVERSAL_EXIT_ENABLED (see that flag's own comment) --
+# also on backtest evidence, not live evidence. This one was checked
+# with an extra step the gate itself didn't get: a retrospective/paired
+# measurement FIRST (research/reversal_exit_study.py, t=19.1 on 1,907
+# events), then the real mechanism built and re-run forward through
+# shadow.py before shipping, specifically because the gate's own
+# approximation had already taught this project not to trust a
+# retrospective number on its own. The real run found something the
+# retrospective one could not have: max drawdown gets WORSE (24.1% ->
+# 26.2%), not better, because freeing capital sooner lets ~19% more
+# trades open. A diagnostic (BACKLOG.md) confirmed those extra trades
+# are not diluted junk (mean +0.129R, close to the system's own
+# +0.140R baseline) before this shipped.
 STRATEGY_NAME = "Anchor"
-STRATEGY_VERSION = "1.1"
+STRATEGY_VERSION = "1.2"
 
 # --- Scoring mode (versioned -- see scanner.py's SCORING_MODE handling) ---
 #
@@ -780,3 +794,37 @@ CLUSTER_CAP_WINDOW_MINUTES = 30
 # ANY opposite-direction position currently open blocks a new entry,
 # for its full open lifetime (trade_tracker.opposite_direction_blocks).
 OPPOSITE_DIRECTION_GATE_ENABLED = True
+
+# --- Reversal exit (added 2026-08-27) ---
+# The gate above only ever protects the SECOND trade -- the one that
+# never opens. It does nothing for the FIRST trade, which keeps running
+# on its original thesis even after the scanner has produced a fresh,
+# fully-qualified signal in the OPPOSITE direction. When ON, that
+# blocked signal ALSO closes the position(s) it was blocked by, right
+# then, instead of letting them run to their original stop/target/EOD --
+# see trade_tracker.opposite_direction_blocks()'s caller and
+# _reversal_exit_opposite_positions(). Conservative: closes the OLD
+# position, does NOT open the NEW (still-blocked) one -- a direction
+# flip is a different, untested idea.
+#
+# Tested two ways before shipping, same discipline as the gate itself:
+#   1. research/reversal_exit_study.py -- retrospective, paired: for
+#      every trade that got a genuine reversal signal, "close right
+#      then" vs its real outcome. Full 6-year NIFTY history, 1,907
+#      events: mean R held to close -0.71, closed on the signal -0.32,
+#      paired diff +0.39R, t=19.1 -- one of the strongest effects
+#      measured anywhere in this project.
+#   2. The REAL mechanism, wired into shadow.py and re-run forward (this
+#      flag): trades 9,115 -> 10,856 (+19%, capital freed up sooner lets
+#      more legitimate trades open -- confirmed NOT diluted junk: the
+#      ~1,700 new trades average +0.129R, barely below the system's
+#      overall +0.140R baseline, same conviction/risk bars as everything
+#      else). Total return +362.1% -> +546.6%. Max drawdown 24.1% ->
+#      26.2% -- WORSE, not better, the one thing the retrospective
+#      measurement couldn't see (more trading activity means more
+#      opportunity for a bad stretch to compound, even with a better
+#      average edge). Calmar still improves, 1.21 -> 1.40. Every year
+#      positive, in both the retrospective and the real run. See
+#      BACKLOG.md for the full numbers and STRATEGY_VERSIONS.md for the
+#      version history.
+REVERSAL_EXIT_ENABLED = True

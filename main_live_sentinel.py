@@ -77,6 +77,17 @@ config.RECORD_SNAPSHOTS = False
 # above, that the compounded total falls. A deliberate NO, not an
 # oversight.
 config.OPPOSITE_DIRECTION_GATE_ENABLED = False
+# Reversal exit (added 2026-08-27, config.py default True since it
+# shipped to Anchor as v1.2): explicitly OFF for Sentinel too. Currently
+# INERT regardless of this value, same interaction
+# use_learned_adjustment/LEARNED_TAG_ADJUSTMENT_ENABLED already has --
+# the reversal-exit trigger only ever fires from inside the
+# opposite-direction-gate branch, which is already off above. Set
+# explicitly anyway rather than left to that inert interaction, pending
+# Sentinel's own evaluation of the FULL package (gate + reversal exit
+# together, not just the gate alone) -- see BACKLOG.md for that result
+# once run.
+config.REVERSAL_EXIT_ENABLED = False
 
 from resilient_source import get_nifty_snapshot, get_nearest_expiry, get_nifty_intraday_candles
 from scanner import scan, compute_market_bias, tag_bias_conflicts

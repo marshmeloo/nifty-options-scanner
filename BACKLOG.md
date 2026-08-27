@@ -3,6 +3,105 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## SHIPPED (Anchor v1.2): reversal exit -- the opposite-direction gate blocks a signal, but does nothing for the position it was blocked BY; closing that position too is a real, large improvement, with a real cost the first approximation couldn't see (added 2026-08-27)
+
+Follow-on from the opposite-direction gate (Anchor v1.1, entry above):
+the gate only ever protects the SECOND trade -- the one that never
+opens. It does nothing for the FIRST trade, which keeps running its
+original thesis even after the scanner produces a fresh, fully-
+qualified signal saying the market has turned. Question raised: isn't
+that blocked signal itself evidence worth acting on for the
+already-open position?
+
+TWO ROUNDS OF TESTING, same discipline the gate's own approximation
+mistake taught this project to use going forward:
+
+1. **Retrospective, paired** (`research/reversal_exit_study.py`): for
+   every trade that got a genuine reversal signal while open, "close
+   right then" (real price, no lookahead) vs its actual outcome. Full
+   6-year NIFTY history, 1,907 events: mean R held to close -0.71 vs
+   closed on the signal -0.32, paired diff +0.39R, **t=19.1**. Even
+   split by how early the signal arrived (<90min into the trade:
+   -0.74 held vs -0.38 exited), the effect holds -- not just "catching
+   it right before EOD anyway."
+2. **The APPROXIMATION** (`research/reversal_exit_backtest_approx.py`):
+   swap those 1,907 trades' outcomes into the real Anchor v1.1
+   sequence, everything else unchanged. Total return +362.1% ->
+   +550.4%, max drawdown 24.1% -> 12.4%, EVERY year better. More
+   conservative than the gate's own first approximation (nothing
+   deleted, only real signals' trades touched) -- but carries the exact
+   same blind spot: can't see that closing a position early frees
+   capital sooner, which could let a DIFFERENT trade open earlier and
+   cascade differently.
+3. **The REAL mechanism**, built and re-run forward through
+   `shadow.py`'s actual `run_policy()` (`Policy.use_reversal_exit`,
+   gated behind `use_opposite_direction_gate`):
+
+    metric                gate only (v1.1)   + real reversal exit (v1.2)
+    trades                       9,115               10,856  (+19%)
+    total return                +362.1%              +546.6%
+    max drawdown                  24.1%                26.2%  (WORSE)
+    Calmar                         1.21                 1.40
+    profit factor                  1.34                 1.55
+    expectancy/trade            +0.140R              +0.195R
+
+Trade count jumped ~19% -- confirmed real: closing a position early
+frees capital/exposure sooner, letting the scanner open trades later
+that day that couldn't fire under the gate alone. Max drawdown got
+WORSE, not better -- the retrospective approximation's most confident
+prediction (12.4%) was simply wrong, because more trading activity
+means more opportunity for a bad stretch to compound even with a
+better average edge. Total return landed close to the approximation's
+own number (+546.6% vs +550.4% predicted) -- much closer than the
+gate's first approximation was to ITS real result, but still not
+something to trust blind.
+
+DIAGNOSTIC, before shipping (splitting the 10,856 with-exit trades by
+whether they existed under gate-only too):
+
+    group                                    n      net Rs    mean R
+    persisted trades, now with better exits  7,767  22.77L    +0.221R
+    new trades (only exist because capital
+      freed up)                              3,089   4.56L    +0.129R
+
+New trades average +0.129R -- barely below the system's own overall
++0.140R baseline, same conviction/risk bars as every other trade, not
+diluted junk sneaking in on a technicality. Both sources of the
+improvement (better exits on existing trades, legitimate new
+opportunity) are real and sound.
+
+DECISION: shipped to Anchor as v1.2, same explicit exception to
+STRATEGY_VERSIONS.md's promotion policy as v1.1 (backtest evidence,
+not live evidence, direct user instruction). `config.REVERSAL_EXIT_ENABLED
+= True`. Live-side mechanism built: `trade_tracker._reversal_exit_opposite_positions()`,
+wired into `try_open_new_trade()` at the same point the opposite-
+direction gate itself checks (after every other gate, so only a
+fully-qualified signal triggers it) -- closes the OLD position at the
+current quote, journals it as outcome `"REVERSAL_EXIT"`, still does
+NOT open the NEW (still-blocked) candidate this cycle -- a direction
+flip is a different, untested idea. Reuses `_finalise()`, the same
+costing/R-multiple logic every other exit in `shadow.py` goes through,
+for both the backtest and (via `costs.apply_to_trade`) the live path.
+9 new tests (`tests/test_reversal_exit.py`), full suite 951/951.
+
+METHODOLOGY NOTE, caught while writing the tests: `main_live_sentinel.py`
+mutates BOTH `config.*` and `trade_tracker.JOURNAL_PATH`/`OPEN_TRADES_PATH`
+directly (real module-level assignments, not monkeypatch) when
+imported. A test that imports it and only restores `config` afterward
+leaks the `trade_tracker` mutation into every later test in the
+process -- caught via a real, reproducible failure when
+`REVERSAL_EXIT_ENABLED` leaked `False` into unrelated tests. Fixed by
+snapshotting and restoring BOTH modules' full attribute sets, in the
+ONE test that does a real import; a second location that needed the
+same fact reads the file's source text directly instead of importing
+it a second time, avoiding the fragility entirely rather than working
+around it twice.
+
+STILL OPEN: not yet tested on Sentinel. The gate alone was a net loss
+for Sentinel's total return despite improving its risk metrics --
+whether reversal exit changes that story is a separate question, not
+answered by this entry.
+
 ## RESOLVED (Anchor only): Bank Nifty 2026-08-27 -- Anchor stacked 19 trades (5 CE + 12 PE, simultaneously open); opposite-direction gate shipped to Anchor v1.1, Sentinel opts out on real backtest evidence (added 2026-08-27, resolved same day)
 
 Real live session, not a backtest. Bank Nifty round-tripped ~1,700pts:

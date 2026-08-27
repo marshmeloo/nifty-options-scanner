@@ -171,6 +171,20 @@ class Policy:
     # every existing backtest reproducible -- set False to reproduce
     # pre-2026-08-27 behaviour.
     use_opposite_direction_gate: bool = True
+    # Reversal-exit (added 2026-08-27, research/reversal_exit_study.py's
+    # tested hypothesis, built for real): when a fully-qualified OPPOSITE-
+    # direction candidate is blocked by the gate above, ALSO close the
+    # blocking position(s) right there at the current price instead of
+    # letting them run to their original stop/target/EOD -- see
+    # trade_tracker... no live counterpart exists yet, backtest-only until
+    # this is validated the same way the gate itself was. Conservative:
+    # closes the OLD position, does NOT open the NEW (still-blocked) one --
+    # a direction flip is a different, untested hypothesis. Only takes
+    # effect when use_opposite_direction_gate is also True (there is
+    # nothing to react to otherwise). Default False -- unlike the gate,
+    # this has not shipped anywhere; every existing study stays
+    # reproducible unless a caller opts in explicitly.
+    use_reversal_exit: bool = False
 
     def resolved_min_score(self) -> float:
         return self.min_score if self.min_score is not None else config.MIN_CONVICTION_SCORE_TO_TRACK
@@ -354,6 +368,38 @@ def _finalise(trade: ShadowTrade, ts, exit_px, outcome, peak, trough, lots) -> S
     return trade
 
 
+def _close_trade_early(index, key, entry_ts, exit_ts, exit_px, trade: ShadowTrade, lots: int) -> ShadowTrade:
+    """
+    Recomputes a trade's outcome as if it had been closed at exit_ts
+    instead of running to its natural resolution -- reuses _finalise, the
+    same costing/R-multiple logic every other exit in this file goes
+    through, so an early close is priced exactly like a real one, not a
+    separate one-off formula.
+
+    Peak/trough are re-walked over the narrower [entry_ts, exit_ts]
+    window, not the trade's original full lifetime -- an early exit must
+    not credit itself with favourable excursion the position never
+    actually got the chance to realise before this closed it.
+
+    Mutates `trade` IN PLACE (same as walk_trade_forward/_finalise
+    already do) -- the caller is responsible for also updating that
+    position's bookkeeping entry in `positions` (closed_ts, net_inr) so
+    later gate checks (cluster cap, opposite-direction, risk state) see
+    this position as closed from exit_ts onward, not its original later
+    close time.
+    """
+    series = index.get(key, [])
+    peak = trough = trade.entry
+    for ts, bid, _ask, ltp in series:
+        if ts <= entry_ts or ts > exit_ts:
+            continue
+        px = _closeable_price(bid, ltp)
+        if px is None:
+            continue
+        peak, trough = max(peak, px), min(trough, px)
+    return _finalise(trade, exit_ts, exit_px, "REVERSAL_EXIT", peak, trough, lots)
+
+
 class _StructureCache:
     """
     price_action.analyze() is the expensive part of a cycle and the
@@ -454,11 +500,20 @@ def correlated_cluster_blocked(setup, positions: list, ts, policy: Policy) -> bo
     return False
 
 
-def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
+def run_policy(day: str, policy: Policy, verbose: bool = False, blocked_reversal_sink: list = None) -> list:
     """
     Replay a day under `policy`, returning the simulated trades it would
     have taken. Journal writes are suppressed throughout -- this touches
     the real trade record under no circumstances.
+
+    blocked_reversal_sink: optional list, appended with one record per
+    opposite-direction-gate block that ALSO cleared every other gate (see
+    the check's own comment below) -- {"ts", "blocked_key", "blocked_entry",
+    "blocking_keys"}. For research/reversal_exit_study.py: was the
+    opposite-direction signal that got blocked also useful information for
+    exiting the position(s) it was blocked BY, earlier than their own
+    stop/target/EOD? Default None -- zero cost/behavior change for every
+    existing caller.
     """
     cycles = list(snapshot_recorder.load_day(day))
     if not cycles:
@@ -528,8 +583,6 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
 
                 if correlated_cluster_blocked(setup, positions, ts, policy):
                     continue
-                if policy.use_opposite_direction_gate and opposite_direction_blocked(setup, positions, ts):
-                    continue
 
                 # Live's expiry-day discipline: a raised bar and a 14:00
                 # cutoff on same-day-expiry contracts (trade_tracker.
@@ -595,6 +648,55 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
                 if risk_unit <= 0:
                     continue
                 target = round(plan.entry + risk_unit * target_rr, 2)
+
+                # Opposite-direction gate, checked HERE rather than earlier
+                # in the loop (moved 2026-08-27) so that when blocked_reversal_sink
+                # is provided, only a setup that ALSO cleared every other
+                # gate (expiry, learned adjustment, bias, score bar, risk
+                # check) gets recorded -- a genuine signal that would have
+                # opened in every respect except this one, not noise that
+                # would have been rejected anyway regardless of direction.
+                # Reordering has no other effect: nothing between the old
+                # and new position mutates `positions`/`trades`, only reads.
+                if policy.use_opposite_direction_gate and opposite_direction_blocked(setup, positions, ts):
+                    blocking = [
+                        p for p in positions
+                        if p["key"][1] != setup.option_type
+                        and p["opened_ts"] <= ts
+                        and (p["closed_ts"] is None or p["closed_ts"] > ts)
+                    ]
+                    if blocked_reversal_sink is not None:
+                        blocked_reversal_sink.append({
+                            "ts": ts, "blocked_key": key, "blocked_entry": plan.entry,
+                            "blocking_keys": [p["key"] for p in blocking],
+                        })
+                    if policy.use_reversal_exit:
+                        # research/reversal_exit_study.py's tested hypothesis,
+                        # built for real: a fully-qualified OPPOSITE-direction
+                        # signal is evidence the market has turned, worth
+                        # exiting the blocking position(s) for RIGHT NOW rather
+                        # than letting them run to their original stop/target/
+                        # EOD close. Conservative version of the idea -- closes
+                        # the OLD position(s) but still does not open the NEW
+                        # (still-blocked) candidate this cycle, matching
+                        # exactly what the study measured ("close now"), not a
+                        # direction flip into the new signal.
+                        for p in blocking:
+                            close_now_px = _price_at(index, p["key"], ts)
+                            if close_now_px is None:
+                                continue
+                            owner = next(
+                                (t for t in trades if (t.strike, t.option_type) == p["key"]
+                                and t.opened_at == p["opened_ts"].isoformat()),
+                                None,
+                            )
+                            if owner is None:
+                                continue
+                            _close_trade_early(index, p["key"], p["opened_ts"], ts,
+                                              close_now_px, owner, p["lots"])
+                            p["closed_ts"] = ts
+                            p["net_inr"] = owner.net_inr
+                    continue
 
                 trade = ShadowTrade(
                     strike=setup.strike, option_type=setup.option_type,

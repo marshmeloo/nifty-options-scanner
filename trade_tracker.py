@@ -609,6 +609,12 @@ def _build_lesson(trade: dict, outcome: str) -> str:
             f"closed back near entry ({trade['pnl_pct']:+.1f}%). Signals: {tag_text}. "
             f"Now watching this contract to see if it would have hit target anyway."
         )
+    elif outcome == "REVERSAL_EXIT":
+        base = (
+            f"Closed early ({trade['pnl_pct']:+.1f}%) -- a fully-qualified opposite-direction "
+            f"signal arrived while this was open (see config.REVERSAL_EXIT_ENABLED), read as "
+            f"evidence the market had turned rather than held to its original stop/target/EOD."
+        )
     else:  # EOD_CLOSE, RECOVERED_INTERRUPTED_SESSION, etc.
         base = f"Closed at end of day, neither target nor stop hit ({trade['pnl_pct']:+.1f}%). Signals: {tag_text}."
 
@@ -1257,6 +1263,55 @@ def _record_direction_cooldown(state: dict, trade: dict):
     )
 
 
+def _reversal_exit_opposite_positions(state: dict, new_option_type: str, snapshot) -> list:
+    """
+    Closes every currently-open position on the OPPOSITE side of
+    new_option_type, right now, at this cycle's quote -- see
+    config.REVERSAL_EXIT_ENABLED's own comment for the evidence behind
+    this (research/reversal_exit_study.py + the real backtest in
+    research/reversal_exit_backtest_approx.py's successor). Reuses the
+    exact same closing/journalling fields update_open_trades() writes
+    for every other exit, tagged "REVERSAL_EXIT" so it is distinguishable
+    in the journal from a real stop/target/breakeven/EOD close.
+
+    Deliberately does NOT arm the direction-chase cooldown
+    (_record_direction_cooldown) the way a LOSS does -- that gate exists
+    to stop chasing the SAME losing directional read; this is the
+    opposite situation, exiting BECAUSE the read has flipped, and the
+    new (opposite) direction is already being suppressed by
+    opposite_direction_blocks() itself, not chased.
+    """
+    quote_lookup = {(q.strike, q.option_type): q for q in snapshot.chain}
+    closed, still_open = [], []
+    for trade in state["trades"]:
+        if trade["option_type"] == new_option_type:
+            still_open.append(trade)
+            continue
+        quote = quote_lookup.get((trade["strike"], trade["option_type"]))
+        if quote is None:
+            # No quote for this strike this cycle -- can't price an exit,
+            # leave it open and try again next cycle rather than guess.
+            still_open.append(trade)
+            continue
+
+        current_ltp = exit_price_for(quote)
+        _update_excursion(trade, current_ltp, snapshot.timestamp)
+        trade["closed_at"] = snapshot.timestamp.isoformat()
+        trade["exit_ltp"] = current_ltp
+        trade["outcome"] = "REVERSAL_EXIT"
+        trade["pnl_pct"] = round((current_ltp - trade["entry"]) / trade["entry"] * 100, 1)
+        trade["pnl_inr"] = _pnl_inr(trade["entry"], current_ltp, trade["lots"])
+        trade.update(_excursion_summary(trade))
+        trade["lesson"] = _build_lesson(trade, "REVERSAL_EXIT")
+        trade.update(costs.apply_to_trade(trade))
+        _append_journal(trade)
+        _seed_delay_probe(state, trade, "exit", current_ltp, snapshot.timestamp)
+        closed.append(trade)
+
+    state["trades"] = still_open
+    return closed
+
+
 def try_open_new_trade(setups_with_plans, state, snapshot, bias_label=None, bias_score=None):
     """
     setups_with_plans: list of (Setup, TradePlan, RiskVerdict), best-first.
@@ -1286,8 +1341,6 @@ def try_open_new_trade(setups_with_plans, state, snapshot, bias_label=None, bias
             continue
         if cluster_cap_blocks(state, setup.strike, setup.option_type, snapshot.timestamp):
             continue
-        if opposite_direction_blocks(state, setup.option_type):
-            continue
 
         conviction_bar, blocked = expiry_day_rules(setup.expiry, snapshot.timestamp)
         if blocked:
@@ -1307,6 +1360,18 @@ def try_open_new_trade(setups_with_plans, state, snapshot, bias_label=None, bias
         if bias_note:
             learn_notes = list(learn_notes) + [bias_note]
         if adjusted_score < conviction_bar:
+            continue
+
+        # Opposite-direction gate, checked HERE -- after every other gate
+        # -- rather than earlier (matches shadow.py's run_policy(), moved
+        # 2026-08-27 for the same reason: only a setup that ALSO cleared
+        # everything else is a genuine, fully-qualified signal, worth
+        # treating as evidence for REVERSAL_EXIT_ENABLED below rather than
+        # noise that would have been rejected anyway regardless of
+        # direction.
+        if opposite_direction_blocks(state, setup.option_type):
+            if getattr(config, "REVERSAL_EXIT_ENABLED", False):
+                _reversal_exit_opposite_positions(state, setup.option_type, snapshot)
             continue
 
         trade = open_new_trade(setup, plan, snapshot)

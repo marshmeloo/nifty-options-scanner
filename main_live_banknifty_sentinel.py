@@ -84,6 +84,12 @@ config.RECORD_SNAPSHOTS = False
 # NO, not an oversight -- applied here too since Bank Nifty Sentinel
 # shares the same cluster-cap-plus-gate interaction risk.
 config.OPPOSITE_DIRECTION_GATE_ENABLED = False
+# Reversal exit (added 2026-08-27, config.py default True since it
+# shipped to Anchor as v1.2): explicitly OFF for Sentinel too, same
+# reasoning as main_live_sentinel.py -- currently inert given the gate
+# above is already off, set explicitly rather than left to that
+# interaction, pending Sentinel's own evaluation of the full package.
+config.REVERSAL_EXIT_ENABLED = False
 
 dhan_source.get_nifty_daily_candles = functools.partial(
     dhan_source.get_nifty_daily_candles,

@@ -73,12 +73,12 @@ results can always be grouped by which named version produced them.
 
 ---
 
-## Anchor — v1.1 — LIVE
+## Anchor — v1.2 — LIVE
 
 **Status:** Live in production, both NIFTY and Bank Nifty momentum,
-since 2026-08-14 (v1.0), updated to v1.1 on 2026-08-27. No longer
-frozen in the strictest sense — see the v1.0 -> v1.1 change below,
-which is an explicit, acknowledged exception to the promotion policy
+since 2026-08-14 (v1.0), updated to v1.1 then v1.2, both on 2026-08-27.
+No longer frozen in the strictest sense — see the version changes
+below, both explicit, acknowledged exceptions to the promotion policy
 above, not a reversal of it.
 
 **What it is:** 2R target, ATR-derived stop, breakeven stop armed at
@@ -130,6 +130,52 @@ Sentinel's version of this fix is a net LOSS in total return
 (+335.8% -> +300.4%) despite improving every per-trade/risk metric —
 see Sentinel's own section below. Not resolved, deliberately left as
 "Anchor gets it, Sentinel doesn't" rather than forced to match.
+
+**v1.1 -> v1.2, 2026-08-27, same day: reversal exit added
+(`config.REVERSAL_EXIT_ENABLED = True`).** The gate above only ever
+protects the SECOND trade (the one that never opens) — it does nothing
+for the FIRST trade, which keeps running its original thesis even
+after the scanner produces a fresh, fully-qualified OPPOSITE-direction
+signal. When on, that blocked signal ALSO closes the position(s) it
+was blocked by, right then, instead of letting them run to their
+original stop/target/EOD.
+
+Tested in two stages, an extra step the gate itself didn't get:
+
+1. **Retrospective, paired** (`research/reversal_exit_study.py`): for
+   every trade that got a genuine reversal signal, "close right then"
+   vs its real outcome, full 6-year NIFTY history. 1,907 events: mean R
+   held to close -0.71, closed on the signal -0.32, paired diff
+   +0.39R, **t=19.1** — one of the strongest effects measured anywhere
+   in this project.
+2. **The real mechanism**, built and re-run forward through
+   `shadow.py` (same discipline the gate's own approximation taught
+   this project not to skip):
+
+| | gate only (v1.1) | + reversal exit (v1.2) |
+|---|---|---|
+| Trades | 9,115 | 10,856 (+19%) |
+| Total return | +362.1% | +546.6% |
+| Max drawdown | 24.1% | **26.2% (worse)** |
+| Calmar | 1.21 | 1.40 |
+| Profit factor | 1.34 | 1.55 |
+| Expectancy/trade | +0.140R | +0.195R |
+
+Trade count jumped because closing a position early frees capital
+sooner, letting the scanner open trades later that day that couldn't
+fire otherwise — the ripple effect the retrospective measurement
+structurally cannot see. Max drawdown got WORSE, not better, the one
+place the retrospective step's prediction (12.4%) was wrong. A
+diagnostic (BACKLOG.md) confirmed the ~1,700 new trades are not
+diluted junk: mean +0.129R, close to the system's own +0.140R
+baseline, same conviction/risk bars as everything else. Every year
+positive, in both the retrospective and the real run. **Also shipped
+on backtest evidence alone**, same explicit exception as v1.1, same
+day, same direct user instruction.
+
+**NOT shipped to Sentinel yet** — see Sentinel's own section for
+whether the same combination (cluster cap + gate + reversal exit)
+changes its earlier negative verdict on the gate alone.
 
 ---
 
@@ -263,3 +309,7 @@ deliberate NO, not an oversight. Sentinel stays v1.1-dev.
 | 2026-08-27 | Opposite-direction gate approximation ("drop every overlapped trade") backtested: looked dramatic (Anchor +331%->+622%, Sentinel +336%->+499%) -- later found to overstate the real effect. |
 | 2026-08-27 | REAL gate backtested (wired into shadow.py's actual run_policy()): Anchor +331.4%->+362.1% return, 44.8%->24.1% drawdown -- genuine but far more modest. Sentinel +335.8%->+300.4% -- a net loss. |
 | 2026-08-27 | Anchor promoted v1.0 -> v1.1 (opposite-direction gate ON) as an explicit, acknowledged exception to the promotion policy above -- shipped on backtest evidence, not live evidence, per direct user instruction. Sentinel evaluated the same fix and explicitly declined it; stays v1.1-dev. |
+| 2026-08-27 | Reversal-exit idea raised: does the blocked opposite-direction signal itself carry information worth acting on for the ALREADY-OPEN position it was blocked by? research/reversal_exit_study.py: 1,907 events, mean R held -0.71 vs closed-on-signal -0.32, t=19.1. |
+| 2026-08-27 | Retrospective approximation of shipping it (swap outcomes, same trade sequence): Anchor total return +362.1%->+550.4%, EVERY year better -- but same caveat as the gate's own first approximation: doesn't capture the ripple effect of freeing capital sooner. |
+| 2026-08-27 | REAL mechanism built into shadow.py and re-run forward: trades 9,115->10,856 (+19%, ripple effect confirmed real), total return +362.1%->+546.6%, max drawdown 24.1%->26.2% (WORSE -- the one thing the retrospective step could not see). A diagnostic confirmed the new trades are not diluted junk (mean +0.129R vs system baseline +0.140R). |
+| 2026-08-27 | Anchor promoted v1.1 -> v1.2 (reversal exit ON), same explicit exception as v1.1, same day, same direct user instruction. Live-side mechanism built (trade_tracker._reversal_exit_opposite_positions, wired into try_open_new_trade), 9 new tests, full suite 951/951. |
