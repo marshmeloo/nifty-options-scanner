@@ -3,6 +3,92 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## Bank Nifty 2026-08-27: Anchor stacked 19 trades (5 CE + 12 PE, simultaneously open); Sentinel's cluster cap cut the loss 74% but does NOT guard the opposite-direction case (added 2026-08-27)
+
+Real live session, not a backtest. Bank Nifty round-tripped ~1,700pts:
+spot rallied through 58000->58400 (13:12-13:14), then reversed hard and
+fell through 56700->58000 (14:00-14:11). As spot swept through the
+chain, the scanner kept finding "new" nearby-strike candidates and
+opened a fresh position on EACH one, without waiting for the earlier
+ones to close -- five CE positions opened within 2 minutes, all still
+open two hours later; then twelve PE positions opened within 11
+minutes, also all still open, WHILE the CE side was still live too.
+
+    process        trades   composition              net P&L today
+    Anchor BN         19    5 CE (58000-58400) +      -Rs15,014
+                             12 PE (56700-58000)
+    Sentinel BN         5    2 CE + 3 PE               -Rs3,926
+
+All positions (both processes) closed simultaneously at 15:14 --
+confirmed as `trade_tracker.force_close_end_of_day()`, the legitimate
+EOD flatten, not a bug (one function closing everything in one pass
+shares one timestamp).
+
+Sentinel's 500pt/30min cluster cap correctly rejected same-direction
+strikes within its band (e.g. blocked 58100/58200/58300/58400 CE once
+58000 CE was open, only allowing 58600 CE -- 600pts away, outside the
+band) -- cutting Anchor's loss by 74%. Real, working, exactly the
+scenario the cluster cap was built for (see the 2026-08-15 entries
+below on its own origin: NIFTY 2026-08-12, 23 trades in bursts of
+5-11 adjacent strikes; Bank Nifty 2026-08-14, 6 adjacent PE strikes).
+
+WHAT THE USER ASKED, AND WHAT'S ACTUALLY TRUE: does anything stop a PE
+trade from opening while a CE position is already open (or vice
+versa)? NO -- re-read `trade_tracker.cluster_cap_blocks()`:
+
+    for t in state.get("trades", []):
+        if t["option_type"] != option_type:
+            continue          # <-- opposite-direction positions are SKIPPED
+
+The cluster cap only ever compares a new candidate against
+ALREADY-OPEN SAME-DIRECTION positions. It has zero awareness of the
+opposite side. This is true for BOTH Anchor and Sentinel, live and
+backtest (shadow.py's identical counterpart,
+`correlated_cluster_blocked()`, has the same same-direction-only
+filter: `p["key"][1] == setup.option_type`). Sentinel's 74% loss
+reduction today came entirely from limiting same-direction stacking --
+it did nothing for, and was never designed to address, simultaneous
+CE+PE exposure. Sentinel itself had 2 CE and 3 PE open at overlapping
+times today, same gap, just a smaller version of it.
+
+RESULT, research/concurrent_direction_exposure_study.py, full NIFTY
+reconstructed history (1,485 days) -- confirmed, and bigger than the
+one-day incident suggested:
+
+    policy                    trades  overlap days  trades caught   meanR ovl/clean    t
+    Anchor (no cluster cap)   10,792   487 (32.8%)   4,156 (38.5%)   -0.268 / +0.367   -21.45
+    Sentinel (200pt/30min)     7,203   504 (33.9%)   2,884 (40.0%)   -0.188 / +0.441   -16.90
+
+This is not a one-off. Nearly 1 in 3 trading days produces at least one
+same-day CE+PE overlap, and ~38-40% of ALL trades (both processes) get
+caught in one. Overlapped trades are net LOSERS on average (-0.19R to
+-0.27R) while the rest of the system is solidly profitable (+0.37R to
++0.44R) -- t=-16.9 to -21.45, among the strongest, cleanest effects
+measured anywhere in this project's research so far. In rupee terms
+(Anchor): overlapped trades lost Rs14.6L in aggregate while clean
+trades made Rs31.1L -- the overlap population is destroying roughly a
+third of what the clean population earns.
+
+Sentinel's cluster cap does NOT reduce this -- confirms the code-level
+read above. Overlap-day rate and per-trade overlap rate are both
+*slightly higher* under Sentinel (33.9%/40.0%) than Anchor
+(32.8%/38.5%): removing same-direction duplicates concentrates the
+remaining trades toward genuine opposite-direction signal crossings,
+diluting them less, not more.
+
+METHODOLOGY NOTE: NIFTY only, since shadow.py has no Bank Nifty replay
+-- the code path in question (open_keys keyed on (strike, option_type)
+with no cross-direction awareness) is identical between indices, so
+this directly tests the shared logic even though it can't reproduce
+Bank Nifty's own instrument/data.
+
+STATUS: not fixed. This is now real, large, statistically overwhelming
+evidence for a same-day opposite-direction exposure gate (block a new
+CE while a PE is open, or vice versa, mirroring how cluster_cap_blocks
+already blocks same-direction) -- but building and shipping that is a
+separate decision from measuring whether the problem is real. Flagged
+here for that decision.
+
 ## CLOSED, NOT ADOPTED: "Hero-Zero" -- deliberately picking the cheapest option is WORSE than picking a random one nearby, and expiry day confers no measurable edge (added 2026-08-26)
 
 Follow-through on "SCOPED, NOT BUILT: Hero-Zero" --
