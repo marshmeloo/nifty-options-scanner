@@ -48,10 +48,20 @@ import argparse
 import json
 import math
 import statistics
+from collections import defaultdict
 from datetime import datetime
 
+import config
 import shadow
 import snapshot_recorder
+from research.one_trade_per_day_study import institutional_metrics, to_rows
+
+# Anchor's real capital base (config.TOTAL_CAPITAL), not the Rs1L used
+# elsewhere for the 1-trade/day variant -- this study replays Anchor's
+# and Sentinel's REAL trade volume, so the real capital base is the
+# right one for return%/drawdown%, same reasoning as the dashboard's
+# own fixed-capital fix.
+CAPITAL = getattr(config, "TOTAL_CAPITAL", 500000)
 
 
 def historical_days() -> list:
@@ -123,6 +133,38 @@ def _t_stat_diff(a: list, b: list):
     return round((ma - mb) / sed, 2) if sed > 0 else None
 
 
+def annual_table(rows_all: list, rows_clean: list, capital: float) -> list:
+    """
+    Per-YEAR net P&L and return% (against the FIXED capital base, not
+    compounding -- same convention the dashboard's own fixed-capital fix
+    established, see BACKLOG.md), current (all trades) vs a hypothetical
+    where every trade caught in an opposite-direction overlap simply
+    never happened (dropped entirely, not just its P&L zeroed -- the
+    fair simulation of a gate that would have blocked the entry).
+    """
+    def by_year(rows):
+        out = defaultdict(lambda: {"n": 0, "pnl": 0.0})
+        for day, net, _r, _risk in rows:
+            y = day[:4]
+            out[y]["n"] += 1
+            out[y]["pnl"] += net
+        return out
+
+    all_by_year, clean_by_year = by_year(rows_all), by_year(rows_clean)
+    table = []
+    for y in sorted(set(all_by_year) | set(clean_by_year)):
+        a = all_by_year.get(y, {"n": 0, "pnl": 0.0})
+        c = clean_by_year.get(y, {"n": 0, "pnl": 0.0})
+        table.append({
+            "year": y,
+            "n_trades_all": a["n"], "net_inr_all": round(a["pnl"], 0),
+            "return_pct_all": round(a["pnl"] / capital * 100, 2),
+            "n_trades_excl_overlap": c["n"], "net_inr_excl_overlap": round(c["pnl"], 0),
+            "return_pct_excl_overlap": round(c["pnl"] / capital * 100, 2),
+        })
+    return table
+
+
 def summarise(label: str, trades: list, days: list) -> dict:
     closed = [t for t in trades if t.outcome]
     overlap = find_opposite_direction_overlaps(closed)
@@ -131,6 +173,8 @@ def summarise(label: str, trades: list, days: list) -> dict:
 
     rs_overlapped = [t.net_r for t in overlapped if t.net_r is not None]
     rs_clean = [t.net_r for t in clean if t.net_r is not None]
+
+    rows_all, rows_clean = to_rows(closed), to_rows(clean)
 
     return {
         "label": label,
@@ -146,11 +190,15 @@ def summarise(label: str, trades: list, days: list) -> dict:
         "t_overlapped_vs_clean": _t_stat_diff(rs_overlapped, rs_clean),
         "net_inr_overlapped": round(sum(t.net_inr or 0 for t in overlapped), 2),
         "net_inr_clean": round(sum(t.net_inr or 0 for t in clean), 2),
+        "metrics_all": institutional_metrics(rows_all, capital=CAPITAL),
+        "metrics_excl_overlap": institutional_metrics(rows_clean, capital=CAPITAL),
+        "annual": annual_table(rows_all, rows_clean, CAPITAL),
     }
 
 
 def describe(results: list) -> str:
-    lines = ["Same-day opposite-direction (CE+PE) OVERLAP study -- NIFTY, full reconstructed history", ""]
+    lines = [f"Same-day opposite-direction (CE+PE) OVERLAP study -- NIFTY, full reconstructed history, "
+             f"Rs{CAPITAL:,.0f} capital base", ""]
     for r in results:
         lines += [
             f"-- {r['label']} --",
@@ -162,9 +210,38 @@ def describe(results: list) -> str:
             f"t(overlapped-clean): {r['t_overlapped_vs_clean']}",
             f"  net Rs -- overlapped trades: {r['net_inr_overlapped']:,.0f}   clean trades: {r['net_inr_clean']:,.0f}",
             "",
+            "  Institutional metrics -- current (all trades) vs hypothetical (overlap trades DROPPED entirely,",
+            "  simulating a gate that blocked them at entry):",
+            f"  {'metric':<22}{'current (all)':>16}{'excl. overlap':>16}",
         ]
+        ma, mc = r["metrics_all"], r["metrics_excl_overlap"]
+        for key, fmt, mult in (
+            ("n", "{:.0f}", 1), ("win_rate_pct", "{:.1f}%", 1),
+            ("total_return_pct", "{:+.1f}%", 1), ("max_dd_pct", "{:.1f}%", 1),
+            ("calmar", "{:.2f}", 1), ("profit_factor", "{:.2f}", 1),
+            ("expectancy_r", "{:+.4f}", 1), ("avg_trades_per_day", "{:.2f}", 1),
+        ):
+            va = ma.get(key)
+            vc = mc.get(key)
+            va_s = fmt.format(va) if va is not None else "n/a"
+            vc_s = fmt.format(vc) if vc is not None else "n/a"
+            lines.append(f"  {key:<22}{va_s:>16}{vc_s:>16}")
+        lines.append("")
+
+        lines.append(f"  {'year':<6}{'trades(all)':>12}{'net Rs(all)':>14}{'ret%(all)':>11}   "
+                     f"{'trades(excl)':>12}{'net Rs(excl)':>14}{'ret%(excl)':>11}")
+        for row in r["annual"]:
+            lines.append(
+                f"  {row['year']:<6}{row['n_trades_all']:>12}{row['net_inr_all']:>14,.0f}"
+                f"{row['return_pct_all']:>10.1f}%   "
+                f"{row['n_trades_excl_overlap']:>12}{row['net_inr_excl_overlap']:>14,.0f}"
+                f"{row['return_pct_excl_overlap']:>10.1f}%"
+            )
+        lines.append("")
     lines.append("t(overlapped-clean): negative means trades caught in an opposite-direction overlap")
     lines.append("  did WORSE than trades that weren't -- a real risk signal, not just double the trade count.")
+    lines.append("ret% is against the FIXED Rs" + f"{CAPITAL:,.0f}" + " capital base, not compounding year to year --")
+    lines.append("  same convention already established for this project's other institutional metrics tables.")
     return "\n".join(lines)
 
 

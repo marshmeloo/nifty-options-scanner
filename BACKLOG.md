@@ -82,6 +82,40 @@ with no cross-direction awareness) is identical between indices, so
 this directly tests the shared logic even though it can't reproduce
 Bank Nifty's own instrument/data.
 
+ANNUAL/INSTITUTIONAL-METRICS VIEW (Rs500,000 capital base, matching
+config.TOTAL_CAPITAL): current vs a simulated gate that simply drops
+every trade caught in an overlap, as if it had been blocked at entry.
+
+    Anchor              current    excl. overlap
+    Total return        +331.4%      +622.7%
+    Max drawdown           44.8%        10.2%
+    Calmar                  0.62         3.84
+    Profit factor           1.25         2.09
+
+    Sentinel            current    excl. overlap
+    Total return        +335.8%      +498.9%
+    Max drawdown           16.2%         3.8%
+    Calmar                  1.72         9.31
+    Profit factor           1.40         2.49
+
+Anchor, year by year (net Rs / return% against the fixed base):
+
+    year   current            excl. overlap
+    2020   +1.78L (35.7%)     +2.33L (46.6%)
+    2021   +2.91L (58.3%)     +6.90L (138.1%)
+    2022   +3.78L (75.6%)     +7.09L (141.8%)
+    2023   +0.44L (8.8%)      +1.86L (37.2%)
+    2024   +5.01L (100.1%)    +6.34L (126.8%)
+    2025   -0.28L (-5.6%)     +2.18L (43.6%)
+    2026*  +2.92L (58.5%)     +4.44L (88.8%)   (*partial year)
+
+2025 is the sharpest single data point: it is Anchor's ONLY losing
+year with the overlap trades included, and a solidly profitable year
+(+43.6%) with them dropped. Every year, both policies, points the same
+direction -- no year is worse without the overlap trades, most are
+dramatically better. Full data (including Sentinel's own annual rows)
+in logs/concurrent_direction_exposure_study.json.
+
 STATUS: not fixed. This is now real, large, statistically overwhelming
 evidence for a same-day opposite-direction exposure gate (block a new
 CE while a PE is open, or vice versa, mirroring how cluster_cap_blocks
