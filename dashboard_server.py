@@ -9,11 +9,23 @@ main_live.py (or supervisor.py) is already doing, nothing more.
 
 Run this in its OWN terminal, alongside main_live.py / supervisor.py:
   python3 dashboard_server.py
-Then open http://127.0.0.1:8787 in a browser. Bound to 127.0.0.1 only --
-not reachable from other machines on your network, let alone the
-internet.
+Then open http://127.0.0.1:8787 in a browser. Bound to 127.0.0.1 by
+DEFAULT -- not reachable from other machines on your network, let alone
+the internet. This is the automation's own default too
+(automation/start_trading.ps1 launches this with no args), so a normal
+scheduled run stays localhost-only.
+
+Pass --lan to also accept connections from other devices on the same
+local network (e.g. a phone on the same WiFi) -- binds 0.0.0.0 instead.
+This has REAL exposure even though the server is read-only: anyone else
+on that network (any other device on the same WiFi/router) could open
+the same URL and see live positions, P&L, and strategy internals. Fine
+on a trusted home network; don't use --lan on a shared/public/office
+network without adding some form of access control first. Still never
+writes anything or reaches Dhan/NSE regardless of --lan.
 """
 
+import argparse
 import json
 import http.server
 import socketserver
@@ -840,8 +852,27 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
 
 def main():
-    with DashboardServer((HOST, PORT), DashboardHandler) as httpd:
-        print(f"Live dashboard running at http://{HOST}:{PORT}  (Ctrl+C to stop)")
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--lan", action="store_true",
+                        help="bind 0.0.0.0 so other devices on your local network can reach this "
+                             "(e.g. a phone on the same WiFi) -- see module docstring for the exposure tradeoff")
+    parser.add_argument("--port", type=int, default=PORT)
+    args = parser.parse_args()
+
+    host = "0.0.0.0" if args.lan else HOST
+    with DashboardServer((host, args.port), DashboardHandler) as httpd:
+        if args.lan:
+            import socket
+            try:
+                lan_ip = socket.gethostbyname(socket.gethostname())
+            except OSError:
+                lan_ip = "<this PC's LAN IP -- check ipconfig>"
+            print(f"Live dashboard running at http://{lan_ip}:{args.port}  (from other devices on this network)")
+            print(f"                       and http://127.0.0.1:{args.port}  (from this PC)")
+            print("--lan is on: reachable by ANYONE on this network, not just you. Ctrl+C to stop.")
+        else:
+            print(f"Live dashboard running at http://127.0.0.1:{args.port}  (Ctrl+C to stop)")
         print("Read-only -- this never writes to any state file or talks to Dhan/NSE itself.")
         try:
             httpd.serve_forever()

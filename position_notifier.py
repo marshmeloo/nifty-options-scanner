@@ -51,6 +51,7 @@ from datetime import datetime, time as dtime
 from pathlib import Path
 
 import dashboard_server
+import opening_gap
 import premarket
 import telegram_notifier
 from atomic_state import atomic_write_json
@@ -68,6 +69,7 @@ MARKET_CLOSE = dtime(15, 40)
 CHECK_INTERVAL_SECONDS = 900   # 15 minutes
 
 BIAS_STATE_PATH = Path(__file__).parent / "state" / "position_notifier_bias.json"
+GAP_STATE_PATH = Path(__file__).parent / "state" / "position_notifier_gap.json"
 
 
 def market_is_open(now: datetime = None) -> bool:
@@ -487,6 +489,65 @@ def _check_and_alert_bias_shifts(state: dict):
     atomic_write_json(BIAS_STATE_PATH, bias_state)
 
 
+# --- opening gap -------------------------------------------------------------------
+
+def _gap_line(label: str, gap: dict) -> str:
+    if not gap or gap.get("gap_points") is None:
+        return f"{label}: gap not available yet"
+    pts, pct = gap["gap_points"], gap.get("gap_pct")
+    arrow = "\U00002b06\U0000fe0f" if pts > 0 else ("\U00002b07\U0000fe0f" if pts < 0 else "\U000027a1\U0000fe0f")
+    pct_note = f" ({pct:+.2f}%)" if pct is not None else ""
+    return f"{arrow} {label}: {pts:+.1f} pts{pct_note}  (open {gap['today_open']} vs prev close {gap['prev_close']})"
+
+
+def _maybe_send_gap_alert():
+    """
+    Today's NIFTY / Bank Nifty opening gap, as its own one-time message --
+    separate from the pre-market brief because the gap literally cannot be
+    known until today's own opening print exists (opening_gap.py compares
+    it against the prior close), which is AFTER the 09:15 market open,
+    while the pre-market brief is sent just before it (premarket.py runs
+    -Wait, blocking, before position_notifier.py even starts). Calls
+    capture_opening_gap() itself rather than only reading the cache, so
+    this doesn't depend on main_live.py's cycle having populated it first.
+    Idempotent per calendar day via GAP_STATE_PATH, same pattern
+    _check_and_alert_bias_shifts uses for bias_state.
+    """
+    today_str = datetime.now().date().isoformat()
+    sent_state = {}
+    if GAP_STATE_PATH.exists():
+        try:
+            sent_state = json.loads(GAP_STATE_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            sent_state = {}
+    if sent_state.get("date") == today_str:
+        return
+
+    try:
+        gap = opening_gap.capture_opening_gap()
+    except Exception as e:
+        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] opening gap capture failed, will retry next cycle: {e}")
+        return
+
+    nifty_gap, bn_gap = gap.get("nifty"), gap.get("banknifty")
+    if not nifty_gap and not bn_gap:
+        return  # today's opening print isn't in yet for either index -- try again next cycle
+
+    message = "\n".join([
+        "\U0001f4ca Opening Gap", "",
+        _gap_line("NIFTY", nifty_gap),
+        _gap_line("Bank Nifty", bn_gap),
+    ])
+    try:
+        telegram_notifier.send_message(message)
+        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] opening gap alert sent")
+    except Exception as e:
+        log.info(f"[{datetime.now().strftime('%H:%M:%S')}] opening gap alert send FAILED, will retry next cycle: {e}")
+        return  # don't mark as sent -- retry next cycle rather than losing it silently
+
+    atomic_write_json(GAP_STATE_PATH, {"date": today_str})
+
+
 # --- lifecycle -------------------------------------------------------------------
 
 def _send_lifecycle_message(text: str):
@@ -522,6 +583,7 @@ def check_once():
             log.info(f"[{datetime.now().strftime('%H:%M:%S')}] send failed, will retry next cycle: {e}")
 
     _check_and_alert_bias_shifts(state)
+    _maybe_send_gap_alert()
 
 
 def run_forever(interval_seconds: int = CHECK_INTERVAL_SECONDS):
