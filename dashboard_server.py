@@ -66,13 +66,17 @@ SENTINEL_TRADE_JOURNAL_PATH = LOGS_DIR / "trade_journal_sentinel.jsonl"
 BN_SENTINEL_OPEN_TRADES_PATH = STATE_DIR / "open_trades_banknifty_sentinel.json"
 BN_SENTINEL_TRADE_JOURNAL_PATH = LOGS_DIR / "trade_journal_banknifty_sentinel.jsonl"
 
-# main_live_onetrade.py -- NIFTY only, capped at 1 new trade/day (see
-# research/one_trade_per_day_study.py for the backtest behind it). Reuses
-# _sentinel_block() below unchanged; this is not a Sentinel variant, just
-# the same "read a state+journal pair the same way Anchor's own is read"
-# pattern applied to a third process.
-ONETRADE_OPEN_TRADES_PATH = STATE_DIR / "open_trades_onetrade.json"
-ONETRADE_TRADE_JOURNAL_PATH = LOGS_DIR / "trade_journal_onetrade.jsonl"
+# "One Trade/Day" (research/one_trade_per_day_study.py) is NOT its own
+# live process (main_live_onetrade.py removed 2026-08-27 -- see
+# BACKLOG.md). It never needed to be: Sentinel's own cluster cap can only
+# ever block a SECOND same-day trade, never the first, and the backtest
+# found Anchor and Sentinel produce byte-identical trades under a
+# 1-trade/day cap. So "the trade a 1-trade/day process would have taken"
+# is just Sentinel's own FIRST trade of the day -- see
+# _derive_onetrade_block() and _derive_onetrade_from_sentinel() below.
+# Applies to both indices for free, since it only reads Sentinel's
+# already-existing journals -- Bank Nifty never had its own onetrade
+# process at all, and now doesn't need one either.
 
 
 def _read_todays_closed_trades() -> list:
@@ -244,6 +248,67 @@ def _sentinel_block(open_trades_path: Path, journal_path: Path, lot_size: int) -
     }
 
 
+def _derive_onetrade_block(open_trades_path: Path, journal_path: Path, lot_size: int) -> dict:
+    """
+    Same output shape as _sentinel_block() -- open_trades/closed_today/
+    totals -- but NOT its own live process. Reads Sentinel's own state
+    for TODAY and keeps only its chronologically FIRST trade (by
+    opened_at); a real Sentinel/Anchor position can open a 2nd+ trade on
+    the same day, which a 1-trade/day process never would have, so those
+    are deliberately dropped here rather than shown.
+    """
+    block = _sentinel_block(open_trades_path, journal_path, lot_size)
+    tagged = [(t, True) for t in block["open_trades"]] + [(t, False) for t in block["closed_today"]]
+    if not tagged:
+        return {"open_trades": [], "closed_today": [], "totals": {
+            "capital_deployed": 0, "open_pnl_inr": 0, "realized_pnl_inr": 0, "total_pnl_today_inr": 0,
+        }}
+    first, is_open = min(tagged, key=lambda pair: pair[0].get("opened_at") or "")
+    open_trades = [first] if is_open else []
+    closed_today = [] if is_open else [first]
+    open_pnl = round(sum(t.get("running_pnl_inr", 0) or 0 for t in open_trades), 2)
+    realized_pnl = round(sum(t.get("pnl_inr", 0) or 0 for t in closed_today), 2)
+    return {
+        "open_trades": open_trades,
+        "closed_today": closed_today,
+        "totals": {
+            "capital_deployed": round(sum(t["capital_deployed"] for t in open_trades), 2),
+            "open_pnl_inr": open_pnl,
+            "realized_pnl_inr": realized_pnl,
+            "total_pnl_today_inr": round(open_pnl + realized_pnl, 2),
+        },
+    }
+
+
+def _derive_onetrade_from_sentinel(trades: list) -> list:
+    """
+    Historical (/pnl view) counterpart to _derive_onetrade_block() --
+    same reasoning, applied to the full closed-trade history instead of
+    just today. Groups every "Momentum (Sentinel)" row already loaded by
+    (index, calendar day) and keeps the earliest opened_at per group,
+    re-labelled as "Momentum (One Trade/Day)". Covers both NIFTY and
+    Bank Nifty from the one pass, since it only reads rows already in
+    `trades` rather than a dedicated file.
+    """
+    earliest = {}
+    for t in trades:
+        if t["strategy"] != "Momentum (Sentinel)" or not t.get("opened_at"):
+            continue
+        # Keyed by the OPEN date, not the close date (t["date"], which is
+        # closed_at-based) -- "first trade of the day" is about when it
+        # was opened. These strategies are same-day intraday only so the
+        # two normally coincide, but opened_at is the correct one to use.
+        key = (t["index"], t["opened_at"][:10])
+        if key not in earliest or t["opened_at"] < earliest[key]["opened_at"]:
+            earliest[key] = t
+    derived = []
+    for t in earliest.values():
+        d = dict(t)
+        d["strategy"] = "Momentum (One Trade/Day)"
+        derived.append(d)
+    return derived
+
+
 def _read_json(path: Path, default=None):
     try:
         return json.loads(path.read_text())
@@ -320,11 +385,9 @@ PNL_JOURNALS = [
     # just a distinct label so the two never get pooled together.
     (LOGS_DIR / "trade_journal_sentinel.jsonl", "NIFTY", "Momentum (Sentinel)"),
     (LOGS_DIR / "trade_journal_banknifty_sentinel.jsonl", "Bank Nifty", "Momentum (Sentinel)"),
-    # One Trade/Day v0.1-research: Anchor's own logic capped at 1 new
-    # trade/day (main_live_onetrade.py) -- see
-    # research/one_trade_per_day_study.py for the backtest behind it.
-    # NIFTY only; same journal shape as Anchor/Sentinel, no new parsing.
-    (LOGS_DIR / "trade_journal_onetrade.jsonl", "NIFTY", "Momentum (One Trade/Day)"),
+    # One Trade/Day v0.1-research is NOT its own journal -- see
+    # _derive_onetrade_from_sentinel(), applied after this list loads,
+    # which derives it from the Sentinel rows above for both indices.
 ]
 
 
@@ -465,6 +528,7 @@ def _load_all_pnl_trades() -> list:
                 "peak_favorable_inr": _peak_favorable_inr(t, index_label),
                 "peak_r": t.get("max_r_seen"),
             })
+    trades.extend(_derive_onetrade_from_sentinel(trades))
     return trades
 
 
@@ -637,6 +701,9 @@ def build_state() -> dict:
         "sentinel": _sentinel_block(
             BN_SENTINEL_OPEN_TRADES_PATH, BN_SENTINEL_TRADE_JOURNAL_PATH, BANKNIFTY_LOT_SIZE,
         ),
+        "onetrade": _derive_onetrade_block(
+            BN_SENTINEL_OPEN_TRADES_PATH, BN_SENTINEL_TRADE_JOURNAL_PATH, BANKNIFTY_LOT_SIZE,
+        ),
     }
 
     return {
@@ -681,8 +748,8 @@ def build_state() -> dict:
             SENTINEL_OPEN_TRADES_PATH, SENTINEL_TRADE_JOURNAL_PATH,
             getattr(config, "NIFTY_LOT_SIZE", 65),
         ),
-        "onetrade": _sentinel_block(
-            ONETRADE_OPEN_TRADES_PATH, ONETRADE_TRADE_JOURNAL_PATH,
+        "onetrade": _derive_onetrade_block(
+            SENTINEL_OPEN_TRADES_PATH, SENTINEL_TRADE_JOURNAL_PATH,
             getattr(config, "NIFTY_LOT_SIZE", 65),
         ),
         "banknifty": banknifty,

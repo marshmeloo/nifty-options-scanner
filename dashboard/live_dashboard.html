@@ -215,7 +215,7 @@
 </div>
 
 <div class="panel" id="sentinel-panel-onetrade" style="display:none;">
-  <h2>One Trade/Day v0.1-research <span style="font-weight:400; color:var(--muted); font-size:12px;">— Anchor's own logic, capped at 1 new trade/day (research/one_trade_per_day_study.py); own live process, never pooled with Anchor or Sentinel above</span></h2>
+  <h2>One Trade/Day v0.1-research <span style="font-weight:400; color:var(--muted); font-size:12px;">— derived from Sentinel's own first trade of the day (research/one_trade_per_day_study.py: Anchor and Sentinel are byte-identical under a 1-trade/day cap), not a separate live process</span></h2>
   <div id="sentinel-container-onetrade"></div>
 </div>
 
@@ -274,6 +274,11 @@
 <div class="panel" id="sentinel-panel-bn" style="display:none;">
   <h2>Sentinel v1.1-dev <span style="font-weight:400; color:var(--muted); font-size:12px;">— candidate strategy, its own live process; never pooled with Anchor's numbers above</span></h2>
   <div id="sentinel-container-bn"></div>
+</div>
+
+<div class="panel" id="sentinel-panel-onetrade-bn" style="display:none;">
+  <h2>One Trade/Day v0.1-research <span style="font-weight:400; color:var(--muted); font-size:12px;">— derived from Sentinel's own first trade of the day, not a separate live process</span></h2>
+  <div id="sentinel-container-onetrade-bn"></div>
 </div>
 
 <div class="panel" id="condor-panel-bn" style="display:none;">
@@ -1014,6 +1019,7 @@ async function refresh() {
     renderOpenTrades(bn.open_trades, bn.totals, "-bn");
     renderClosedToday(bn.closed_today, "-bn");
     renderSentinel(bn.sentinel, "-bn");
+    renderSentinel(bn.onetrade, "-onetrade-bn", "One Trade/Day");
     renderCondor(bn.condor_position, bn.condor_position_age_seconds, bn.condor_poll_interval_seconds, "-bn");
     renderDirectionalSpread(bn.directional_spread_position, bn.directional_spread_position_age_seconds, bn.directional_spread_poll_interval_seconds, "-bn");
     renderPriceAction(bn.price_action_trades, bn.price_action_closed_today, bn.price_action_log_age_seconds, bn.price_action_poll_interval_seconds, "-bn");

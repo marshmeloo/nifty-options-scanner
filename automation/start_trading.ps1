@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Runs the pre-market brief, then starts the order-flow feed, all nine
+  Runs the pre-market brief, then starts the order-flow feed, all eight
   live/paper strategy loops, and the read-only dashboard in parallel,
   hidden (no visible console windows).
 
@@ -9,7 +9,7 @@
   this project is analytics/paper-tracking only (see each script's own
   docstring), and dashboard_server.py is read-only (never writes state,
   never talks to Dhan/NSE itself). This just automates what you'd
-  otherwise do by opening thirteen terminals by hand each morning.
+  otherwise do by opening twelve terminals by hand each morning.
 
   REQUIRES DHAN_ACCESS_TOKEN / DHAN_CLIENT_ID to already be set as
   PERSISTENT Windows USER environment variables (via `setx`, run in
@@ -115,16 +115,18 @@ if ($premarketExit -eq 0) {
 # after the Sentinel files were added; STRATEGY_NAME stayed "Anchor",
 # CLUSTER_CAP_ENABLED stayed False).
 #
-# main_live_onetrade.py (added 2026-08-25): "One Trade/Day" v0.1-research
-# -- Anchor's own scan -> plan -> risk -> breakeven pipeline with ONE
-# change, config.MAX_NEW_TRADES_PER_DAY patched to 1 (default is 999,
-# effectively uncapped). Backtested in research/one_trade_per_day_study.py:
-# meaningfully lower drawdown and a higher win rate than Anchor's full
-# ~9-trades/day volume, on a realistic Rs1L account. Own state/journal/log,
-# started alongside Anchor and Sentinel, not instead of either. Status is
-# research/experimental (not in STRATEGY_VERSIONS.md's promoted registry) --
-# this starts it FORWARD-TRACKING so there is real evidence to eventually
-# decide on, same as Sentinel was before it.
+# main_live_onetrade.py -- REMOVED 2026-08-27. "One Trade/Day" doesn't
+# need its own process: research/one_trade_per_day_study.py found Anchor
+# and Sentinel produce BYTE-IDENTICAL trades under a 1-trade/day cap,
+# because Sentinel's cluster cap can only ever block a SECOND same-day
+# trade, never the first. So "the trade a 1-trade/day process would have
+# taken" is just Sentinel's own first trade of the day -- dashboard_server.py
+# now derives this directly from Sentinel's existing journal
+# (_derive_onetrade_block / _derive_onetrade_from_sentinel), for BOTH
+# NIFTY and Bank Nifty, PnL-dashboard-only. This was never real-money
+# trading, only paper-tracking for evidence, so one less always-on
+# process hitting Dhan for a number that was always recoverable from
+# data already being collected.
 #
 # main_condor.py -- REMOVED 2026-08-26 (see BACKLOG.md "Iron condor:
 # FAILS both tests the directional spread passed"). It failed both real-
@@ -146,14 +148,13 @@ if ($premarketExit -eq 0) {
 # TELEGRAM_CHAT_ID to actually deliver anything -- unlike the Dhan-
 # credentials guard above, this is NOT required to start: if unset, it
 # just logs failed-send lines to its own log file every cycle instead
-# of blocking the other twelve processes, since this is a convenience
+# of blocking the other eleven processes, since this is a convenience
 # notifier, not something trading itself depends on.
 $scripts = @(
     @{ file = "orderflow_feed.py"; args = @("--strike-range", "300") },
     @{ file = "orderflow_feed_banknifty.py"; args = @("--strike-range", "600") },
     @{ file = "main_live.py"; args = @() },
     @{ file = "main_live_sentinel.py"; args = @() },
-    @{ file = "main_live_onetrade.py"; args = @() },
     @{ file = "main_directional_spread.py"; args = @() },
     @{ file = "main_price_action.py"; args = @() },
     @{ file = "main_price_action_banknifty.py"; args = @() },
