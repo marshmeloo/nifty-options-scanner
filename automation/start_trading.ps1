@@ -138,6 +138,14 @@ if ($premarketExit -eq 0) {
 # research/*condor* backtests are untouched -- only this automation
 # entry is gone.
 #
+# dashboard_server.py runs with --lan (added 2026-08-27, by explicit
+# choice): binds 0.0.0.0 instead of 127.0.0.1 so the read-only dashboard
+# is reachable from a phone on the same WiFi during market hours, every
+# day, without a manual step. Real tradeoff, accepted deliberately: it
+# is then reachable by ANYONE on that network, not just the operator --
+# see dashboard_server.py's own docstring. Still never writes anything
+# or talks to Dhan/NSE regardless of this flag.
+#
 # position_notifier.py (added 2026-08-16): posts open positions,
 # today's pre-market summary, and intraday bias-shift alerts to
 # Telegram -- see that file's own docstring. Deliberately started AFTER
@@ -161,7 +169,7 @@ $scripts = @(
     @{ file = "main_live_banknifty.py"; args = @() },
     @{ file = "main_live_banknifty_sentinel.py"; args = @() },
     @{ file = "main_directional_spread_banknifty.py"; args = @() },
-    @{ file = "dashboard_server.py"; args = @() },
+    @{ file = "dashboard_server.py"; args = @("--lan") },
     @{ file = "position_notifier.py"; args = @() }
 )
 
