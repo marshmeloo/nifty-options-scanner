@@ -68,6 +68,15 @@ config.CLUSTER_CAP_ENABLED = True
 config.CLUSTER_CAP_ADJACENCY_POINTS = 200
 config.CLUSTER_CAP_WINDOW_MINUTES = 30
 config.RECORD_SNAPSHOTS = False
+# Opposite-direction gate (added 2026-08-27, config.py default True since
+# it shipped to Anchor -- see that flag's own comment): explicitly OFF
+# for Sentinel. Real 6-year backtest (research/opposite_direction_gate_backtest.py)
+# showed a net LOSS in total return with it on (+335.8% -> +300.4%),
+# despite every per-trade/risk metric improving slightly -- the gate
+# removes enough real winning trades, on top of the cluster cap already
+# above, that the compounded total falls. A deliberate NO, not an
+# oversight.
+config.OPPOSITE_DIRECTION_GATE_ENABLED = False
 
 from resilient_source import get_nifty_snapshot, get_nearest_expiry, get_nifty_intraday_candles
 from scanner import scan, compute_market_bias, tag_bias_conflicts

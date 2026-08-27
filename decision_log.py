@@ -62,6 +62,13 @@ def _candidate_record(setup, plan, verdict, state: dict, opened_trade: dict,
             f"{config.DIRECTION_CHASE_COOLDOWN_MINUTES} minutes -- chasing the same losing "
             f"directional read across strikes, not a fresh independent signal."
         )
+    elif tt.opposite_direction_blocks(state, setup.option_type):
+        opposite = "PE" if setup.option_type == "CE" else "CE"
+        final_decision = "REJECTED_OPPOSITE_DIRECTION_OPEN"
+        detail = (
+            f"A {opposite} position is already open -- same-day opposite-direction overlap, "
+            f"measured net-negative across 6 years (see BACKLOG.md, 2026-08-27)."
+        )
     elif verdict.decision != "APPROVED":
         final_decision = "REJECTED_RISK"
         detail = "; ".join(verdict.reasons) if verdict.reasons else "Risk check rejected this plan."

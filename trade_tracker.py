@@ -1162,6 +1162,31 @@ def cluster_cap_blocks(state: dict, strike: float, option_type: str, now: dateti
     return False
 
 
+def opposite_direction_blocks(state: dict, option_type: str) -> bool:
+    """
+    True if a position in the OPPOSITE option_type is already open --
+    blocks a new PE while any CE is open, or vice versa. See
+    config.OPPOSITE_DIRECTION_GATE_ENABLED's own comment for the
+    2026-08-27 incident and the 6-year backtest behind this.
+
+    Deliberately simpler than cluster_cap_blocks(): no adjacency band,
+    no time window -- ANY opposite-direction position currently open
+    blocks a new entry, for its full open lifetime. The measured
+    population was "same-day opposite-direction overlap" full stop,
+    not "opposite-direction AND nearby AND recent"; narrowing this the
+    way CLUSTER_CAP_WINDOW_MINUTES narrows the same-direction cap would
+    be inventing a parameter nothing here was tested against.
+
+    OFF only if config.OPPOSITE_DIRECTION_GATE_ENABLED is explicitly
+    False -- unlike CLUSTER_CAP_ENABLED, this defaults True and applies
+    to Anchor and Sentinel alike (see that config comment for why this
+    one is not a Sentinel-only differentiator).
+    """
+    if not getattr(config, "OPPOSITE_DIRECTION_GATE_ENABLED", True):
+        return False
+    return any(t["option_type"] != option_type for t in state.get("trades", []))
+
+
 def _cooldown_key(strike, option_type) -> str:
     return f"{strike}_{option_type}"
 
@@ -1239,9 +1264,10 @@ def try_open_new_trade(setups_with_plans, state, snapshot, bias_label=None, bias
     conviction clears the raised bar (after the learned adjustment),
     there isn't already an open trade on the same strike+type, it isn't
     a repeat of a plan that already stopped out today at the same price
-    (see is_repeat_of_stopped_plan), and it isn't chasing the same
+    (see is_repeat_of_stopped_plan), it isn't chasing the same
     losing directional read across a different strike (see
-    is_direction_chase).
+    is_direction_chase), and there isn't already an open position in
+    the OPPOSITE direction (see opposite_direction_blocks).
     Returns the newly opened trade dict, or None.
     """
     if state["opened_today"] >= config.MAX_NEW_TRADES_PER_DAY:
@@ -1259,6 +1285,8 @@ def try_open_new_trade(setups_with_plans, state, snapshot, bias_label=None, bias
         if is_direction_chase(state, setup.option_type, snapshot.timestamp):
             continue
         if cluster_cap_blocks(state, setup.strike, setup.option_type, snapshot.timestamp):
+            continue
+        if opposite_direction_blocks(state, setup.option_type):
             continue
 
         conviction_bar, blocked = expiry_day_rules(setup.expiry, snapshot.timestamp)

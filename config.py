@@ -32,8 +32,27 @@ NIFTY_LOT_SIZE = 65             # update if NSE revises lot size
 # episode in STRATEGY_VERSIONS.md: a backtest that looked like a clean
 # risk reduction turned out to cut ordinary trading along with the
 # actual problem, once examined closely.
+#
+# v1.0 -> v1.1, 2026-08-27: EXPLICIT, ACKNOWLEDGED EXCEPTION to the rule
+# just above. Added OPPOSITE_DIRECTION_GATE_ENABLED (see that flag's own
+# comment) on backtest evidence alone -- full 6-year NIFTY history,
+# gate ON vs OFF, the same shadow.py/trade_tracker logic real trades
+# use -- NOT live evidence, which the promotion policy in
+# STRATEGY_VERSIONS.md says is supposed to be required. Flagged here
+# rather than silently bumped: the backtest itself already contains the
+# same warning sign that policy exists for (an earlier, cruder
+# approximation of this same fix showed a much bigger, cleaner-looking
+# improvement than the real gate actually delivers -- see BACKLOG.md).
+# The real gate is a genuine net positive for Anchor (total return
+# +331.4% -> +362.1%, max drawdown 44.8% -> 24.1%, Calmar 0.62 -> 1.21)
+# but not unanimous (3 of 7 years worse) and NOT shipped to Sentinel,
+# whose real backtest showed a net LOSS in total return (+335.8% ->
+# +300.4%) despite improving every per-trade/risk metric -- see
+# main_live_sentinel.py's own override. This exception was made on
+# explicit user instruction, not a default this project's own process
+# would otherwise have taken.
 STRATEGY_NAME = "Anchor"
-STRATEGY_VERSION = "1.0"
+STRATEGY_VERSION = "1.1"
 
 # --- Scoring mode (versioned -- see scanner.py's SCORING_MODE handling) ---
 #
@@ -714,3 +733,50 @@ DIRECTION_CHASE_COOLDOWN_MINUTES = 30
 CLUSTER_CAP_ENABLED = False
 CLUSTER_CAP_ADJACENCY_POINTS = 200
 CLUSTER_CAP_WINDOW_MINUTES = 30
+
+# --- Opposite-direction exposure gate (added 2026-08-27) ---
+# A THIRD pathology, distinct from both gates above: CLUSTER_CAP only
+# ever compares a new candidate against ALREADY-OPEN SAME-DIRECTION
+# positions (trade_tracker.cluster_cap_blocks(): `if t["option_type"]
+# != option_type: continue`) -- it has zero awareness of the opposite
+# side. Found 2026-08-27 after a real Bank Nifty session: Anchor opened
+# 5 simultaneous CE positions, then -- while the CE side was still open
+# -- opened 12 simultaneous PE positions on top, as spot round-tripped
+# ~1,700pts. Sentinel's cluster cap cut that day's loss 74% (same-
+# direction stacking), but did nothing for the CE+PE overlap itself --
+# Sentinel had 2 CE and 3 PE open at overlapping times too.
+#
+# TWO ROUNDS OF TESTING, DELIBERATELY BOTH KEPT IN THE RECORD:
+#   1. research/concurrent_direction_exposure_study.py -- full 6-year
+#      NIFTY history, measured the OVERLAPPED POPULATION on its own:
+#      ~33% of trading days produce a same-day CE+PE overlap, ~38-40%
+#      of ALL trades (Anchor AND Sentinel) get caught in one, and that
+#      population is a net LOSER on average (-0.19R to -0.27R) while
+#      the rest of the system profits (+0.37R to +0.44R), t=-16.9 to
+#      -21.45. Simulating the gate as "drop every overlapped trade"
+#      suggested a huge win for both (Anchor +331%->+622% total return;
+#      Sentinel +336%->+499%) -- but that simulation deletes BOTH sides
+#      of every overlapping pair, when a real gate only ever blocks the
+#      LATER entrant, and can't capture the ripple effect of the
+#      scanner picking a DIFFERENT candidate once the first is blocked.
+#   2. research/opposite_direction_gate_backtest.py -- the REAL gate,
+#      wired into shadow.py, replayed gate-ON vs gate-OFF: Anchor's
+#      total return +331.4% -> +362.1% (real but far more modest than
+#      step 1 suggested), max drawdown 44.8% -> 24.1%, Calmar
+#      0.62 -> 1.21 -- genuine improvement, though not unanimous (3 of
+#      7 years worse). Sentinel's total return +335.8% -> +300.4%: a
+#      NET LOSS, despite every per-trade/risk metric (expectancy,
+#      profit factor, Calmar, drawdown) improving slightly -- the gate
+#      removes enough of Sentinel's real winning trades, on top of its
+#      existing cluster cap, that the compounded total falls.
+#
+# DECISION: Anchor only (STRATEGY_VERSION bumped 1.0 -> 1.1, see that
+# comment for the explicit, acknowledged exception this required to the
+# promotion policy -- this shipped on backtest evidence, not live
+# evidence). Sentinel explicitly opts OUT (see main_live_sentinel.py /
+# main_live_banknifty_sentinel.py) and stays v1.1-dev, unchanged --
+# real backtest evidence here says NO for Sentinel, not "not yet
+# decided". No adjacency/window parameters, unlike the cluster cap --
+# ANY opposite-direction position currently open blocks a new entry,
+# for its full open lifetime (trade_tracker.opposite_direction_blocks).
+OPPOSITE_DIRECTION_GATE_ENABLED = True

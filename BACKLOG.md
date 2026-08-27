@@ -3,7 +3,7 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
-## Bank Nifty 2026-08-27: Anchor stacked 19 trades (5 CE + 12 PE, simultaneously open); Sentinel's cluster cap cut the loss 74% but does NOT guard the opposite-direction case (added 2026-08-27)
+## RESOLVED (Anchor only): Bank Nifty 2026-08-27 -- Anchor stacked 19 trades (5 CE + 12 PE, simultaneously open); opposite-direction gate shipped to Anchor v1.1, Sentinel opts out on real backtest evidence (added 2026-08-27, resolved same day)
 
 Real live session, not a backtest. Bank Nifty round-tripped ~1,700pts:
 spot rallied through 58000->58400 (13:12-13:14), then reversed hard and
@@ -116,12 +116,46 @@ direction -- no year is worse without the overlap trades, most are
 dramatically better. Full data (including Sentinel's own annual rows)
 in logs/concurrent_direction_exposure_study.json.
 
-STATUS: not fixed. This is now real, large, statistically overwhelming
-evidence for a same-day opposite-direction exposure gate (block a new
-CE while a PE is open, or vice versa, mirroring how cluster_cap_blocks
-already blocks same-direction) -- but building and shipping that is a
-separate decision from measuring whether the problem is real. Flagged
-here for that decision.
+ADDENDUM: the "drop every overlapped trade" number above was an
+APPROXIMATION, not a preview of what a real gate delivers -- it deletes
+BOTH sides of every overlapping pair, when a real gate only ever
+blocks the LATER entrant, and can't capture that blocking one
+candidate frees the scanner to pick a DIFFERENT one next cycle, which
+cascades through the rest of that sequence. This is exactly the same
+shape of warning STRATEGY_VERSIONS.md's own promotion policy already
+carries from the cluster cap's history: "a backtest that looked like a
+clean risk reduction turned out to cut ordinary trading along with the
+actual problem, once examined closely."
+
+research/opposite_direction_gate_backtest.py replayed the REAL gate
+(wired into shadow.py's run_policy(), the same code path live uses)
+gate-ON vs gate-OFF, full 6-year NIFTY history:
+
+    metric              Anchor OFF->ON       Sentinel OFF->ON
+    total return        +331.4% -> +362.1%   +335.8% -> +300.4%
+    max drawdown           44.8% ->   24.1%      16.2% ->   14.0%
+    Calmar                  0.62 ->    1.21       1.72 ->    1.87
+    profit factor            1.25 ->   1.34        1.40 ->   1.43
+    expectancy/trade      +0.122R -> +0.140R    +0.189R -> +0.200R
+
+Anchor: real, genuine improvement -- more modest than the approximation
+suggested, and not unanimous (3 of 7 years worse: 2022, 2023, 2024),
+but drawdown nearly halves and Calmar roughly doubles, driven mostly by
+2025 (-5.6% -> +16.7%) and 2021.
+
+Sentinel: total return actually FALLS (+335.8% -> +300.4%), worse in 6
+of 7 years, despite every per-trade/risk metric improving slightly --
+the gate removes enough of Sentinel's real winning trades, stacked on
+top of its existing cluster cap, that the compounded total drops.
+
+DECISION: shipped to Anchor only, as an EXPLICIT, ACKNOWLEDGED
+EXCEPTION to STRATEGY_VERSIONS.md's own promotion policy (which
+requires live evidence, not backtest alone, before changing a frozen
+"Live" version) -- made on direct user instruction after this exact
+tension was flagged. config.OPPOSITE_DIRECTION_GATE_ENABLED = True
+(config.py, Anchor's real value; STRATEGY_VERSION bumped 1.0 -> 1.1),
+explicitly False in main_live_sentinel.py / main_live_banknifty_sentinel.py.
+See STRATEGY_VERSIONS.md for the full entry.
 
 ## CLOSED, NOT ADOPTED: "Hero-Zero" -- deliberately picking the cheapest option is WORSE than picking a random one nearby, and expiry day confers no measurable edge (added 2026-08-26)
 

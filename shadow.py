@@ -161,6 +161,16 @@ class Policy:
     # None means no narrowing (identical to the original, untimed
     # behaviour), so this stays off unless explicitly set.
     cluster_window_minutes: float = None
+    # Opposite-direction exposure gate (added 2026-08-27, matches
+    # config.OPPOSITE_DIRECTION_GATE_ENABLED / trade_tracker.
+    # opposite_direction_blocks()): blocks a new candidate while a
+    # position in the OPPOSITE option_type is open, no adjacency/window
+    # parameters -- see that config comment for the 2026-08-27 incident
+    # and the 6-year backtest. Defaults True (matches live's default),
+    # unlike the cluster caps above which default off/None to keep
+    # every existing backtest reproducible -- set False to reproduce
+    # pre-2026-08-27 behaviour.
+    use_opposite_direction_gate: bool = True
 
     def resolved_min_score(self) -> float:
         return self.min_score if self.min_score is not None else config.MIN_CONVICTION_SCORE_TO_TRACK
@@ -211,6 +221,21 @@ def build_price_index(cycles) -> dict:
                 (snapshot.timestamp, q.bid, q.ask, q.ltp)
             )
     return index
+
+
+def opposite_direction_blocked(setup, positions: list, ts) -> bool:
+    """
+    Backtest counterpart of trade_tracker.opposite_direction_blocks():
+    True if a position in the OPPOSITE option_type is currently open
+    (opened_ts <= ts < closed_ts). No adjacency/window narrowing, same
+    as the live gate -- see Policy.use_opposite_direction_gate.
+    """
+    return any(
+        p["key"][1] != setup.option_type
+        and p["opened_ts"] <= ts
+        and (p["closed_ts"] is None or p["closed_ts"] > ts)
+        for p in positions
+    )
 
 
 def _closeable_price(bid, ltp) -> float:
@@ -502,6 +527,8 @@ def run_policy(day: str, policy: Policy, verbose: bool = False) -> list:
                     continue
 
                 if correlated_cluster_blocked(setup, positions, ts, policy):
+                    continue
+                if policy.use_opposite_direction_gate and opposite_direction_blocked(setup, positions, ts):
                     continue
 
                 # Live's expiry-day discipline: a raised bar and a 14:00

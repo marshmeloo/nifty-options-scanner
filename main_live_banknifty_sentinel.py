@@ -75,6 +75,15 @@ config.CLUSTER_CAP_ENABLED = True
 config.CLUSTER_CAP_ADJACENCY_POINTS = 500
 config.CLUSTER_CAP_WINDOW_MINUTES = 30
 config.RECORD_SNAPSHOTS = False
+# Opposite-direction gate (added 2026-08-27, config.py default True since
+# it shipped to Anchor -- see that flag's own comment): explicitly OFF
+# for Sentinel. Real 6-year NIFTY backtest (research/opposite_direction_gate_backtest.py,
+# the closest available evidence -- shadow.py has no Bank Nifty replay)
+# showed a net LOSS in total return with it on (+335.8% -> +300.4%),
+# despite every per-trade/risk metric improving slightly. A deliberate
+# NO, not an oversight -- applied here too since Bank Nifty Sentinel
+# shares the same cluster-cap-plus-gate interaction risk.
+config.OPPOSITE_DIRECTION_GATE_ENABLED = False
 
 dhan_source.get_nifty_daily_candles = functools.partial(
     dhan_source.get_nifty_daily_candles,

@@ -73,10 +73,13 @@ results can always be grouped by which named version produced them.
 
 ---
 
-## Anchor — v1.0 — LIVE
+## Anchor — v1.1 — LIVE
 
 **Status:** Live in production, both NIFTY and Bank Nifty momentum,
-since 2026-08-14. **Frozen** — protected by the promotion policy above.
+since 2026-08-14 (v1.0), updated to v1.1 on 2026-08-27. No longer
+frozen in the strictest sense — see the v1.0 -> v1.1 change below,
+which is an explicit, acknowledged exception to the promotion policy
+above, not a reversal of it.
 
 **What it is:** 2R target, ATR-derived stop, breakeven stop armed at
 +0.5R (`config.BREAKEVEN_ARM_R = 0.5`), forced end-of-day close. Every
@@ -92,12 +95,41 @@ drawdown over 2020-08 to 2026-08; Bank Nifty 8,324 trades /
 in `research/nifty_momentum_breakeven_0.5R.html` and
 `research/banknifty_momentum_breakeven_0.5R.html`.
 
-**Known open question:** correlated same-direction clusters on adjacent
-strikes (NIFTY 2026-08-12, 23 trades in three bursts; Bank Nifty
-2026-08-14, 6 adjacent PE strikes) are not risk-capped by
-`MAX_TOTAL_EXPOSURE_PCT`, which only sums risk rupees and cannot tell a
-diversified position from the same bet repeated. This is exactly what
-Sentinel (below) is investigating a fix for.
+**v1.0 -> v1.1, 2026-08-27: opposite-direction exposure gate added
+(`config.OPPOSITE_DIRECTION_GATE_ENABLED = True`).** Real Bank Nifty
+session: Anchor opened 5 simultaneous CE positions, then — while the
+CE side was still open — 12 simultaneous PE positions on top, as spot
+round-tripped ~1,700pts (-₹15,014 that day). Root cause:
+`cluster_cap_blocks()` only ever compares a candidate against
+already-open SAME-DIRECTION positions — zero awareness of the
+opposite side, in either Anchor or Sentinel.
+
+Tested on the REAL gate (`research/opposite_direction_gate_backtest.py`,
+wired into `shadow.py`'s actual `run_policy()`, not an approximation),
+full 6-year NIFTY history, gate OFF vs ON:
+
+| | OFF | ON |
+|---|---|---|
+| Total return | +331.4% | +362.1% |
+| Max drawdown | 44.8% | 24.1% |
+| Calmar | 0.62 | 1.21 |
+| Profit factor | 1.25 | 1.34 |
+| Expectancy/trade | +0.122R | +0.140R |
+
+Genuine improvement, not unanimous (3 of 7 years worse: 2022, 2023,
+2024), driven mostly by 2025 (-5.6% -> +16.7%) and 2021. **This shipped
+on backtest evidence alone**, not live evidence — an explicit exception
+to the promotion policy above, made on direct user instruction after
+the tension was raised. See BACKLOG.md's full entry for the numbers
+and the earlier, more dramatic-looking approximation that turned out
+to overstate the effect (same cautionary shape as the cluster cap's
+own history below).
+
+**Known open question, still real:** the same investigation found
+Sentinel's version of this fix is a net LOSS in total return
+(+335.8% -> +300.4%) despite improving every per-trade/risk metric —
+see Sentinel's own section below. Not resolved, deliberately left as
+"Anchor gets it, Sentinel doesn't" rather than forced to match.
 
 ---
 
@@ -201,6 +233,19 @@ remains a paper-tracked candidate and Anchor remains unchanged, with
 `CLUSTER_CAP_ENABLED = False` on both its NIFTY and Bank Nifty
 processes. See the policy at the top of this file.
 
+**Opposite-direction exposure gate evaluated 2026-08-27, declined.**
+Anchor picked this up as v1.1 (see its own section above) after a real
+Bank Nifty incident and a full 6-year backtest. The same backtest run
+on Sentinel's config (`research/opposite_direction_gate_backtest.py`)
+came back a net LOSS in total return: +335.8% -> +300.4%, worse in 6 of
+7 years, despite every per-trade/risk metric (expectancy, profit
+factor, Calmar, drawdown) improving slightly. The gate removes enough
+of Sentinel's real winning trades, stacked on top of the cluster cap
+already above, that the compounded total falls.
+`config.OPPOSITE_DIRECTION_GATE_ENABLED = False` explicitly set in
+`main_live_sentinel.py` / `main_live_banknifty_sentinel.py` — a
+deliberate NO, not an oversight. Sentinel stays v1.1-dev.
+
 ---
 
 ## Version history
@@ -214,3 +259,7 @@ processes. See the policy at the top of this file.
 | 2026-08-15 | Sentinel v1.1-dev time-window sweep complete: 30-min window gives -14% profit for -62% drawdown vs Anchor -- best trade-off found so far, not yet promoted |
 | 2026-08-15 | Sentinel v1.1-dev built as its own live paper-tracking process (NIFTY + Bank Nifty), 200pt/30min. Anchor confirmed unaffected in isolation. Not yet started. |
 | 2026-08-16 | Sentinel v1.1-dev wired into `automation/start_trading.ps1` (both NIFTY and Bank Nifty) -- now starts automatically every trading morning alongside Anchor. Anchor's own two entries in the script left byte-for-byte unchanged. |
+| 2026-08-27 | Real Bank Nifty session: Anchor stacked 5 CE + 12 PE simultaneously open, -Rs15,014; found cluster_cap_blocks() has zero opposite-direction awareness. |
+| 2026-08-27 | Opposite-direction gate approximation ("drop every overlapped trade") backtested: looked dramatic (Anchor +331%->+622%, Sentinel +336%->+499%) -- later found to overstate the real effect. |
+| 2026-08-27 | REAL gate backtested (wired into shadow.py's actual run_policy()): Anchor +331.4%->+362.1% return, 44.8%->24.1% drawdown -- genuine but far more modest. Sentinel +335.8%->+300.4% -- a net loss. |
+| 2026-08-27 | Anchor promoted v1.0 -> v1.1 (opposite-direction gate ON) as an explicit, acknowledged exception to the promotion policy above -- shipped on backtest evidence, not live evidence, per direct user instruction. Sentinel evaluated the same fix and explicitly declined it; stays v1.1-dev. |
