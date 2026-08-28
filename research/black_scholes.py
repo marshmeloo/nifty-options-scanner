@@ -64,6 +64,40 @@ def gamma(spot: float, strike: float, time_to_expiry_years: float, iv: float,
     return phi_d1 / (spot * iv * sqrt_t)
 
 
+def delta(spot: float, strike: float, time_to_expiry_years: float, iv: float,
+          option_type: str, r: float = RISK_FREE_RATE) -> float:
+    """
+    Black-Scholes delta. N(d1) for a call, N(d1) - 1 for a put (so a put
+    is negative), sharing d1 with gamma() above.
+
+    `iv` as a fraction (0.12 for 12%), same convention as gamma().
+
+    WHY THIS EXISTS, separately from gamma(): plan_generator._stop_distance
+    sizes the stop as ATR x |delta| x STOP_ATR_MULTIPLE, and falls back to
+    a FLAT config.DEFAULT_STOP_LOSS_PCT when a quote has no delta.
+    Reconstructed history has no Greeks, so every historical backtest was
+    silently taking that fallback -- measured 2026-08-28 over 1,085
+    reconstructed trades: stop = 30.0% of premium on EVERY one of them
+    (median, mean, and every individual trade), against live's real
+    ATR x delta result of 15-24% (usually the 15% MIN_STOP_PCT floor).
+    The backtest was giving every trade ~2x the stop room live gives it,
+    which makes R a different unit on each side and every R-multiple
+    incomparable. See BACKLOG.md.
+
+    Returns 0.0 on the same degenerate inputs gamma() returns 0.0 for, so
+    a caller that treats "no delta" as "fall back to flat" keeps behaving
+    exactly as it did rather than being handed a misleading 0.5.
+    """
+    if time_to_expiry_years <= 0 or iv <= 0 or spot <= 0 or strike <= 0:
+        return 0.0
+    sqrt_t = math.sqrt(time_to_expiry_years)
+    d1 = (
+        math.log(spot / strike) + (r + iv ** 2 / 2) * time_to_expiry_years
+    ) / (iv * sqrt_t)
+    n_d1 = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2)))
+    return n_d1 if str(option_type).upper() == "CE" else n_d1 - 1.0
+
+
 def time_to_expiry_years(expiry: str, now: datetime = None) -> float:
     """
     Years between `now` and `expiry`'s effective close, for feeding

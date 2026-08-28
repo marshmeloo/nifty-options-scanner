@@ -19,6 +19,8 @@ Run: python -m pytest tests/ -q
 
 import datetime
 
+import pytest
+
 import config
 from shadow import (
     Policy, ShadowTrade, _closeable_price, _finalise, walk_trade_forward,
@@ -442,3 +444,169 @@ def test_structure_cache_recomputes_when_a_new_candle_appears(monkeypatch):
     cache.get([_candle(0, close=24338.85), _candle(1, close=24350.0)])
 
     assert calls == [1, 2]
+
+
+# --------------------------------------------------------------------------
+# Backtest-vs-live fidelity fixes (2026-08-28). Each of these closed a gap
+# where shadow.py silently modelled a DIFFERENT strategy than the one live
+# runs -- see BACKLOG.md for how they were found and measured.
+# --------------------------------------------------------------------------
+
+class _Q:
+    """Minimal stand-in for OptionQuote's fields these helpers touch."""
+    def __init__(self, strike=24000.0, option_type="CE", ltp=100.0, iv=12.0,
+                 delta=None, bid=None, ask=None, expiry="2026-09-03"):
+        self.strike, self.option_type, self.ltp, self.iv = strike, option_type, ltp, iv
+        self.delta, self.bid, self.ask, self.expiry = delta, bid, ask, expiry
+
+
+class _Snap:
+    def __init__(self, chain, spot=24000.0, ts=None):
+        self.chain = chain
+        self.spot = spot
+        self.timestamp = ts or datetime.datetime(2026, 8, 28, 11, 0)
+
+
+def test_fill_missing_delta_populates_only_what_is_missing():
+    """Reconstructed history has no Greeks, so plan_generator fell back to a
+    FLAT 30% stop while live computed 15-24% from ATR x delta."""
+    from shadow import fill_missing_delta
+    missing = _Q(strike=24000.0, option_type="CE", delta=None)
+    already = _Q(strike=24100.0, option_type="CE", delta=0.42)
+    snap = _Snap([missing, already])
+
+    n = fill_missing_delta(snap)
+
+    assert n == 1
+    assert missing.delta is not None and 0 < missing.delta < 1
+    assert already.delta == 0.42, "a real delta must never be overwritten"
+
+
+def test_fill_missing_delta_signs_puts_negative():
+    from shadow import fill_missing_delta
+    ce, pe = _Q(option_type="CE"), _Q(option_type="PE")
+    fill_missing_delta(_Snap([ce, pe]))
+    assert ce.delta > 0 and pe.delta < 0
+
+
+def test_fill_missing_delta_skips_quotes_with_no_iv():
+    """No IV means no Black-Scholes input -- must leave delta None so the
+    caller still takes its documented flat-stop fallback."""
+    from shadow import fill_missing_delta
+    q = _Q(iv=0)
+    assert fill_missing_delta(_Snap([q])) == 0
+    assert q.delta is None
+
+
+def test_fill_missing_book_straddles_ltp_and_leaves_real_books_alone():
+    """Without this the backtest transacted at LTP on BOTH legs and paid no
+    spread, while live pays the ask and receives the bid."""
+    from shadow import fill_missing_book
+    synth = _Q(ltp=100.0, bid=None, ask=None)
+    real = _Q(ltp=100.0, bid=99.0, ask=101.0)
+
+    n = fill_missing_book(_Snap([synth, real]), spread_pct=0.266)
+
+    assert n == 1
+    assert synth.bid < 100.0 < synth.ask
+    assert (synth.ask - synth.bid) == pytest.approx(100.0 * 0.00266, abs=0.02)
+    assert (real.bid, real.ask) == (99.0, 101.0), "a real book must never be overwritten"
+
+
+def test_fill_missing_book_disabled_by_zero_spread():
+    from shadow import fill_missing_book
+    q = _Q(ltp=100.0)
+    assert fill_missing_book(_Snap([q]), spread_pct=0) == 0
+    assert q.bid is None and q.ask is None
+
+
+def test_walk_forward_applies_the_breakeven_arm(monkeypatch):
+    """config.BREAKEVEN_ARM_R runs live (11% of real Sentinel trades closed
+    BREAKEVEN_STOP) but shadow could not produce that outcome at all until
+    2026-08-28."""
+    monkeypatch.setattr(config, "BREAKEVEN_ARM_R", 0.5)
+    # entry 100, stop 70 -> 1R = 30. Peak 118 clears 0.5R (=115), then the
+    # price falls back through entry: breakeven, not a slide to the stop.
+    index = {("24000.0", "PE"): _series([
+        (1, 118.0, 119.0, 118.0),
+        (2, 99.0, 100.0, 99.0),
+    ])}
+    t = walk_trade_forward(index, ("24000.0", "PE"),
+                           datetime.datetime(2026, 7, 29, 9, 15), _trade())
+    assert t.outcome == "BREAKEVEN_STOP"
+
+
+def test_breakeven_arm_does_not_fire_before_it_arms(monkeypatch):
+    """A trade that never reached 0.5R must still run to its original stop."""
+    monkeypatch.setattr(config, "BREAKEVEN_ARM_R", 0.5)
+    index = {("24000.0", "PE"): _series([
+        (1, 104.0, 105.0, 104.0),   # only +0.13R, nowhere near arming
+        (2, 69.0, 70.0, 69.0),
+    ])}
+    t = walk_trade_forward(index, ("24000.0", "PE"),
+                           datetime.datetime(2026, 7, 29, 9, 15), _trade())
+    assert t.outcome == "LOSS"
+
+
+def test_breakeven_arm_never_pre_empts_a_target_hit(monkeypatch):
+    """Same ordering live uses: an outright win beats the breakeven floor."""
+    monkeypatch.setattr(config, "BREAKEVEN_ARM_R", 0.5)
+    index = {("24000.0", "PE"): _series([(1, 160.0, 161.0, 160.0)])}
+    t = walk_trade_forward(index, ("24000.0", "PE"),
+                           datetime.datetime(2026, 7, 29, 9, 15), _trade())
+    assert t.outcome == "WIN"
+
+
+def test_breakeven_arm_off_reproduces_old_behaviour(monkeypatch):
+    monkeypatch.setattr(config, "BREAKEVEN_ARM_R", None)
+    index = {("24000.0", "PE"): _series([
+        (1, 118.0, 119.0, 118.0),
+        (2, 99.0, 100.0, 99.0),
+        (3, 69.0, 70.0, 69.0),
+    ])}
+    t = walk_trade_forward(index, ("24000.0", "PE"),
+                           datetime.datetime(2026, 7, 29, 9, 15), _trade())
+    assert t.outcome == "LOSS"
+
+
+def test_config_overrides_are_restored_after_a_replay(monkeypatch):
+    """Bank Nifty replays apply that process's config patches for their
+    duration (the same way main_live_banknifty_sentinel.py does). A
+    backtest must not leave global config changed for whatever runs next."""
+    import shadow as _shadow
+    before = (config.NIFTY_LOT_SIZE, config.PREMIUM_MIN, config.PREMIUM_MAX)
+    monkeypatch.setattr(_shadow, "snapshot_recorder",
+                        type("_", (), {"load_day": staticmethod(lambda d, **kw: [])}))
+    _shadow.run_policy("2026-08-27", Policy(
+        name="bn", config_overrides=_shadow.BANKNIFTY_SENTINEL_OVERRIDES))
+    assert (config.NIFTY_LOT_SIZE, config.PREMIUM_MIN, config.PREMIUM_MAX) == before
+
+
+def test_banknifty_overrides_match_the_live_process_file():
+    """These exist only to mirror main_live_banknifty_sentinel.py. If that
+    file changes a value and this constant doesn't, Bank Nifty replays
+    silently model a different process -- so read the real file."""
+    import re, shadow as _shadow
+    from pathlib import Path as _P
+    source = (_P(__file__).parent.parent / "main_live_banknifty_sentinel.py").read_text(encoding="utf-8")
+    for key, expected in _shadow.BANKNIFTY_SENTINEL_OVERRIDES.items():
+        m = re.search(rf"^config\.{key}\s*=\s*([0-9.]+)", source, re.M)
+        assert m, f"{key} is no longer patched by main_live_banknifty_sentinel.py"
+        assert float(m.group(1)) == float(expected), (
+            f"{key}: live file says {m.group(1)}, BANKNIFTY_SENTINEL_OVERRIDES says {expected}")
+
+
+def test_nifty_replay_calls_load_day_with_no_extra_kwargs(monkeypatch):
+    """The default NIFTY path must keep calling load_day(day) exactly as it
+    always has -- existing callers and stubs pass only the day."""
+    import shadow as _shadow
+    seen = {}
+
+    def _stub(d):           # deliberately accepts ONLY the day
+        seen["day"] = d
+        return []
+
+    monkeypatch.setattr(_shadow, "snapshot_recorder",
+                        type("_", (), {"load_day": staticmethod(_stub)}))
+    _shadow.run_policy("2026-08-27", Policy(name="nifty"))
+    assert seen["day"] == "2026-08-27"

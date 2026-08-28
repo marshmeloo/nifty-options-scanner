@@ -70,6 +70,30 @@ class Policy:
     config.py should reproduce live behaviour.
     """
     name: str = "default"
+    # Which underlying to replay. NIFTY is the only one with reconstructed
+    # HISTORY (Dhan's rolling-options endpoint is queried for it alone), so
+    # a non-NIFTY symbol can only replay days recorded LIVE -- 12 Bank Nifty
+    # days as of 2026-08-28 against NIFTY's 1,485. That is enough for
+    # research/live_replay_parity.py (31 of the 35 real Sentinel trades so
+    # far are Bank Nifty ones) and nowhere near enough to validate a
+    # strategy on. Before this existed, shadow.py could not read Bank Nifty
+    # recordings at all, which is why every Bank Nifty conclusion in
+    # STRATEGY_VERSIONS.md is extrapolated from NIFTY rather than measured.
+    symbol: str = "NIFTY"
+    snapshot_dir: str = None           # None -> snapshot_recorder.SNAPSHOT_DIR
+    # config values to apply FOR THE DURATION of this replay, then restore
+    # -- exactly the mechanism a live process uses for a second underlying
+    # (main_live_banknifty_sentinel.py just assigns config.NIFTY_LOT_SIZE =
+    # 30, config.PREMIUM_MIN = 300.0 and so on at import).
+    #
+    # Replaying another underlying means replicating ITS process's whole
+    # config patch set, not just the obvious one. Learned the hard way on
+    # 2026-08-28: a Bank Nifty replay given only the lot size still used
+    # NIFTY's PREMIUM_MIN/MAX of 10-150 against Bank Nifty premiums, picked
+    # strikes ~1,000-3,000 points away from the ones live actually traded,
+    # and matched 0 of 31 real trades. Use BANKNIFTY_SENTINEL_OVERRIDES
+    # below rather than assembling the dict by hand.
+    config_overrides: dict = None
     min_score: float = None            # None -> config.MIN_CONVICTION_SCORE_TO_TRACK
     target_rr: float = None            # None -> config.DEFAULT_TARGET_RR
     start_time: str = "09:15"
@@ -170,6 +194,14 @@ class Policy:
     # unlike the cluster caps above which default off/None to keep
     # every existing backtest reproducible -- set False to reproduce
     # pre-2026-08-27 behaviour.
+    # Reconstruct the missing `delta` on historical quotes via
+    # Black-Scholes (see fill_missing_delta() for the measurement and the
+    # validation). Defaults True so shadow.py MATCHES LIVE by default --
+    # same reasoning as use_expiry_day_rules above, and the same kind of
+    # silent divergence: without it every historical trade gets a flat
+    # 30%-of-premium stop while live computes 15-24% from ATR x delta.
+    # Set False only to reproduce pre-2026-08-28 results.
+    reconstruct_missing_greeks: bool = True
     use_opposite_direction_gate: bool = True
     # Reversal-exit (added 2026-08-27, research/reversal_exit_study.py's
     # tested hypothesis, built for real): when a fully-qualified OPPOSITE-
@@ -314,9 +346,34 @@ def walk_trade_forward(index, key, entry_ts, trade: ShadowTrade, lots: int = 1) 
     Advance a simulated trade through every later recorded cycle until it
     hits target, hits stop, or the day ends. Prices are evaluated on the
     side a real exit would cross.
+
+    BREAKEVEN ARM. Mirrors trade_tracker.update_open_trades exactly: once
+    the trade has EVER been up config.BREAKEVEN_ARM_R, a return to the
+    entry price closes it here rather than letting it keep sliding to the
+    original stop. Same ordering live uses -- target first (an outright
+    win is strictly better), then the breakeven floor, then the original
+    stop.
+
+    This was MISSING here until 2026-08-28, which meant every backtest
+    that did not go through research/ratchet_study.walk_with_ratchet
+    silently modelled a strategy without the breakeven arm, while live
+    has run it the whole time (measured: 4 of 35 real Sentinel trades,
+    11%, closed as BREAKEVEN_STOP -- an exit the backtest could not
+    produce at all). Gated on config.BREAKEVEN_ARM_R, the SAME switch
+    live reads, so the two cannot drift apart again; set it to None to
+    reproduce pre-2026-08-28 behaviour.
+
+    Intentionally NOT a Policy field: research/ratchet_study.py and
+    research/breakeven_arm_study.py monkeypatch this function wholesale
+    with their own 5-argument version, so adding a parameter here would
+    break that contract silently. Reading the config both sides already
+    share is what keeps them honest.
     """
     series = index.get(key, [])
     peak = trough = trade.entry
+    arm_r = getattr(config, "BREAKEVEN_ARM_R", None)
+    risk_unit = trade.entry - trade.stop
+    armed = False
 
     for ts, bid, _ask, ltp in series:
         if ts <= entry_ts:
@@ -326,10 +383,14 @@ def walk_trade_forward(index, key, entry_ts, trade: ShadowTrade, lots: int = 1) 
             continue
         peak = max(peak, px)
         trough = min(trough, px)
+        if arm_r is not None and risk_unit > 0 and not armed:
+            armed = (peak - trade.entry) / risk_unit >= arm_r
 
         outcome = None
         if px >= trade.target:
             outcome = "WIN"
+        elif armed and px <= trade.entry:
+            outcome = "BREAKEVEN_STOP"
         elif px <= trade.stop:
             outcome = "LOSS"
         if outcome:
@@ -398,6 +459,129 @@ def _close_trade_early(index, key, entry_ts, exit_ts, exit_px, trade: ShadowTrad
             continue
         peak, trough = max(peak, px), min(trough, px)
     return _finalise(trade, exit_ts, exit_px, "REVERSAL_EXIT", peak, trough, lots)
+
+
+# Mirrors main_live_banknifty_sentinel.py's own config patches (that file
+# assigns these directly at import). Kept beside the Policy that consumes
+# them so a change there is one grep away from being reflected here --
+# they WILL drift otherwise, and the failure is silent: a Bank Nifty
+# replay run with NIFTY's premium band picks strikes thousands of points
+# away from the real ones and simply reports different trades.
+BANKNIFTY_SENTINEL_OVERRIDES = {
+    "NIFTY_LOT_SIZE": 30,
+    "PREMIUM_MIN": 300.0,
+    "PREMIUM_MAX": 800.0,
+    "STRIKE_RANGE_POINTS": 2000,
+    "CLUSTER_CAP_ADJACENCY_POINTS": 500,
+    "CLUSTER_CAP_WINDOW_MINUTES": 30,
+}
+
+
+def fill_missing_book(snapshot, spread_pct: float = None) -> int:
+    """
+    Give quotes with no top-of-book a SYNTHETIC bid/ask straddling LTP,
+    so entry crosses an ask and exit hits a bid exactly as live does.
+    Returns how many were filled; quotes that already have a real book
+    are never touched.
+
+    WHY. Dhan's Expired Options endpoint returns OHLC only, so every
+    reconstructed quote has bid = ask = None. plan_generator.build_plan
+    then falls back to `entry = quote.ltp` and shadow._closeable_price
+    falls back to LTP on the way out -- the backtest transacted at the
+    midpoint on both legs and paid no spread at all, while live pays the
+    ask on entry and receives the bid on exit. costs.round_trip does NOT
+    make this up: it deliberately excludes slippage on the grounds that
+    "when bid/ask fills are on, crossing the spread is already reflected
+    in the entry/exit prices themselves" -- which is true live and false
+    on reconstructed data, so the cost simply went missing.
+
+    MEASURED, NOT ASSUMED. The default comes from 43,927 real live quotes
+    (2026-08-17..27) inside the actual config.PREMIUM_MIN..PREMIUM_MAX
+    band: median spread 0.10 points, 0.266% of mid. Worth stating plainly
+    because costs.py's own docstring reasons from a ONE-POINT spread --
+    10x wider than anything actually observed -- so the cost of this gap
+    had been overestimated by roughly an order of magnitude. Real impact
+    is small: about 0.005-0.017R per trade against a measured edge of
+    ~0.195R, i.e. 3-6% of it. Small is not zero, and it is the right
+    sign, so it is now modelled rather than argued about.
+
+    Synthesising the BOOK rather than special-casing the fill maths means
+    build_plan, _closeable_price and build_price_index all work unchanged
+    -- the same trick fill_missing_delta() uses. Must run BEFORE
+    build_price_index(), which snapshots bid/ask into the price series.
+    """
+    if spread_pct is None:
+        spread_pct = getattr(config, "SYNTHETIC_SPREAD_PCT", 0.266)
+    if not spread_pct or spread_pct <= 0:
+        return 0
+    half = spread_pct / 200.0     # % of mid -> half-spread as a fraction of price
+    filled = 0
+    for q in snapshot.chain:
+        if q.bid is not None or q.ask is not None or not q.ltp or q.ltp <= 0:
+            continue
+        q.bid = round(q.ltp * (1 - half), 2)
+        q.ask = round(q.ltp * (1 + half), 2)
+        filled += 1
+    return filled
+
+
+def fill_missing_delta(snapshot, resolved_expiry: str = None) -> int:
+    """
+    Populate `delta` on any quote in `snapshot.chain` that has none,
+    using Black-Scholes from what reconstructed history DOES carry
+    (spot, strike, time to expiry, IV). Returns how many were filled.
+    Quotes that already have a real delta are never touched.
+
+    WHY THIS MATTERS MORE THAN IT LOOKS. plan_generator._stop_distance
+    sizes the stop as ATR x |delta| x STOP_ATR_MULTIPLE and falls back to
+    a FLAT config.DEFAULT_STOP_LOSS_PCT whenever a quote has no delta.
+    Dhan's Expired Options endpoint returns no Greeks, so EVERY backtest
+    over reconstructed history was silently taking that fallback while
+    live took the real path. Measured 2026-08-28 over 1,085 reconstructed
+    trades: the stop was 30.0% of premium on every single one of them
+    (median, mean, min 29.95, max 30.05), against live's real
+    ATR x delta outcome of 15-24% (usually pinned to the 15%
+    MIN_STOP_PCT floor). The backtest was giving every trade about TWICE
+    the stop room live gives it -- so 1R meant a different thing on each
+    side, and every R-multiple, win rate and expectancy compared across
+    them was comparing two different strategies.
+
+    VALIDATED, NOT ASSUMED, the same way black_scholes.gamma() was:
+    against 3,227 real Dhan-reported deltas from live recorded snapshots
+    (2026-08-17..27), median absolute relative error 4.2%. That error is
+    worst on far-OTM strikes where delta is tiny and a relative error
+    means little; on what actually matters -- the resulting stop
+    distance, after MIN_STOP_PCT/MAX_STOP_PCT clamping, over 835 quotes
+    inside the real PREMIUM_MIN..PREMIUM_MAX band -- reconstructed delta
+    reproduces live's stop to a MEDIAN DIFFERENCE OF 0.000 percentage
+    points (mean 0.74pp, p90 2.25pp), versus the ~13pp error of the flat
+    30% fallback it replaces. The clamp absorbs most of the delta error,
+    which is exactly why the far-OTM tail doesn't propagate.
+
+    Deliberately leaves theta/vega/gamma alone: nothing in the entry or
+    exit path reads them, so reconstructing them would be unvalidated
+    machinery with no consumer.
+    """
+    from research import black_scholes as bs
+
+    now = snapshot.timestamp
+    filled = 0
+    for q in snapshot.chain:
+        if q.delta is not None or not q.iv or not q.strike:
+            continue
+        expiry = resolved_expiry
+        if expiry is None:
+            expiry = q.expiry
+            if not expiry or str(expiry).startswith("rolling:"):
+                expiry = hs.nominal_expiry_date(now.date()).isoformat()
+        t = bs.time_to_expiry_years(expiry, now)
+        if t <= 0:
+            continue
+        d = bs.delta(snapshot.spot, q.strike, t, q.iv / 100, q.option_type)
+        if d:
+            q.delta = d
+            filled += 1
+    return filled
 
 
 class _StructureCache:
@@ -555,9 +739,50 @@ def run_policy(day: str, policy: Policy, verbose: bool = False, blocked_reversal
     stop/target/EOD? Default None -- zero cost/behavior change for every
     existing caller.
     """
-    cycles = list(snapshot_recorder.load_day(day))
+    from contextlib import contextmanager
+    from pathlib import Path as _Path
+
+    @contextmanager
+    def _config_overrides(overrides):
+        """Apply a live process's own config patches for the duration of a
+        replay, the same way that process applies them -- but restore them
+        afterwards, since a backtest must never leave global state changed
+        for whatever runs next in the same interpreter."""
+        if not overrides:
+            yield
+            return
+        _MISSING = object()
+        previous = {k: getattr(config, k, _MISSING) for k in overrides}
+        for k, v in overrides.items():
+            setattr(config, k, v)
+        try:
+            yield
+        finally:
+            for k, old in previous.items():
+                if old is _MISSING:
+                    delattr(config, k)
+                else:
+                    setattr(config, k, old)
+
+    # Only pass the extra kwargs when they are actually non-default: the
+    # NIFTY path then calls load_day(day) exactly as it always has, which
+    # keeps every existing caller and test stub working unchanged.
+    load_kwargs = {}
+    if policy.snapshot_dir:
+        load_kwargs["snapshot_dir"] = _Path(policy.snapshot_dir)
+    if policy.symbol and policy.symbol != "NIFTY":
+        load_kwargs["symbol"] = policy.symbol
+    cycles = list(snapshot_recorder.load_day(day, **load_kwargs))
     if not cycles:
         return []
+
+    # Both enrichments must happen BEFORE build_price_index(), which
+    # snapshots bid/ask/ltp into the per-contract price series that every
+    # later exit is priced off. Filling the book afterwards would give
+    # entries a spread and exits none.
+    if policy.reconstruct_missing_greeks:
+        for _snap, _c, _m in cycles:
+            fill_missing_book(_snap)
 
     index = build_price_index(cycles)
     cache = _StructureCache()
@@ -586,7 +811,7 @@ def run_policy(day: str, policy: Policy, verbose: bool = False, blocked_reversal
     # == "LOSS") is a discrete, real-time event a live trader would act on.
     loss_known_at = None
 
-    with tt.journal_writes_disabled():
+    with tt.journal_writes_disabled(), _config_overrides(policy.config_overrides):
         for snapshot, candles, _meta in cycles:
             ts = snapshot.timestamp
             if loss_known_at is not None and ts >= loss_known_at:
@@ -597,6 +822,9 @@ def run_policy(day: str, policy: Policy, verbose: bool = False, blocked_reversal
                 break
             if policy.one_at_a_time and open_until and ts <= open_until:
                 continue
+
+            if policy.reconstruct_missing_greeks:
+                fill_missing_delta(snapshot)
 
             levels, context, atr = cache.get(candles)
             try:

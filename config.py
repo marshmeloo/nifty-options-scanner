@@ -283,6 +283,19 @@ GST_RATE = 0.18                 # on brokerage + exchange + SEBI
 # (CSV/TradingView tiers), and flags on the trade which basis was used.
 USE_BID_ASK_FILLS = True
 
+# BACKTEST-ONLY (shadow.fill_missing_book). Reconstructed history carries
+# no top of book, so backtests used to transact at LTP on BOTH legs and
+# pay no spread at all, while live pays the ask and receives the bid.
+# This is the synthetic spread, as a % of mid, used to straddle LTP when
+# a quote has no real book. Live quotes are never touched by it.
+#
+# MEASURED, not assumed: 43,927 real live quotes (2026-08-17..27) inside
+# the PREMIUM_MIN..PREMIUM_MAX band -- median 0.10 points, 0.266% of mid.
+# Note costs.py's docstring reasons from a ONE-POINT spread, ~10x wider
+# than anything observed; the real cost is ~0.005-0.017R per trade
+# against a ~0.195R measured edge. Set to None/0 to disable.
+SYNTHETIC_SPREAD_PCT = 0.266
+
 # --- Liquidity screen (applied at candidate selection, see scanner.py) ---
 # A tradeable premium is not the same as a tradeable contract. Without
 # these, a strike showing a plausible price on 50 lots of volume can be

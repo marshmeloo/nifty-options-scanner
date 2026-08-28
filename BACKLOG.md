@@ -3,6 +3,117 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## FIXED (backtest fidelity): shadow.py was backtesting a DIFFERENT strategy than the one live runs -- flat 30% stops instead of 15-24%, and no breakeven arm at all (2026-08-28)
+
+Follow-on from the stale-structure bug below. That one turned out to be
+harmless to the 6-year numbers; chasing the same question further --
+"if the logic is the same, why aren't the trades the same?" -- found
+three divergences that are NOT harmless, because they change what the
+backtest is a backtest OF.
+
+**1. Stop sizing (the serious one).** plan_generator._stop_distance
+sizes the stop as `ATR x |delta| x STOP_ATR_MULTIPLE`, clamped to
+MIN_STOP_PCT..MAX_STOP_PCT (15-40%), and falls back to a FLAT
+`DEFAULT_STOP_LOSS_PCT` (30%) when a quote carries no delta. Dhan's
+Expired Options endpoint returns no Greeks, so every historical backtest
+silently took the fallback:
+
+| | stop as % of premium |
+|---|---|
+| backtest, 1,085 reconstructed trades | **30.0%** -- median, mean, and every individual trade (min 29.95, max 30.05) |
+| live, 35 real Sentinel trades | **15.0%** typical, range 15.0-23.6% |
+
+The backtest was giving every trade about TWICE the stop room live gives
+it. 1R therefore meant a different thing on each side, and every
+R-multiple, win rate and expectancy compared across them was comparing
+two different strategies. Position SIZE was not affected --
+MAX_LOTS_PER_TRADE = 1 on both sides, checked rather than assumed.
+
+Fixed by reconstructing delta via Black-Scholes
+(`shadow.fill_missing_delta`, `research/black_scholes.delta`), the same
+technique gamma_exposure.py already uses and validates. VALIDATED
+against 3,227 real Dhan-reported deltas from live recordings: median
+absolute relative error 4.2%. That error is worst far OTM where delta is
+tiny; on what actually matters -- the resulting stop after clamping,
+over 835 quotes in the real premium band -- reconstructed delta
+reproduces live's stop to a **median difference of 0.000 percentage
+points** (mean 0.74pp, p90 2.25pp), against the ~13pp error of the flat
+fallback. The clamp absorbs the delta error, which is why the far-OTM
+tail does not propagate. Effect: stop is now 19.7% median (range
+14.96-40.0), and outcomes shift as expected -- LOSS 232 -> 378,
+EOD_CLOSE 419 -> 271 over the same 150 days.
+
+**2. The breakeven arm was not modelled at all.** `BREAKEVEN_ARM_R = 0.5`
+has run live the whole time (4 of 35 real Sentinel trades, 11%, closed
+`BREAKEVEN_STOP`), but shadow.walk_trade_forward had no breakeven logic
+-- only research/ratchet_study.py's monkeypatched replacement did, so
+every backtest NOT run through that study modelled a strategy without
+it, and could not produce that outcome at all. Now implemented in
+walk_trade_forward itself, mirroring trade_tracker.update_open_trades'
+exact ordering (target, then breakeven floor, then original stop), and
+gated on the SAME config.BREAKEVEN_ARM_R live reads so the two cannot
+drift apart again. Deliberately not a Policy field: the ratchet studies
+monkeypatch this function wholesale with a 5-argument version, and
+adding a parameter would break that contract silently. Effect: 322
+BREAKEVEN_STOP outcomes over the same 150 days, where there were none.
+
+**3. No spread was paid.** Reconstructed quotes have bid = ask = None, so
+build_plan fell back to `entry = ltp` and _closeable_price to LTP on the
+way out -- the backtest transacted at the midpoint on both legs while
+live pays the ask and receives the bid. costs.round_trip does NOT cover
+this: it deliberately excludes slippage because "when bid/ask fills are
+on, crossing the spread is already reflected in the entry/exit prices
+themselves", true live and false on reconstructed data. Fixed by
+synthesising a book (`shadow.fill_missing_book`,
+`config.SYNTHETIC_SPREAD_PCT`) so build_plan/_closeable_price/
+build_price_index all work unchanged.
+
+MEASURED, not assumed: 43,927 real live quotes in the actual
+PREMIUM_MIN..PREMIUM_MAX band, median spread **0.10 points / 0.266% of
+mid**. Worth recording that costs.py's own docstring reasons from a
+ONE-POINT spread -- roughly 10x wider than anything observed -- so this
+cost had been OVERestimated by about an order of magnitude. Real impact
+is ~0.005-0.017R per trade against a ~0.195R measured edge, i.e. 3-6%
+of it. Small, correctly signed, now modelled instead of argued about.
+
+**Also added: an end-to-end fidelity check, and Bank Nifty replay.**
+Every check above is component-by-component and can pass while the whole
+still diverges. `research/live_replay_parity.py` replays days recorded
+LIVE and compares against the real journal -- the only end-to-end
+measure available. It is what found the stale-structure bug in the first
+place. Results after all three fixes:
+
+| | live trades the replay found | replay trades live took |
+|---|---|---|
+| NIFTY Sentinel (from 2026-08-17, when live actually started) | **4/4 (100%)** | 4/8 (50%) |
+| Bank Nifty Sentinel | **19/31 (61%)** | 19/22 (86%) |
+
+Entry times match within 0.8-2.3 minutes, and 6 of 10 NIFTY days agree
+exactly (both zero). Bank Nifty's 12 "live only" trades are all on
+2026-08-17 -- the 21-trade cluster day -- which is expected and
+reassuring rather than a miss: live ran v1.1-dev with the gate OFF, and
+the replay runs gate + reversal exit ON, so those are precisely the
+trades the new controls exist to prevent.
+
+Bank Nifty replay needed `Policy.symbol` / `snapshot_dir` /
+`config_overrides` (shadow could not read Bank Nifty recordings at all
+before). A caution worth keeping: given ONLY the lot size, the Bank
+Nifty replay still used NIFTY's PREMIUM_MIN/MAX of 10-150 against Bank
+Nifty premiums, picked strikes 1,000-3,000 points from the real ones,
+and matched **0 of 31** trades -- silently, with plausible-looking
+output. Replaying another underlying means replicating its process's
+WHOLE config patch set; `shadow.BANKNIFTY_SENTINEL_OVERRIDES` mirrors
+main_live_banknifty_sentinel.py's, with a test that re-reads that file
+so the two cannot drift.
+
+**STILL OPEN.** Bank Nifty has only 12 live-recorded days and NO
+reconstructed history (Dhan's rolling-options endpoint is queried for
+NIFTY alone), so every Bank Nifty conclusion in STRATEGY_VERSIONS.md
+remains extrapolated from NIFTY, not measured. And reconstructed history
+has no intra-candle resolution, so the 6-year backtest still models
+structure updating once per 5-minute candle while live re-evaluates
+every ~30-40 seconds -- not fixable by any of the above.
+
 ## FIXED (backtest-only bug, no shipped number changed): shadow.py scanned on stale market structure when replaying REAL recorded days -- reconstructed history was never affected, so every v1.1/v1.2 decision stands, now reproducibly (2026-08-28)
 
 Found by refusing to explain away a live-vs-replay mismatch. Replaying
