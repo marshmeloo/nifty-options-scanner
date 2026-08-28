@@ -106,6 +106,57 @@ WHOLE config patch set; `shadow.BANKNIFTY_SENTINEL_OVERRIDES` mirrors
 main_live_banknifty_sentinel.py's, with a test that re-reads that file
 so the two cannot drift.
 
+### RESULT of re-running everything under the corrected backtest
+
+`logs/directional_exposure_backtest_fidelity.json`, all 1,485 days, six
+policy runs. Return % and max drawdown % are directly comparable between
+the two runs (both are rupees against the same fixed Rs5,00,000 base);
+**R-based metrics are NOT** -- R is defined by the stop, and the stop is
+what changed, so expectancy_r means a different thing on each side.
+
+| | | OLD (broken) | NEW (corrected) |
+|---|---|---|---|
+| **Anchor** | baseline return / DD | +331.4% / 44.8% | +366.9% / **21.3%** |
+| | gate only | +362.1% / 24.1% | +381.5% / 22.6% |
+| | gate + exit | +546.6% / 26.2% | +423.5% / **19.2%** |
+| **Sentinel** | baseline return / DD | +335.8% / 16.2% | +354.5% / **5.6%** |
+| | gate only | +300.4% / 14.0% | +346.7% / 6.3% |
+| | gate + exit | +485.3% / 5.5% | +411.5% / **4.4%** |
+
+**The v1.2 decision holds for both, with a much smaller effect.**
+Anchor gate+exit vs baseline: return +15.4% relative (was +64.9%), max
+drawdown 21.3% -> 19.2%, Calmar 1.38 -> 1.66, better in 6 of 7 years.
+Sentinel: +16.1% relative (was +44.5%), drawdown 5.57% -> 4.41%, Calmar
+5.18 -> 7.12, also 6 of 7 years. Every dimension still improves; the
+magnitude was inflated roughly 3-4x by the flat-30% stops.
+
+**The v1.1 decision -- the gate ALONE -- does NOT survive.** It shipped
+on a headline drawdown halving, 44.8% -> 24.1%, which was an artifact:
+most of that "44.8%" baseline drawdown was the flat 30% stop letting
+losers run, not something the gate fixed. Corrected, the gate alone is
+roughly neutral-to-slightly-negative on risk-adjusted terms for Anchor
+-- return +4.0% relative, but drawdown gets WORSE (21.3% -> 22.6%) and
+Calmar falls (1.38 -> 1.33). The gate is worth having as part of the
+package it now ships in, and was not worth shipping on its own.
+
+No live config changes as a result: both Anchor and Sentinel already run
+v1.2 (gate + reversal exit), which the corrected numbers support. v1.1
+is a historical waypoint no process runs.
+
+**Sentinel's gate-alone decline is CONFIRMED**, and for the same reason
+it was made: still a net return loss (-2.2% relative, was -10.5%), still
+a worse Calmar. That call was right on the broken data and stays right
+on the corrected data.
+
+**Two incidental corrections worth carrying forward.** The system's real
+drawdown profile is far better than the old backtest suggested -- Anchor
+baseline 44.8% -> 21.3%, Sentinel 16.2% -> 5.6% -- because realistic
+stops cut losses much sooner than a flat 30% one does. And win rates
+fall (Anchor 41.4% -> 33.2%) for the same reason: tighter stops get hit
+more often. Neither is a regression; both are the old numbers being
+wrong in a flattering direction on drawdown and an unflattering one on
+win rate.
+
 **STILL OPEN.** Bank Nifty has only 12 live-recorded days and NO
 reconstructed history (Dhan's rolling-options endpoint is queried for
 NIFTY alone), so every Bank Nifty conclusion in STRATEGY_VERSIONS.md
