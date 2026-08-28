@@ -3,6 +3,81 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## FIXED (backtest-only bug, no shipped number changed): shadow.py scanned on stale market structure when replaying REAL recorded days -- reconstructed history was never affected, so every v1.1/v1.2 decision stands, now reproducibly (2026-08-28)
+
+Found by refusing to explain away a live-vs-replay mismatch. Replaying
+the real recorded 2026-08-17 session did not reproduce the trades live
+actually took, and "timing noise" was not a good enough answer.
+
+**The bug.** `shadow._StructureCache` keyed on
+`(len(candles), candles[-1].timestamp)`, on the reasoning that "the
+candle series only changes every few minutes". The LAST candle is still
+FORMING: within one minute-candle's life the recorder captures many
+cycles and that candle's high/low/close/volume keep moving while its
+timestamp and the list length do not. All three of these keyed
+identically to `(46, 13:00:00)`:
+
+| cycle    | high     | close    | volume    |
+|----------|----------|----------|-----------|
+| 13:00:18 | 24339.30 | 24338.85 |   256,492 |
+| 13:01:21 | 24347.45 | 24337.10 |   952,252 |
+| 13:02:03 | 24347.45 | 24343.25 | 1,284,466 |
+
+So the structure computed at 13:00:18 was served unchanged for ~5
+minutes. LIVE has no such cache -- `main_live*.py` calls
+`analyze_with_context()`/`compute_atr()` fresh every cycle -- so the
+backtest saw a staler market than the process it was modelling.
+Measured cost, same cycle: NIFTY 24300 CE scored **6.0 live** (cleared
+`MIN_CONVICTION_SCORE_TO_TRACK` = 5.0, and live really did trade it) but
+**3.0** through the stale cache -- below the bar, so the replay never
+took it. Verified as cause directly: same cycle, same candles, cold
+cache 6.0 / warm cache 3.0. Fixed by keying on the last candle's OHLCV
+as well; the cache still holds across cycles where nothing changed.
+
+**Blast radius: none, and this is the part worth reading.** The gate and
+reversal-exit studies all run on RECONSTRUCTED history
+(`source == "dhan_historical"`), which generates one cycle per COMPLETED
+candle -- there is no forming candle to go stale on:
+
+| data                              | cycles | distinct old keys | distinct new keys | extra recomputes |
+|-----------------------------------|--------|-------------------|-------------------|------------------|
+| reconstructed (any of 4 days)     |     75 |                74 |                74 |            **0** |
+| real recorded 2026-08-17          |    506 |                73 |               506 |              433 |
+| real recorded 2026-08-24          |    595 |                72 |               595 |              523 |
+
+The fix therefore changes NOTHING on the 6-year history, which is why
+the full re-run reproduced every shipped figure to the last digit
+(verified field-by-field against the original logs: Anchor
+331.4/362.1/546.6%, drawdown 44.8/24.1/26.2%, 2,435 reversal exits;
+Sentinel 335.8/300.4/485.3%, drawdown 16.2/14.0/5.5%, 1,633 reversal
+exits). **No shipped decision, config value, or published number
+changed.** The bug only ever bit when replaying real recorded live days,
+which is exactly the one place it was caught.
+
+**Made reproducible.** Those figures originally came from ad-hoc inline
+one-liners, so when this bug surfaced there was nothing to just re-run
+-- the policy combinations had to be reconstructed from log files. All
+six runs now live in `research/directional_exposure_backtest.py`
+(`python -m research.directional_exposure_backtest`), which is what
+produced the confirming numbers above.
+
+**Residual fidelity gap, NOT fixed and not fixable by a cache key.**
+Reconstructed history has no intra-candle resolution at all, so the
+backtest inherently models a market whose structure updates once per
+candle, while live re-evaluates every ~30-40 seconds inside a forming
+candle. Live can therefore act on information the 6-year backtest
+structurally cannot see. Replaying REAL recorded days (now that the
+cache is fixed) is the higher-fidelity check, and is the only way to
+compare against live trade-for-trade -- worth doing as recorded live
+history accumulates.
+
+Same class as the `expiry_day_rules` "rolling:" label bug documented in
+`shadow.Policy.use_expiry_day_rules` (every backtest ever run silently
+never detected an expiry day). Third instance: a silent
+backtest-vs-live divergence that no test caught because both sides
+looked internally consistent. Regression tests added in
+`tests/test_shadow.py`.
+
 ## SHIPPED (Anchor v1.2): reversal exit -- the opposite-direction gate blocks a signal, but does nothing for the position it was blocked BY; closing that position too is a real, large improvement, with a real cost the first approximation couldn't see (added 2026-08-27)
 
 Follow-on from the opposite-direction gate (Anchor v1.1, entry above):

@@ -402,10 +402,48 @@ def _close_trade_early(index, key, entry_ts, exit_ts, exit_px, trade: ShadowTrad
 
 class _StructureCache:
     """
-    price_action.analyze() is the expensive part of a cycle and the
-    candle series only changes every few minutes. Keyed on the last
-    candle's timestamp plus the count, which is exactly when the derived
-    structure can change.
+    price_action.analyze() is the expensive part of a cycle, so its result
+    is cached. The key must capture EVERYTHING that can change the derived
+    structure between two cycles.
+
+    The key used to be (len(candles), candles[-1].timestamp) on the
+    reasoning that "the candle series only changes every few minutes".
+    That reasoning was wrong, and it silently corrupted every backtest
+    ever run through run_policy() until 2026-08-28.
+
+    The LAST candle is still FORMING. Within one minute-candle's life the
+    recorder captures many cycles, and that candle's high/low/close/volume
+    keep moving while its timestamp and the list length stay put -- so the
+    old key was identical across all of them. Real example, NIFTY
+    2026-08-17, all three keying to (46, 13:00:00):
+
+        13:00:18   high 24339.30   close 24338.85   vol   256,492
+        13:01:21   high 24347.45   close 24337.10   vol   952,252
+        13:02:03   high 24347.45   close 24343.25   vol 1,284,466
+
+    The structure computed at 13:00:18 was therefore served unchanged
+    until a NEW candle appeared ~5 minutes later, so the backtest scanned
+    on market structure up to a full candle stale. LIVE has no such cache
+    -- main_live*.py calls analyze_with_context()/compute_atr() fresh on
+    every cycle (main_live_sentinel.py ~line 219) -- so this was a pure
+    backtest-vs-live divergence, in the direction of the backtest seeing a
+    staler market than the live process it was supposed to be modelling.
+
+    Measured cost of the stale read, same 2026-08-17 13:02:03 cycle: NIFTY
+    24300 CE scored 6.0 live (cleared MIN_CONVICTION_SCORE_TO_TRACK=5.0,
+    and live really did trade it) but 3.0 through the stale cache -- below
+    the bar, so no backtest ever took it. Verified as cause directly:
+    same cycle, same candles, cold cache 6.0 / warm cache 3.0.
+
+    Same class of silent backtest/live divergence as the expiry_day_rules
+    "rolling:" label bug documented in Policy.use_expiry_day_rules -- and
+    found the same way, by refusing to explain away a live-vs-replay
+    mismatch as timing noise.
+
+    Keying on the last candle's OHLCV as well makes a forming candle
+    invalidate the cache exactly when its data actually moves, which is
+    the behaviour live gets for free by not caching at all. The cache
+    still does its job: it holds across cycles where nothing changed.
     """
 
     def __init__(self):
@@ -415,7 +453,9 @@ class _StructureCache:
     def get(self, candles):
         if not candles:
             return [], None, None
-        key = (len(candles), candles[-1].timestamp)
+        last = candles[-1]
+        key = (len(candles), last.timestamp, last.open, last.high,
+               last.low, last.close, getattr(last, "volume", None))
         if key != self._key:
             try:
                 levels, context = price_action.analyze_with_context(candles)

@@ -360,3 +360,85 @@ def test_unrealized_uses_the_last_price_at_or_before_now_never_a_future_one():
     _exp, at_30 = risk_state_at(index, positions, _at(30))
     _exp, at_90 = risk_state_at(index, positions, _at(90))
     assert at_30 < at_90, "the 90-minute price must not leak into the 30-minute reading"
+
+
+# --------------------------------------------------------------------------
+# _StructureCache -- the stale forming-candle bug (found 2026-08-28)
+#
+# The cache key used to be (len(candles), candles[-1].timestamp), which
+# CANNOT distinguish two cycles inside the same still-forming candle even
+# though that candle's high/low/close/volume have moved. run_policy()
+# therefore scanned on structure up to a full candle stale, while live
+# (main_live*.py) recomputes analyze_with_context()/compute_atr() fresh
+# every cycle and has no cache at all. See _StructureCache's own docstring
+# for the measured 2026-08-17 case (NIFTY 24300 CE: 6.0 live, 3.0 stale --
+# straddling MIN_CONVICTION_SCORE_TO_TRACK, so the backtest never took a
+# trade live really did take).
+# --------------------------------------------------------------------------
+
+def _candle(minute, close, high=None, low=None, volume=1000):
+    from models import Candle
+    return Candle(
+        timestamp=datetime.datetime(2026, 8, 17, 13, minute),
+        open=100.0, high=high if high is not None else close,
+        low=low if low is not None else close, close=close, volume=volume,
+    )
+
+
+def test_structure_cache_recomputes_while_the_last_candle_is_still_forming(monkeypatch):
+    """The regression this whole fix exists for: same candle COUNT, same
+    last-candle TIMESTAMP, but the forming candle's OHLCV has moved -- the
+    cache must NOT serve the earlier answer."""
+    import price_action
+    from shadow import _StructureCache
+
+    calls = []
+    monkeypatch.setattr(price_action, "analyze_with_context",
+                        lambda candles: (calls.append(candles[-1].close), ([], None))[1])
+    monkeypatch.setattr(price_action, "compute_atr", lambda candles: 1.0)
+
+    cache = _StructureCache()
+    forming_early = [_candle(0, close=24338.85, high=24339.30, volume=256492)]
+    forming_later = [_candle(0, close=24343.25, high=24347.45, volume=1284466)]
+
+    cache.get(forming_early)
+    cache.get(forming_later)
+
+    assert calls == [24338.85, 24343.25], (
+        "the forming candle moved; the cache served a stale structure")
+
+
+def test_structure_cache_still_caches_when_nothing_changed(monkeypatch):
+    """The fix must not turn the cache off -- an identical candle series
+    across two cycles still recomputes only once."""
+    import price_action
+    from shadow import _StructureCache
+
+    calls = []
+    monkeypatch.setattr(price_action, "analyze_with_context",
+                        lambda candles: (calls.append(1), ([], None))[1])
+    monkeypatch.setattr(price_action, "compute_atr", lambda candles: 1.0)
+
+    cache = _StructureCache()
+    candles = [_candle(0, close=24338.85, high=24339.30, volume=256492)]
+
+    cache.get(candles)
+    cache.get(list(candles))  # a different list object, identical content
+
+    assert calls == [1], "identical candles should not trigger a recompute"
+
+
+def test_structure_cache_recomputes_when_a_new_candle_appears(monkeypatch):
+    import price_action
+    from shadow import _StructureCache
+
+    calls = []
+    monkeypatch.setattr(price_action, "analyze_with_context",
+                        lambda candles: (calls.append(len(candles)), ([], None))[1])
+    monkeypatch.setattr(price_action, "compute_atr", lambda candles: 1.0)
+
+    cache = _StructureCache()
+    cache.get([_candle(0, close=24338.85)])
+    cache.get([_candle(0, close=24338.85), _candle(1, close=24350.0)])
+
+    assert calls == [1, 2]
