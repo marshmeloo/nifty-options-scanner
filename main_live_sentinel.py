@@ -1,5 +1,5 @@
 """
-Standalone live loop for the Sentinel v1.1-dev candidate on NIFTY --
+Standalone live loop for the Sentinel v1.2-dev candidate on NIFTY --
 forward PAPER-TRACKING only, same "NOTHING HERE PLACES A REAL BROKER
 ORDER" guarantee as main_live.py. Runs as its OWN process, completely
 independent of main_live.py (Anchor v1.0): own state, own journal, own
@@ -478,7 +478,13 @@ def check_open_trades_fast(state: dict, expiry: str):
 def run_forever():
     ws = workspace.role()
     git = workspace.git_state()
-    log.info(f"[SENTINEL v1.1-dev] Workspace: {ws.upper()}  |  git {git['branch']} @ {git['commit']}"
+    # Read the version from config rather than hardcoding it here. The
+    # literal that used to sit in this string said "v1.1-dev" for a whole
+    # session AFTER config.STRATEGY_VERSION was bumped to 1.2-dev above,
+    # so the log -- the audit trail -- misreported which strategy actually
+    # traded, while the journal (which does read config) recorded it
+    # correctly. Anything naming the version must derive it.
+    log.info(f"[SENTINEL v{config.STRATEGY_VERSION}] Workspace: {ws.upper()}  |  git {git['branch']} @ {git['commit']}"
              + ("  [UNCOMMITTED CHANGES]" if git["dirty"] else ""))
     if ws == workspace.DEVELOPMENT:
         log.info("  WARNING: running a live session from the DEVELOPMENT checkout. Trades "
@@ -492,7 +498,10 @@ def run_forever():
     log.info(f"[SENTINEL] Tracking expiry: {expiry}. Polling every {POLL_INTERVAL_SECONDS}s during market hours.")
     log.info(f"Max {config.MAX_NEW_TRADES_PER_DAY} new trades/day, conviction bar {config.MIN_CONVICTION_SCORE_TO_TRACK}.")
     log.info(f"Cluster cap: {config.CLUSTER_CAP_ADJACENCY_POINTS}pt / {config.CLUSTER_CAP_WINDOW_MINUTES}min "
-             f"(the ONLY difference from Anchor v1.0 -- see STRATEGY_VERSIONS.md)")
+             f"-- Sentinel's own entry filter, which Anchor does not run. "
+             f"Opposite-direction gate: {config.OPPOSITE_DIRECTION_GATE_ENABLED}, "
+             f"reversal exit: {config.REVERSAL_EXIT_ENABLED} (both shared with Anchor "
+             f"since 2026-08-27). See STRATEGY_VERSIONS.md.")
     log.info(tt.summarize_recent_lessons())
 
     state = tt.load_open_trades()
