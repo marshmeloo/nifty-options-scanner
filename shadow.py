@@ -70,15 +70,20 @@ class Policy:
     config.py should reproduce live behaviour.
     """
     name: str = "default"
-    # Which underlying to replay. NIFTY is the only one with reconstructed
-    # HISTORY (Dhan's rolling-options endpoint is queried for it alone), so
-    # a non-NIFTY symbol can only replay days recorded LIVE -- 12 Bank Nifty
-    # days as of 2026-08-28 against NIFTY's 1,485. That is enough for
-    # research/live_replay_parity.py (31 of the 35 real Sentinel trades so
-    # far are Bank Nifty ones) and nowhere near enough to validate a
-    # strategy on. Before this existed, shadow.py could not read Bank Nifty
-    # recordings at all, which is why every Bank Nifty conclusion in
-    # STRATEGY_VERSIONS.md is extrapolated from NIFTY rather than measured.
+    # Which underlying to replay, paired with snapshot_dir below.
+    #
+    # BOTH indices have real reconstructed history, backfilled from the
+    # same Dhan Expired Options endpoint: logs/snapshots (NIFTY, 1,491
+    # days from 2020-08) and logs/snapshots_banknifty (BANK NIFTY, 1,244
+    # days from 2021-08). BOTH live only in the DEV checkout -- production
+    # keeps just what its own processes record (23 and 12 days), which is
+    # exactly the trap that produced a wrong claim on 2026-08-28 that Bank
+    # Nifty had no history and all its conclusions were extrapolated. It
+    # does, they aren't: sweep_banknifty_cluster_cap.py picked the live
+    # 500pt band from that history across 5 independent ~1-year periods,
+    # and research/banknifty_directional_exposure_backtest.py measures the
+    # gate and reversal exit on it. Check the DEV checkout before
+    # concluding data is missing.
     symbol: str = "NIFTY"
     snapshot_dir: str = None           # None -> snapshot_recorder.SNAPSHOT_DIR
     # config values to apply FOR THE DURATION of this replay, then restore

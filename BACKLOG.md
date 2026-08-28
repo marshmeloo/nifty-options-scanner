@@ -3,6 +3,68 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## OPEN (decide before going live): capital sets WHICH TRADES HAPPEN, not position size -- Bank Nifty is unusable below ~Rs 3.5L and already skips 10% at Rs 5L (2026-08-28)
+
+Raised while answering "what is the minimum capital to run Sentinel".
+The answer is not the cash needed to buy premium; it is a sizing floor
+that silently removes trades.
+
+MAX_LOTS_PER_TRADE = 1, so capital never scales position size. What it
+does control is plan_generator.py's sizing:
+
+    max_risk_rupees = TOTAL_CAPITAL * (MAX_RISK_PER_TRADE_PCT / 100)   # 1%
+    lots_by_risk    = int(max_risk_rupees // risk_per_lot)             # -> 0
+
+If 1% of capital cannot cover ONE lot's stop-distance risk, `lots` is 0
+and the candidate is dropped with no error and no log line. Capital is
+therefore a silent filter on the strategy's trade population.
+
+Measured on the real distributions (NIFTY 965 trades / 250 days,
+Bank Nifty 1,830 trades / 400 days, both run with sizing unconstrained
+so nothing was pre-excluded):
+
+| capital | NIFTY trades sized | Bank Nifty trades sized |
+|---|---|---|
+| Rs 1,00,000 | 57.4% | **0.0%** |
+| Rs 1,50,000 | 81.6% | 8.1% |
+| Rs 2,00,000 | 89.0% | 21.5% |
+| Rs 2,50,000 | 94.0% | 37.3% |
+| Rs 3,00,000 | 98.7% | 52.2% |
+| Rs 3,50,000 | 99.8% | 77.3% |
+| Rs 4,00,000 | 100.0% | 86.8% |
+| Rs 5,00,000 | 100.0% | 90.3% |
+
+Hard floors (cheapest trade either index ever produces): NIFTY
+Rs 9,750; **Bank Nifty Rs 1,35,330** -- below that Bank Nifty Sentinel
+takes ZERO trades, because its premium band is 300-800 on a lot of 30.
+
+**At the current Rs 5,00,000 Bank Nifty already skips ~10% of its
+trades** (1,653 of 1,830 sized). NIFTY is unaffected -- its widest
+risk/lot is Rs 3,624 against a Rs 5,000 budget. Full Bank Nifty coverage
+needs Rs 7,20,960.
+
+IMPORTANT AND REASSURING: every headline figure in this file was
+produced at TOTAL_CAPITAL = 500,000, so they ALREADY include the skipped
+trades. Bank Nifty's +895.1% / 9.6% drawdown is what Rs 5L delivers, not
+something that needs Rs 7.2L.
+
+Cash for premium is never the binding constraint: peak simultaneous
+deployment is Rs 1,40,795 worst-day on Bank Nifty, Rs 28,898 on NIFTY.
+
+**DECISION PENDING.** Going live below Rs 5L is planned. Two things to
+settle first, neither measured yet:
+  - Below ~Rs 3.5L, Bank Nifty degrades fast (77% -> 52% -> 21%), and it
+    is the index doing most of the trading and most of the profit. The
+    SUBSET that survives the filter is the narrow-stop half; whether that
+    subset performs like the whole has NOT been tested. Skipped trades
+    are not a random sample.
+  - Deliberately NOT comparing Rs 5L vs Rs 7.25L for now -- explicitly
+    out of scope while starting small.
+
+A worthwhile cheap test when it matters: re-run each index at the
+intended capital and compare return/drawdown against the Rs 5L run,
+rather than assuming the filtered subset behaves like the measured one.
+
 ## FIXED (backtest fidelity): shadow.py was backtesting a DIFFERENT strategy than the one live runs -- flat 30% stops instead of 15-24%, and no breakeven arm at all (2026-08-28)
 
 Follow-on from the stale-structure bug below. That one turned out to be
@@ -157,13 +219,29 @@ more often. Neither is a regression; both are the old numbers being
 wrong in a flattering direction on drawdown and an unflattering one on
 win rate.
 
-**STILL OPEN.** Bank Nifty has only 12 live-recorded days and NO
-reconstructed history (Dhan's rolling-options endpoint is queried for
-NIFTY alone), so every Bank Nifty conclusion in STRATEGY_VERSIONS.md
-remains extrapolated from NIFTY, not measured. And reconstructed history
-has no intra-candle resolution, so the 6-year backtest still models
-structure updating once per 5-minute candle while live re-evaluates
-every ~30-40 seconds -- not fixable by any of the above.
+**CORRECTED, same day.** An earlier version of this entry claimed Bank
+Nifty had "only 12 live-recorded days and NO reconstructed history", so
+every Bank Nifty conclusion was extrapolated from NIFTY. **That was
+wrong.** Bank Nifty has 1,244 reconstructed days (2021-08-04 to
+2026-08-11) in `logs/snapshots_banknifty`, backfilled from the same Dhan
+Expired Options endpoint NIFTY's history comes from, and
+`sweep_banknifty_cluster_cap.py` had already used it to choose the live
+500pt band across 5 independent ~1-year periods.
+
+The error was checking the PRODUCTION checkout, which keeps only what
+its own live processes record (23 NIFTY days, 12 Bank Nifty). The
+research history lives in DEV. Worth remembering as a trap: "the data
+isn't there" is a claim about a checkout, not about the data, and prod
+is the wrong checkout to ask.
+
+`research/banknifty_directional_exposure_backtest.py` now measures the
+gate and reversal exit directly on that history, the same three-stage
+comparison NIFTY gets.
+
+**STILL OPEN.** Reconstructed history has no intra-candle resolution, so
+the backtest models structure updating once per 5-minute candle while
+live re-evaluates every ~30-40 seconds -- not fixable by any of the
+above.
 
 ## FIXED (backtest-only bug, no shipped number changed): shadow.py scanned on stale market structure when replaying REAL recorded days -- reconstructed history was never affected, so every v1.1/v1.2 decision stands, now reproducibly (2026-08-28)
 

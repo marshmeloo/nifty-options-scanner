@@ -610,3 +610,27 @@ def test_nifty_replay_calls_load_day_with_no_extra_kwargs(monkeypatch):
                         type("_", (), {"load_day": staticmethod(_stub)}))
     _shadow.run_policy("2026-08-27", Policy(name="nifty"))
     assert seen["day"] == "2026-08-27"
+
+
+def test_banknifty_reconstructed_history_exists_in_dev():
+    """Guards a wrong claim made on 2026-08-28: that Bank Nifty had no
+    reconstructed history and every Bank Nifty conclusion was extrapolated
+    from NIFTY. It has 1,244 days; the error was checking the PRODUCTION
+    checkout, which keeps only what its own processes record.
+
+    Skips rather than fails where the history genuinely isn't present --
+    production is a legitimate place to run the suite, and this is a
+    statement about the DEV research data, not about the code.
+    """
+    import snapshot_recorder as sr
+    from pathlib import Path as _P
+    bn = _P(__file__).parent.parent / "logs" / "snapshots_banknifty"
+    if not bn.exists():
+        pytest.skip("no Bank Nifty snapshot directory in this checkout")
+    days = sr.available_days(snapshot_dir=bn)
+    if len(days) < 100:
+        pytest.skip(f"only {len(days)} Bank Nifty days here -- production checkout")
+    first = next(sr.load_day(sorted(days)[0], snapshot_dir=bn, symbol="BANKNIFTY"), None)
+    assert first is not None, "Bank Nifty history present but unreadable"
+    assert first[0].source == "dhan_historical", (
+        "expected reconstructed history, got " + str(first[0].source))
