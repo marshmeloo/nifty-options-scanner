@@ -3,6 +3,84 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## OPEN (sizing decision, not yet made): the live config CANNOT compound -- MAX_LOTS_PER_TRADE=1 makes extra capital idle by construction (2026-08-29)
+
+Investigated while planning a live start on small capital. Three
+findings, each measured rather than reasoned.
+
+**1. The shipped config cannot compound.** `lots = min(capital*1% //
+risk_per_lot, MAX_LOTS_PER_TRADE)` with MAX_LOTS_PER_TRADE = 1. Once you
+can afford ONE lot, more capital buys nothing. Run day-by-day with the
+balance actually updating (research/live_config_compounding.py), full
+v1.2, uncapped trades/day:
+
+| run | start | final | **profit** | CAGR | max DD | trades |
+|---|---|---|---|---|---|---|
+| NIFTY | 1,00,000 | 21,15,167 | **20,15,167** | 66.5% | 4.5% | 7,346 |
+| NIFTY | 5,00,000 | 25,57,300 | **20,57,300** | 31.4% | 1.7% | 7,406 |
+| Bank Nifty | 1,50,000 | 41,88,445 | **40,38,445** | 94.2% | 7.9% | 6,587 |
+| Bank Nifty | 5,00,000 | 51,09,342 | **46,09,342** | 58.9% | 3.3% | 7,255 |
+
+NIFTY earns **98% of the same rupees from Rs 1L as from Rs 5L**. Five
+times the capital, 2% more profit. READ THE PROFIT COLUMN, NOT CAGR:
+66.5% vs 31.4% is the same ~Rs 20L divided by a different denominator,
+and so is 4.5% vs 1.7% drawdown (Rs 95,606 vs Rs 42,963 of the same
+losing streak). Quoting the CAGR as a performance figure would be
+wrong.
+
+Bank Nifty's 87.6% (not ~98%) is the one genuine capital effect: from
+Rs 1.5L it lost 668 trades to the sizing floor before the balance grew
+past ~Rs 3.6L, costing ~Rs 5.7L over six years.
+
+CONSEQUENCE FOR EVERY PUBLISHED FIGURE HERE: the headline percentages
+(Bank Nifty +895.1%, NIFTY +423.5%) were produced at a FIXED Rs 5L base
+by an operation that would have earned nearly the same RUPEES on Rs 1L.
+Those percentages describe the denominator as much as the strategy.
+
+**2. Sizing up via the LOT CAP beats sizing up via the RISK BUDGET.**
+NIFTY 1 trade/day at Rs 1L (research/one_trade_per_day_v12.py and the
+2-lot runs):
+
+| | 1 lot, 1% | 2 lots, 1% | 2 lots, 2% |
+|---|---|---|---|
+| return | +282.5% | +367.4% | +464.5% |
+| max drawdown | 6.4% | 7.7% | 11.8% |
+| Calmar | 3.94 | 3.83 | **2.85** |
+| profit factor | 2.04 | **2.14** | 1.97 |
+
+Raising MAX_LOTS_PER_TRADE to 2 while HOLDING risk at 1%: profit x1.30
+for drawdown x1.20, and profit factor IMPROVES. Raising the risk budget
+to 2% instead: profit x1.64 for drawdown x1.85 -- drawdown grows FASTER
+than profit, Calmar falls 28%. The 1% budget acts as a quality filter,
+sizing up only where the stop is tightest; 2% removes that filter.
+Neither doubles, contrary to the intuition that 2 lots = 2x everything.
+
+CAVEAT: this 1%-beats-2% result is specific to the 1-trade/day
+configuration. Under FULL v1.2 the two collapse to nearly the same thing
+(Rs 45.3L vs Rs 43.8L, CAGR 89.2% vs 88.1%) because both hit the 2-lot
+cap within months. Do not generalise it.
+
+**3. v1.2 is INERT under a 1-trade/day cap, on both indices.** Capped
+baseline and capped gate+exit are byte-identical (NIFTY +85.6% n=1,180;
+Bank Nifty +126.6% n=1,095). `run_policy` exits the day at the cap check
+BEFORE the opposite-direction gate is reached, exactly as
+`try_open_new_trade` returns early on MAX_NEW_TRADES_PER_DAY. Anyone
+reading the v1.2 numbers and then capping to one trade a day gets NONE
+of the gate or the reversal exit -- they are running v1.0.
+
+**ARTIFACTS -- NEVER QUOTE THESE.** Compounding with the lot cap REMOVED
+returns Rs 21.5 crore (1/day) and Rs 207 crore (full v1.2) from Rs 1L.
+Both are artifacts of compounding into a model with no market impact, no
+liquidity ceiling and no open-interest limit -- shadow.py's own docstring
+scopes its fill assumptions to "1 lot". By the later years they imply
+positions that could never fill at the quoted prices. They are in the
+result files only to mark where the model stops being physical.
+
+**DECISION PENDING.** Raising MAX_LOTS_PER_TRADE is the only lever that
+makes additional capital do anything. Not changed here -- it is a live
+risk decision, and the measurement above is the input to it, not the
+answer.
+
 ## OPEN (decide before going live): capital sets WHICH TRADES HAPPEN, not position size -- Bank Nifty is unusable below ~Rs 3.5L and already skips 10% at Rs 5L (2026-08-28)
 
 Raised while answering "what is the minimum capital to run Sentinel".
