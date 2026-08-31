@@ -236,6 +236,21 @@ def _load_recent_journal(limit=None) -> list:
     return [json.loads(l) for l in lines[-limit:]]
 
 
+# Phrases matched against a reason string to derive a coarse tag.
+#
+# THESE MUST BE ANCHORED TO THE ACTUAL LABEL scanner.py EMITS, not to a
+# bare word. "support" alone matched the phrase "supportS this direction"
+# (and "supportS this contract"), which scanner._score_levels attaches to
+# EVERY favourable level of any kind and scanner emits on every momentum
+# read. Result, measured on the 2026-08-31 session: all 27 trades carried
+# a "support" tag and NOT ONE came from a real support level -- 27 of 27
+# false positives. Genuine level mentions are rare (14 "Support level"
+# and 27 "Resistance level" across the entire journal history), so the
+# tag was ~100% noise wherever it appeared.
+#
+# The labels come from scanner._KIND_LABELS and read
+# "Support level at this strike (...)", so matching "support level" is
+# both precise and stable.
 _TAG_PHRASES = {
     "long_buildup": "long buildup",
     "short_buildup": "short buildup",
@@ -245,20 +260,34 @@ _TAG_PHRASES = {
     "iv_cheap": "iv cheap",
     "order_block": "order block",
     "fvg": "fvg",
-    "sweep": "sweep",
-    "resistance": "resistance",
-    "support": "support",
+    "sweep": "liquidity sweep",
+    "resistance": "resistance level",
+    "support": "support level",
     "trend_continuation": "trend continuation",
     "counter_trend": "counter-trend",
 }
 
+# scanner._score_levels marks a level that points the WRONG way for this
+# contract with this phrase. Such a reason is evidence against the trade,
+# so tagging it as though it were confluence inverts the meaning of the
+# tag for every consumer downstream.
+_AGAINST_MARKER = "argues against"
+
 
 def _reason_tags(reasons: list) -> list:
-    """Coarse tags pulled from reason strings, used for win-rate lookup."""
+    """
+    Coarse tags pulled from reason strings, used for win-rate lookup.
+
+    Reasons that ARGUE AGAINST the contract are skipped: these tags feed
+    tag_win_rates()/apply_learned_adjustment(), which ask "what did the
+    winning trades have in common". A bearish level sitting next to a CE
+    is not a reason that CE was taken -- counting it would teach the
+    opposite of the truth.
+    """
     tags = []
-    joined_lower = [r.lower() for r in reasons]
+    usable = [r.lower() for r in reasons if _AGAINST_MARKER not in r.lower()]
     for tag, phrase in _TAG_PHRASES.items():
-        if any(phrase in r for r in joined_lower):
+        if any(phrase in r for r in usable):
             tags.append(tag)
     return tags
 

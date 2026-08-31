@@ -3,6 +3,59 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## FIXED (2026-08-31): the "support" tag was a substring false positive on 86% of all trades ever recorded
+
+Spotted from the live session by eye -- "PE entry was on support" -- and
+the journal did say exactly that on all 12 PE trades. It was wrong.
+
+`_TAG_PHRASES` matched the bare word `"support"` as a SUBSTRING of the
+reason text. Two innocent phrases contain it:
+
+  * `"Momentum aligned: -0.30% ROC supportS this direction"` -- a
+    momentum read, no level involved at all
+  * `"... -- supportS this contract"` -- which scanner._score_levels
+    appends to EVERY favourable level of any kind
+
+Measured on the 2026-08-31 session: **all 27 trades carried a "support"
+tag and NOT ONE came from a real support level**. Across the entire
+journal, **186 of 217 trades (86%)** carry the false tag. Genuine level
+mentions are rare by comparison -- 14 "Support level" and 27 "Resistance
+level" in all of history -- so wherever the tag appeared it was ~100%
+noise.
+
+Fixed by anchoring to the label scanner._KIND_LABELS actually emits
+("support level", "resistance level", "liquidity sweep") instead of a
+bare word. Verified on the real session: support 27 -> 0, every other
+tag unchanged (fvg 4->4, short_covering 11->11, iv_cheap 6->6).
+
+SECOND, SEPARATE DEFECT FIXED IN THE SAME PLACE: a reason marked
+"argues AGAINST this contract" was tagged as though it were confluence.
+These tags feed tag_win_rates()/apply_learned_adjustment(), which ask
+"what did the winning trades have in common" -- counting a bearish level
+next to a CE as a reason that CE was taken teaches the OPPOSITE of the
+truth. Reasons containing that marker are now skipped.
+
+NOT A CAUSE OF ANY LOSS. config.LEARNED_TAG_ADJUSTMENT_ENABLED has been
+False since 2026-08-18, so tags currently feed nothing in the entry
+path. The scoring itself was never inverted -- scanner._level_direction
+correctly reads support as bullish and PENALISES a PE near real support
+(fixed 2026-07-28). This was a labelling bug, and its damage was to the
+journal's analytics.
+
+**STILL OPEN -- the history is poisoned.** tag_win_rates() reads the
+STORED `reason_tags` off each journal entry, so those 186 mis-tagged
+trades keep their bad tags. If LEARNED_TAG_ADJUSTMENT_ENABLED is ever
+turned back on it will learn from them. The journal also stores
+`reasons_at_entry`, so tags can be RECOMPUTED on read without rewriting
+the trade record -- the safe fix, not done here because it changes an
+analysis path nobody asked to change. Do it before re-enabling learned
+adjustment.
+
+INCIDENTAL FINDING worth its own look: after the fix, 5 of today's 27
+trades have NO tags at all -- their only reason was momentum. On a day
+whose total range was 0.5-0.66%, structure barely participated in entry
+selection. See the session entry below.
+
 ## OPEN (sizing decision, not yet made): the live config CANNOT compound -- MAX_LOTS_PER_TRADE=1 makes extra capital idle by construction (2026-08-29)
 
 Investigated while planning a live start on small capital. Three

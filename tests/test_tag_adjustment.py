@@ -214,3 +214,65 @@ def test_empty_journal_is_safe(monkeypatch):
     score, notes = tt.apply_learned_adjustment(5.0, ["Bullish FVG at this strike (1-2)"])
     assert score == 5.0
     assert notes
+
+
+# --------------------------------------------------------------------------
+# _reason_tags: the 2026-08-31 substring bug.
+#
+# "support" matched "supportS this direction" -- a MOMENTUM reason with no
+# level involved -- and "supportS this contract", which scanner._score_levels
+# appends to every FAVOURABLE level of any kind. Measured on the real
+# 2026-08-31 session: all 27 trades carried a "support" tag and not one came
+# from a support level. 27 of 27 false positives.
+# --------------------------------------------------------------------------
+
+def test_momentum_reason_does_not_produce_a_support_tag():
+    """The exact string from the live 2026-08-31 56400 PE entry."""
+    from trade_tracker import _reason_tags
+    reasons = [
+        "Short buildup (bearish for this contract -- writers piling in): "
+        "OI +3.2%, premium -1.9% over the last 14 min",
+        "Momentum aligned: -0.30% ROC supports this direction",
+    ]
+    tags = _reason_tags(reasons)
+    assert "support" not in tags, "momentum 'supports this direction' is not a support level"
+    assert "short_buildup" in tags
+
+
+def test_favourable_level_note_does_not_produce_a_support_tag():
+    """scanner._score_levels appends '-- supports this contract' to EVERY
+    favourable level, so a bullish FVG used to tag itself as support too."""
+    from trade_tracker import _reason_tags
+    tags = _reason_tags(["Bullish FVG at this strike (24248.2-24253.5) -- supports this contract"])
+    assert tags == ["fvg"], tags
+
+
+def test_real_support_level_still_tags():
+    from trade_tracker import _reason_tags
+    tags = _reason_tags(["Support level at this strike (24000.0-24020.0) -- supports this contract"])
+    assert "support" in tags
+
+
+def test_real_resistance_level_still_tags():
+    from trade_tracker import _reason_tags
+    tags = _reason_tags(["Resistance level at this strike (24500.0-24520.0) -- supports this contract"])
+    assert "resistance" in tags
+
+
+def test_level_that_argues_against_is_not_tagged():
+    """A level pointing the wrong way is evidence AGAINST the trade. Tagging
+    it as confluence teaches tag_win_rates the opposite of the truth."""
+    from trade_tracker import _reason_tags
+    tags = _reason_tags([
+        "Resistance level at this strike (24500.0-24520.0) -- argues AGAINST this contract",
+        "Long buildup (bullish for this contract): OI +4.1%",
+    ])
+    assert "resistance" not in tags
+    assert "long_buildup" in tags
+
+
+def test_liquidity_sweep_still_tags():
+    from trade_tracker import _reason_tags
+    tags = _reason_tags(["Bearish liquidity sweep at this strike (24500.0-24560.0) -- supports this contract"])
+    assert "sweep" in tags
+    assert "resistance" not in tags, "the word 'resistance' must not leak in from a sweep label"
