@@ -31,3 +31,29 @@ import config
 @pytest.fixture(autouse=True)
 def _default_scoring_mode(monkeypatch):
     monkeypatch.setattr(config, "SCORING_MODE", "legacy")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_staged_orders(tmp_path, monkeypatch):
+    """
+    Point trade_staging at a throwaway file for EVERY test.
+
+    Without this, tests that exercise a tracker's staging path wrote into
+    the REAL state/staged_orders.json. Measured 2026-08-31: one run of the
+    suite appended 3 records (485 -> 488), and production had accumulated
+    99 PENDING notices -- 64 of them `condor_*`, from a strategy removed
+    from live automation on 2026-08-26 and therefore incapable of
+    producing them. The live dashboard's "Notices" panel was showing that
+    backlog as though it were real trading activity.
+
+    Deliberately AUTOUSE rather than a fixture each test opts into. Three
+    test files already monkeypatched STAGED_ORDERS_PATH themselves and
+    two others still leaked, which is exactly how an opt-in list fails --
+    it only covers what someone remembered. Same reasoning as the
+    full-module config restore in tests/test_opposite_direction_gate.py.
+    Tests that want to assert on staged output still monkeypatch the path
+    to their own tmp file; this just guarantees the default is never the
+    real one.
+    """
+    import trade_staging as staging
+    monkeypatch.setattr(staging, "STAGED_ORDERS_PATH", tmp_path / "staged_orders.json")
