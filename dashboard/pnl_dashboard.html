@@ -103,6 +103,10 @@
   .tile.day { min-height: 52px; padding: 6px 8px; }
   .tile.day .tile-title { font-size: 12px; }
   .tile.day .tile-pnl { font-size: 11.5px; }
+  /* Capital deployed sits under the P&L, deliberately quieter -- it is
+     context for the number above it, not a competing figure. */
+  .tile .tile-capital { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .tile.day { min-height: 62px; }
   .tile.today { outline: 2px solid var(--accent); outline-offset: -1px; }
 
   /* --- Day-view intraday chart --- */
@@ -366,6 +370,9 @@ function renderCards(trades) {
   const realised = trades.reduce((s, t) => s + t.realised_pnl_inr, 0);
   const charges = trades.reduce((s, t) => s + (t.charges_inr || 0), 0);
   const net = trades.reduce((s, t) => s + t.net_pnl_inr, 0);
+  const withCapital = trades.filter(t => t.capital_deployed !== null && t.capital_deployed !== undefined);
+  const capital = withCapital.reduce((s, t) => s + t.capital_deployed, 0);
+  const capitalKnown = withCapital.length > 0;
   const anyModelled = trades.some(t => t.charges_modelled);
   const allModelled = trades.length > 0 && trades.every(t => t.charges_modelled);
 
@@ -376,6 +383,14 @@ function renderCards(trades) {
     { label: "Charges", value: trades.length ? fmtInr(-charges) : "—", cls: "",
       note: allModelled ? "statutory costs only, no spread" : (anyModelled ? "not modelled for every trade shown" : "not modelled for this strategy") },
     { label: "Trades", value: trades.length, note: trades.length ? `${trades.filter(t=>t.net_pnl_inr>0).length} up · ${trades.filter(t=>t.net_pnl_inr<0).length} down` : "" },
+    // Capital deployed = premium actually paid (entry x lot size x lots),
+    // summed over the selected range. Without it a rupee P&L has no
+    // denominator: the same +Rs 5,000 means very different things on
+    // Rs 20,000 deployed and on Rs 2,00,000.
+    { label: "Capital deployed", value: capitalKnown ? fmtInrAbs(capital) : "—",
+      note: capitalKnown
+        ? (trades.length ? `avg ${fmtInrAbs(capital / trades.length)} per trade` : "")
+        : "not recorded for these trades" },
   ];
   document.getElementById("cards").innerHTML = cards.map(c => `
     <div class="card">
@@ -492,11 +507,13 @@ function renderDayGrid(trades) {
     const ds = fmtDate(new Date(y, m, day));
     const dayTrades = byDate[ds] || [];
     const net = dayTrades.reduce((s, t) => s + t.net_pnl_inr, 0);
+    const dayCapital = dayTrades.reduce((s, t) => s + (t.capital_deployed || 0), 0);
     const cls = dayTrades.length ? (net >= 0 ? "pos" : "neg") : "empty";
     const today = ds === todayStr ? " today" : "";
     html += `<div class="tile day ${cls}${today}" data-date="${ds}" ${dayTrades.length ? "" : ""}>
       <div class="tile-title">${day}</div>
       ${dayTrades.length ? `<div class="tile-pnl ${cls}">${fmtInr(net)}</div>` : ""}
+      ${dayTrades.length && dayCapital ? `<div class="tile-capital">${fmtInrAbs(dayCapital)} used</div>` : ""}
     </div>`;
   }
   html += `</div>`;

@@ -183,6 +183,25 @@ def _enrich_price_action_trades(trades: list) -> list:
     return enriched
 
 
+def _with_capital(entries: list, lot_size: int) -> list:
+    """
+    Attach capital_deployed to CLOSED journal entries.
+
+    _enrich_trades() already does this for OPEN positions, but closed
+    trades were passed to the frontend as raw journal rows, so the
+    "Closed Today" table had no capital column at all and no way to add
+    one -- the number simply was not in the payload.
+    """
+    out = []
+    for e in entries:
+        e = dict(e)
+        entry_px = e.get("entry")
+        if entry_px is not None:
+            e["capital_deployed"] = round(entry_px * lot_size * (e.get("lots") or 1), 2)
+        out.append(e)
+    return out
+
+
 def _read_closed_today(journal_path: Path) -> list:
     """
     Generic version of _read_todays_closed_trades / _read_price_action_closed_today
@@ -279,11 +298,14 @@ def _sentinel_block(open_trades_path: Path, journal_path: Path, lot_size: int) -
     state = _read_json(open_trades_path, default={})
     raw = state.get("trades", []) if state else []
     open_trades = _enrich_trades(raw, lot_size, tt.r_multiple, config.DEFAULT_TARGET_RR)
-    closed_today = _read_closed_today(journal_path)
+    closed_today = _with_capital(_read_closed_today(journal_path), lot_size)
     open_pnl = round(sum(t.get("running_pnl_inr", 0) or 0 for t in open_trades), 2)
     realized_pnl = round(sum(t.get("pnl_inr", 0) or 0 for t in closed_today), 2)
     return {
         "strategy_version": _sentinel_version(journal_path),
+        "total_capital": getattr(config, "TOTAL_CAPITAL", None),
+        "closed_capital_deployed": round(
+            sum(t.get("capital_deployed", 0) or 0 for t in closed_today), 2),
         "open_trades": open_trades,
         "closed_today": closed_today,
         "totals": {
@@ -572,6 +594,18 @@ def _load_all_pnl_trades() -> list:
                 "contract": _contract_label(t),
                 "outcome": t.get("outcome") or t.get("status"),
                 "lots": t.get("lots") if t.get("lots") is not None else (t.get("plan") or {}).get("lots"),
+                "entry": t.get("entry"),
+                # What this trade actually TIED UP -- premium paid, not the
+                # risk-at-stop the exposure cap measures. The P&L view showed
+                # profit and loss per day with no sense of the capital that
+                # produced it, so a good day on a large deployment and a good
+                # day on a small one read identically.
+                "capital_deployed": (
+                    round((t.get("entry") or 0)
+                          * PNL_INDEX_LOT_SIZE.get(index_label, 65)
+                          * ((t.get("lots") if t.get("lots") is not None
+                              else (t.get("plan") or {}).get("lots")) or 1), 2)
+                    if t.get("entry") is not None else None),
                 "peak_favorable_inr": _peak_favorable_inr(t, index_label),
                 "peak_r": t.get("max_r_seen"),
             })
@@ -587,9 +621,11 @@ def build_state() -> dict:
     open_trades_state = _read_json(STATE_DIR / "open_trades.json", default={})
     open_trades_raw = open_trades_state.get("trades", []) if open_trades_state else []
     open_trades = _enrich_open_trades(open_trades_raw)
-    closed_today = _read_todays_closed_trades()
+    closed_today = _with_capital(_read_todays_closed_trades(),
+                                 getattr(config, "NIFTY_LOT_SIZE", 65))
 
     total_capital_deployed = round(sum(t["capital_deployed"] for t in open_trades), 2)
+    closed_capital_deployed = round(sum(t.get("capital_deployed", 0) or 0 for t in closed_today), 2)
     total_open_pnl_inr = round(sum(t.get("running_pnl_inr", 0) or 0 for t in open_trades), 2)
     total_realized_pnl_inr = round(sum(t.get("pnl_inr", 0) or 0 for t in closed_today), 2)
     total_pnl_today_inr = round(total_open_pnl_inr + total_realized_pnl_inr, 2)
@@ -691,7 +727,7 @@ def build_state() -> dict:
     bn_open_trades_state = _read_json(BN_OPEN_TRADES_PATH, default={})
     bn_open_trades_raw = bn_open_trades_state.get("trades", []) if bn_open_trades_state else []
     bn_open_trades = _enrich_trades(bn_open_trades_raw, BANKNIFTY_LOT_SIZE, tt.r_multiple, config.DEFAULT_TARGET_RR)
-    bn_closed_today = _read_closed_today(BN_TRADE_JOURNAL_PATH)
+    bn_closed_today = _with_capital(_read_closed_today(BN_TRADE_JOURNAL_PATH), BANKNIFTY_LOT_SIZE)
 
     bn_total_capital_deployed = round(sum(t["capital_deployed"] for t in bn_open_trades), 2)
     bn_total_open_pnl_inr = round(sum(t.get("running_pnl_inr", 0) or 0 for t in bn_open_trades), 2)
@@ -730,6 +766,9 @@ def build_state() -> dict:
         "opened_today": bn_open_trades_state.get("opened_today") if bn_open_trades_state else None,
         "totals": {
             "capital_deployed": bn_total_capital_deployed,
+            "closed_capital_deployed": round(
+                sum(t.get("capital_deployed", 0) or 0 for t in bn_closed_today), 2),
+            "total_capital": getattr(config, "TOTAL_CAPITAL", None),
             "open_pnl_inr": bn_total_open_pnl_inr,
             "realized_pnl_inr": bn_total_realized_pnl_inr,
             "total_pnl_today_inr": bn_total_pnl_today_inr,
@@ -762,6 +801,14 @@ def build_state() -> dict:
         "opened_today": open_trades_state.get("opened_today") if open_trades_state else None,
         "totals": {
             "capital_deployed": total_capital_deployed,
+            # Premium tied up by trades that have already CLOSED today.
+            # Without it the dashboard could show what is deployed right
+            # now but never what the day as a whole put to work.
+            "closed_capital_deployed": closed_capital_deployed,
+            # The allocation everything is sized against (config.TOTAL_CAPITAL).
+            # Shown so a rupee figure can be read as a % of the book rather
+            # than as a bare number.
+            "total_capital": getattr(config, "TOTAL_CAPITAL", None),
             "open_pnl_inr": total_open_pnl_inr,
             "realized_pnl_inr": total_realized_pnl_inr,
             "total_pnl_today_inr": total_pnl_today_inr,

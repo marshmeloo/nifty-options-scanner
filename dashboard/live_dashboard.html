@@ -347,6 +347,13 @@ function fmtInr(v) {
   const s = "Rs " + Math.abs(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
   return v > 0 ? "+" + s : (v < 0 ? "-" + s : s);
 }
+// Capital deployed and allocation are NOT signed P&L figures -- fmtInr's
+// leading "+" on them reads as profit. Mirrors pnl_dashboard.js's helper
+// of the same name.
+function fmtInrAbs(v) {
+  if (v === null || v === undefined || isNaN(v)) return "—";
+  return "Rs " + Math.abs(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+}
 function pnlClass(v) {
   if (v === null || v === undefined || isNaN(v)) return "";
   return v >= 0 ? "pos" : "neg";
@@ -540,10 +547,11 @@ function renderOpenTrades(trades, totals, suffix) {
   }
   container.innerHTML = `
     <table>
-      <thead><tr><th>Strike</th><th>Type</th><th>Entry</th><th>Target</th><th>Stop</th><th>Current</th><th>R now</th><th>Progress to target</th><th>Peak R</th><th>Best Seen</th><th>Worst Seen</th><th>Capital</th><th>P&amp;L %</th><th>P&amp;L (Rs)</th></tr></thead>
+      <thead><tr><th>Opened</th><th>Strike</th><th>Type</th><th>Entry</th><th>Target</th><th>Stop</th><th>Current</th><th>R now</th><th>Progress to target</th><th>Peak R</th><th>Best Seen</th><th>Worst Seen</th><th>Capital</th><th>P&amp;L %</th><th>P&amp;L (Rs)</th></tr></thead>
       <tbody>
         ${trades.map(t => `
           <tr>
+            <td>${timeOf(t.opened_at)}</td>
             <td>${t.strike}</td>
             <td>${t.option_type}</td>
             <td>${t.entry}</td>
@@ -555,7 +563,7 @@ function renderOpenTrades(trades, totals, suffix) {
             <td class="${pnlClass(t.max_r_seen)}">${fmtSigned(t.max_r_seen, 2, "R")}</td>
             <td>${t.max_ltp_seen ?? "—"}</td>
             <td>${t.min_ltp_seen ?? "—"}</td>
-            <td>${fmtInr(t.capital_deployed)}</td>
+            <td>${fmtInrAbs(t.capital_deployed)}</td>
             <td class="${pnlClass(t.running_pnl_pct)}">${fmtSigned(t.running_pnl_pct, 1, "%")}</td>
             <td class="${pnlClass(t.running_pnl_inr)}">${fmtInr(t.running_pnl_inr)}</td>
           </tr>
@@ -563,8 +571,8 @@ function renderOpenTrades(trades, totals, suffix) {
       </tbody>
       <tfoot>
         <tr style="font-weight:600;">
-          <td colspan="11" style="text-align:right; color:var(--muted);">TOTAL</td>
-          <td>${fmtInr(totals ? totals.capital_deployed : null)}</td>
+          <td colspan="12" style="text-align:right; color:var(--muted);">TOTAL</td>
+          <td>${fmtInrAbs(totals ? totals.capital_deployed : null)}</td>
           <td colspan="2" class="${pnlClass(totals ? totals.open_pnl_inr : null)}">${fmtInr(totals ? totals.open_pnl_inr : null)}</td>
         </tr>
       </tfoot>
@@ -626,20 +634,37 @@ function renderRRStats(rr) {
 // The tfoot totals row was added 2026-08-17: the table listed every
 // closed trade but never summed them, so "how did today actually go"
 // meant adding up rows by eye.
+// "2026-08-31T10:09:45.123" -> "10:09:45". Returns an em dash rather than
+// "undefined" when a journal row predates the field.
+// " (12.3% of capital)" -- only when both figures exist, so a missing
+// allocation shows nothing rather than "NaN%".
+function pctOfCapital(amount, capital) {
+  if (!capital || amount === null || amount === undefined) return "";
+  return ` <span style="color:var(--muted); font-weight:400;">(${(amount / capital * 100).toFixed(1)}% of capital)</span>`;
+}
+
+function timeOf(iso) {
+  if (!iso) return "—";
+  const t = String(iso).split("T")[1];
+  return t ? t.split(".")[0] : String(iso);
+}
+
 function closedTradesTable(trades) {
   const wins = trades.filter(t => t.outcome === "WIN").length;
   const totalPnl = trades.reduce((sum, t) => sum + (t.pnl_inr || 0), 0);
   return `
     <table>
-      <thead><tr><th>Closed</th><th>Strike</th><th>Type</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>P&amp;L %</th><th>P&amp;L (Rs)</th></tr></thead>
+      <thead><tr><th>Opened</th><th>Closed</th><th>Strike</th><th>Type</th><th>Entry</th><th>Exit</th><th>Capital</th><th>Outcome</th><th>P&amp;L %</th><th>P&amp;L (Rs)</th></tr></thead>
       <tbody>
         ${trades.map(t => `
           <tr>
-            <td>${(t.closed_at || "").split("T")[1] || t.closed_at}</td>
+            <td>${timeOf(t.opened_at)}</td>
+            <td>${timeOf(t.closed_at)}</td>
             <td>${t.strike}</td>
             <td>${t.option_type}</td>
             <td>${t.entry}</td>
             <td>${t.exit_ltp ?? "—"}</td>
+            <td>${fmtInrAbs(t.capital_deployed)}</td>
             <td><span class="badge ${t.outcome === "WIN" ? "opened" : (t.outcome === "LOSS" ? "rejected" : "notselected")}">${t.outcome}</span></td>
             <td class="${pnlClass(t.pnl_pct)}">${fmtSigned(t.pnl_pct, 1, "%")}</td>
             <td class="${pnlClass(t.pnl_inr)}">${fmtInr(t.pnl_inr)}</td>
@@ -648,9 +673,10 @@ function closedTradesTable(trades) {
       </tbody>
       <tfoot>
         <tr>
-          <td colspan="5" style="color:var(--muted);">
+          <td colspan="6" style="color:var(--muted);">
             ${trades.length} closed &middot; ${wins}W / ${trades.length - wins}L
           </td>
+          <td>${fmtInrAbs(trades.reduce((a, t) => a + (t.capital_deployed || 0), 0))}</td>
           <td colspan="2" style="color:var(--muted);">Total</td>
           <td class="${pnlClass(totalPnl)}" style="font-weight:700;">${fmtInr(totalPnl)}</td>
         </tr>
@@ -699,7 +725,7 @@ function renderSentinel(sentinel, suffix, label) {
     parts.push(`<div style="margin-bottom:6px; font-weight:600;">Open</div>`);
     parts.push(`
       <table>
-        <thead><tr><th>Strike</th><th>Type</th><th>Entry</th><th>Target</th><th>Stop</th><th>Current</th><th>R now</th><th>Peak R</th><th>P&amp;L (Rs)</th></tr></thead>
+        <thead><tr><th>Opened</th><th>Strike</th><th>Type</th><th>Entry</th><th>Target</th><th>Stop</th><th>Current</th><th>R now</th><th>Peak R</th><th>P&amp;L (Rs)</th></tr></thead>
         <tbody>
           ${open.map(t => `
             <tr>
@@ -726,6 +752,9 @@ function renderSentinel(sentinel, suffix, label) {
   parts.push(`
     <div class="grid" style="margin-top:14px;">
       <div class="card"><h3>${label} today</h3>
+        <div class="row"><span class="k">Total capital</span><span class="v">${fmtInrAbs(totals.total_capital)}</span></div>
+        <div class="row"><span class="k">Deployed (open)</span><span class="v">${fmtInrAbs(totals.capital_deployed)}${pctOfCapital(totals.capital_deployed, totals.total_capital)}</span></div>
+        <div class="row"><span class="k">Deployed (closed today)</span><span class="v">${fmtInrAbs(totals.closed_capital_deployed)}${pctOfCapital(totals.closed_capital_deployed, totals.total_capital)}</span></div>
         <div class="row"><span class="k">Open P&amp;L</span><span class="v ${pnlClass(totals.open_pnl_inr)}">${fmtInr(totals.open_pnl_inr)}</span></div>
         <div class="row"><span class="k">Realised today</span><span class="v ${pnlClass(totals.realized_pnl_inr)}">${fmtInr(totals.realized_pnl_inr)}</span></div>
         <div class="row"><span class="k">Total today</span><span class="v ${pnlClass(totals.total_pnl_today_inr)}">${fmtInr(totals.total_pnl_today_inr)}</span></div>
@@ -751,11 +780,12 @@ function renderPriceAction(trades, closedToday, logAgeSeconds, pollIntervalSecon
   const openTable = hasOpen ? `
     <div style="margin-bottom:6px; font-weight:600;">Open</div>
     <table>
-      <thead><tr><th>Pair</th><th>Strike</th><th>Type</th><th>Entry</th><th>Target</th><th>Stop</th><th>Current</th><th>R now</th><th>Peak R</th><th>Capital</th><th>P&amp;L (Rs)</th></tr></thead>
+      <thead><tr><th>Pair</th><th>Opened</th><th>Strike</th><th>Type</th><th>Entry</th><th>Target</th><th>Stop</th><th>Current</th><th>R now</th><th>Peak R</th><th>Capital</th><th>P&amp;L (Rs)</th></tr></thead>
       <tbody>
         ${trades.map(t => `
           <tr>
             <td>${t.pair}</td>
+            <td>${timeOf(t.opened_at)}</td>
             <td>${t.strike}</td>
             <td>${t.option_type}</td>
             <td>${t.entry}</td>
@@ -764,7 +794,7 @@ function renderPriceAction(trades, closedToday, logAgeSeconds, pollIntervalSecon
             <td>${t.current_ltp ?? "?"}</td>
             <td class="${pnlClass(t.current_r)}">${fmtSigned(t.current_r, 2, "R")}</td>
             <td class="${pnlClass(t.max_r_seen)}">${fmtSigned(t.max_r_seen, 2, "R")}</td>
-            <td>${fmtInr(t.capital_deployed)}</td>
+            <td>${fmtInrAbs(t.capital_deployed)}</td>
             <td class="${pnlClass(t.running_pnl_inr)}">${fmtInr(t.running_pnl_inr)}</td>
           </tr>
         `).join("")}
@@ -774,12 +804,13 @@ function renderPriceAction(trades, closedToday, logAgeSeconds, pollIntervalSecon
   const closedTable = hasClosed ? `
     <div style="margin:14px 0 6px; font-weight:600;">Closed Today</div>
     <table>
-      <thead><tr><th>Pair</th><th>Closed</th><th>Strike</th><th>Type</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>P&amp;L (Rs)</th></tr></thead>
+      <thead><tr><th>Pair</th><th>Opened</th><th>Closed</th><th>Strike</th><th>Type</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>P&amp;L (Rs)</th></tr></thead>
       <tbody>
         ${closedToday.map(t => `
           <tr>
             <td>${t.pair}</td>
-            <td>${(t.closed_at || "").split("T")[1] || t.closed_at}</td>
+            <td>${timeOf(t.opened_at)}</td>
+            <td>${timeOf(t.closed_at)}</td>
             <td>${t.strike}</td>
             <td>${t.option_type}</td>
             <td>${t.entry}</td>
