@@ -261,3 +261,69 @@ def test_pnl_loader_falls_back_to_plan_lots_for_multi_leg(tmp_path, monkeypatch)
     assert len(trades) == 1
     assert trades[0]["lots"] == 3
     assert trades[0]["contract"] == "Bull put 24600/24500"
+
+
+# --------------------------------------------------------------------------
+# _sentinel_version: the dashboard displayed a hardcoded "Sentinel v1.1-dev"
+# heading for BOTH indices and kept showing it after Sentinel was promoted to
+# v1.2-dev on 2026-08-27 -- the same stale-literal bug that made the live log
+# banner misreport its version. Anything naming a version must derive it.
+# --------------------------------------------------------------------------
+
+def test_sentinel_version_reads_the_journals_latest_entry(tmp_path):
+    import dashboard_server as ds
+    j = tmp_path / "trade_journal_sentinel.jsonl"
+    j.write_text(
+        json.dumps({"strategy_version": "1.1-dev", "strike": 1}) + "\n"
+        + json.dumps({"strategy_version": "1.2-dev", "strike": 2}) + "\n",
+        encoding="utf-8")
+    assert ds._sentinel_version(j) == "1.2-dev"
+
+
+def test_sentinel_version_is_none_when_journal_missing(tmp_path):
+    """Better a bare 'Sentinel' than an invented version number."""
+    import dashboard_server as ds
+    assert ds._sentinel_version(tmp_path / "nope.jsonl") is None
+
+
+def test_sentinel_version_skips_unparseable_and_versionless_lines(tmp_path):
+    import dashboard_server as ds
+    j = tmp_path / "j.jsonl"
+    j.write_text(
+        json.dumps({"strategy_version": "1.2-dev"}) + "\n"
+        + json.dumps({"no_version_here": True}) + "\n"
+        + "{ this is not json\n",
+        encoding="utf-8")
+    assert ds._sentinel_version(j) == "1.2-dev"
+
+
+def test_sentinel_version_never_falls_back_to_anchors_config(tmp_path):
+    """The dashboard imports the SHARED config unpatched, so
+    config.STRATEGY_VERSION is ANCHOR's here. Reading it would silently
+    label Sentinel's panel with Anchor's version."""
+    import dashboard_server as ds
+    import config
+    assert ds._sentinel_version(tmp_path / "absent.jsonl") != config.STRATEGY_VERSION
+
+
+def test_sentinel_block_exposes_the_version(tmp_path):
+    import dashboard_server as ds
+    j = tmp_path / "j.jsonl"
+    j.write_text(json.dumps({"strategy_version": "1.2-dev"}) + "\n", encoding="utf-8")
+    block = ds._sentinel_block(tmp_path / "state.json", j, 30)
+    assert block["strategy_version"] == "1.2-dev"
+
+
+def test_dashboard_html_has_no_hardcoded_sentinel_version():
+    """Guards the regression directly: no literal version in the heading."""
+    from pathlib import Path as _P
+    html = (_P(__file__).parent.parent / "dashboard" / "live_dashboard.html").read_text(encoding="utf-8")
+    # Only the LIVE Sentinel panels. The "One Trade/Day v0.1-research"
+    # headings also mention Sentinel, but that is a derived research view,
+    # not a live process whose version drifts -- see _derive_onetrade_block.
+    headings = [l for l in html.splitlines()
+                if "<h2>" in l and "candidate strategy, its own live process" in l]
+    assert len(headings) == 2, f"expected 2 live Sentinel panels, found {len(headings)}"
+    for h in headings:
+        assert "v1.1-dev" not in h and "v1.2-dev" not in h, f"hardcoded version in: {h.strip()}"
+        assert "sentinel-version-label" in h, f"heading not wired to the derived label: {h.strip()}"

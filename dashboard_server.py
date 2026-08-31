@@ -231,6 +231,40 @@ def _enrich_trades(trades: list, lot_size: int, r_multiple_fn, target_rr) -> lis
     return enriched
 
 
+def _sentinel_version(journal_path: Path) -> str:
+    """
+    Which Sentinel version actually produced this journal, read from the
+    most recent entry's own `strategy_version` field.
+
+    NOT from `config`: this dashboard process imports the SHARED config
+    module unpatched, so config.STRATEGY_VERSION here is ANCHOR's ("1.2"),
+    never Sentinel's ("1.2-dev"). Only the Sentinel process patches that,
+    and only inside its own process.
+
+    NOT hardcoded either: the dashboard displayed a literal
+    "Sentinel v1.1-dev" heading for both indices, which stayed on screen
+    after Sentinel was promoted to v1.2-dev on 2026-08-27 -- the same
+    class of stale-literal bug that made the live log banner misreport
+    the running version (fixed 2026-08-28). Anything naming a version
+    must derive it.
+
+    Returns None when the journal is empty; the frontend then shows a
+    bare "Sentinel" rather than inventing a number.
+    """
+    try:
+        lines = [l for l in journal_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    except (OSError, ValueError):
+        return None
+    for line in reversed(lines):
+        try:
+            v = json.loads(line).get("strategy_version")
+        except ValueError:
+            continue
+        if v:
+            return str(v)
+    return None
+
+
 def _sentinel_block(open_trades_path: Path, journal_path: Path, lot_size: int) -> dict:
     """
     One index's Sentinel section: open trades (enriched the same way
@@ -249,6 +283,7 @@ def _sentinel_block(open_trades_path: Path, journal_path: Path, lot_size: int) -
     open_pnl = round(sum(t.get("running_pnl_inr", 0) or 0 for t in open_trades), 2)
     realized_pnl = round(sum(t.get("pnl_inr", 0) or 0 for t in closed_today), 2)
     return {
+        "strategy_version": _sentinel_version(journal_path),
         "open_trades": open_trades,
         "closed_today": closed_today,
         "totals": {
