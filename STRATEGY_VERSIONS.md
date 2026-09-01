@@ -73,7 +73,15 @@ results can always be grouped by which named version produced them.
 
 ---
 
-## Anchor — v1.2 — LIVE
+## Anchor — v1.2 — LIVE, CONTROL ARM (since 2026-09-01)
+
+**Role changed 2026-09-01:** Sentinel was promoted to primary (see its
+section below). Anchor continues to run UNCHANGED and UNCAPPED as the
+control -- the unfiltered baseline the capped strategy is measured
+against. Keeping it is a deliberate cost: over 1,244 Bank Nifty days its
+own configuration carries a 36.3% max drawdown against Sentinel's 9.6%.
+That is the price of retaining a comparison, and it was chosen knowingly
+rather than by omission.
 
 **Status:** Live in production, both NIFTY and Bank Nifty momentum,
 since 2026-08-14 (v1.0), updated to v1.1 then v1.2, both on 2026-08-27.
@@ -179,10 +187,63 @@ changes its earlier negative verdict on the gate alone.
 
 ---
 
-## Sentinel — v1.2-dev — CANDIDATE, LIVE PAPER-TRACKING (built 2026-08-15)
+## Sentinel — v1.2-dev — LIVE (promoted 2026-09-01; built 2026-08-15)
 
-**Status:** Backtested (below), built as its own live paper-tracking
-process — `main_live_sentinel.py` (NIFTY) and
+**PROMOTED FROM CANDIDATE TO LIVE, 2026-09-01.** Sentinel is now the
+primary momentum strategy. Anchor keeps running, unchanged and uncapped,
+as the CONTROL arm — deliberately, so there is still an unfiltered
+baseline to measure against and to detect a regime change in. Anchor was
+NOT modified as part of this promotion.
+
+**The evidence, and why it clears the promotion policy above without an
+exception this time.** The only structural difference between the two is
+Sentinel's correlated-cluster cap. Adding that cap to Anchor's own live
+v1.2 shape, forward-simulated through `shadow.py` over each index's own
+reconstructed history (`research/anchor_cluster_cap_study.py`):
+
+| | drawdown | return | Calmar | years better |
+|---|---|---|---|---|
+| Bank Nifty, 1,244 days | 36.3% -> **9.6%** | +1120% -> +895% | 1.79 -> **6.11** | **6 of 6** |
+| NIFTY, 1,485 days | 19.2% -> **4.4%** | +423.5% -> +411.5% | 1.66 -> **7.12** | **7 of 7** |
+
+13 of 13 years, both indices, 2,729 days. Win rate, profit factor and
+expectancy all improve on both. On NIFTY the return cost is 2.8% -- the
+capped configuration is better on every measure there, not a trade-off.
+Capped Anchor reproduces Sentinel's numbers exactly (Bank Nifty 6,970
+trades / +895.13% / 9.55% drawdown, identical to the v1.2 run), which is
+the arithmetic confirmation that the cap is the whole difference.
+
+Crucially this is NOT backtest alone, so the promotion policy is
+satisfied on its own terms rather than by exception -- unlike the v1.1
+and v1.2 changes below. August 2026 ran both strategies live, side by
+side, on the same signals for a full month:
+
+| | trades | win rate | net |
+|---|---|---|---|
+| Anchor Bank Nifty | 62 | 9.7% | -Rs 62,843 |
+| Sentinel Bank Nifty | 40 | **32.5%** | **-Rs 3,892** |
+
+Anchor was 99% of the month's -Rs 81,835 across all strategies. Anchor's
+2026-08-31 session opened NINE adjacent Bank Nifty PE strikes inside
+thirteen minutes; Sentinel's cap held it to six trades and a sixth of
+the loss.
+
+**What "LIVE" does and does not mean here.** Sentinel still places no
+real broker order -- nothing in this project does. The change is which
+strategy is treated as primary for capital-allocation decisions and
+which is the control. Both processes continue to run exactly as they
+did; no process config was changed by this promotion.
+
+**Status:** Live primary strategy. Built as its own process --
+`main_live_sentinel.py` (NIFTY) and
+`main_live_banknifty_sentinel.py` (Bank Nifty), each independent of
+Anchor's own processes (separate state, journal, log, decision log) --
+and, as of 2026-08-16, wired into `automation/start_trading.ps1` so
+both start automatically every trading morning alongside Anchor and
+the other loops (see COMMANDS.md). Every trade it opens carries
+`strategy_name: "Sentinel"` in its journal entry, distinct from
+Anchor's, so the two can be compared on the `/pnl` dashboard without
+ever pooling. — `main_live_sentinel.py` (NIFTY) and
 `main_live_banknifty_sentinel.py` (Bank Nifty), each independent of
 Anchor's own processes (separate state, journal, log, decision log) —
 and, as of 2026-08-16, wired into `automation/start_trading.ps1` so
@@ -347,3 +408,6 @@ same day as the gate-alone rejection.
 | 2026-08-27 | Anchor promoted v1.1 -> v1.2 (reversal exit ON), same explicit exception as v1.1, same day, same direct user instruction. Live-side mechanism built (trade_tracker._reversal_exit_opposite_positions, wired into try_open_new_trade), 9 new tests, full suite 951/951. |
 | 2026-08-27 | Sentinel retested with gate + reversal exit TOGETHER (not gate alone, which was already declined): total return +335.8%->+485.3%, max drawdown 16.2%->5.5%, Calmar 1.72->6.30, every year better. The two features needed each other for Sentinel. |
 | 2026-08-27 | Sentinel promoted v1.1-dev -> v1.2-dev (gate + reversal exit both ON), reversing the same-day gate-alone decline. Applied to both NIFTY and Bank Nifty Sentinel -- Bank Nifty's own 500pt band not independently retested (shadow.py has no Bank Nifty replay), extrapolated the same way Anchor's Bank Nifty process already was. |
+| 2026-08-31 | Live session lost Rs 37,875 across 27 trades on a 0.66%-range day. Anchor opened NINE adjacent Bank Nifty PE strikes in thirteen minutes (no cluster cap); Sentinel's cap held it to six trades and a sixth of the loss. Two candidate fixes tested and REJECTED on 1,244 days -- an extension guard (worse at every setting) and a quiet-regime gate (worse in 5 of 6 years despite a good aggregate). See BACKLOG.md. |
+| 2026-09-01 | Cluster cap forward-simulated on ANCHOR's own history for the first time (research/anchor_cluster_cap_study.py): Bank Nifty drawdown 36.3%->9.6%, Calmar 1.79->6.11, better 6 of 6 years; NIFTY drawdown 19.2%->4.4%, Calmar 1.66->7.12, better 7 of 7 years. 13 of 13 across 2,729 days. Capped Anchor reproduces Sentinel's numbers exactly -- the cap is the whole difference. |
+| 2026-09-01 | **Sentinel promoted CANDIDATE -> LIVE primary.** First promotion on the policy's own terms rather than an acknowledged exception: August ran both strategies live side by side for a month (Anchor Bank Nifty 9.7% win rate / -Rs 62,843 vs Sentinel 32.5% / -Rs 3,892), so live evidence exists, not backtest alone. Anchor kept running UNCHANGED as the uncapped CONTROL arm, at a known cost -- its own 36.3% drawdown profile -- chosen deliberately to retain a baseline. No process config changed by the promotion. |
