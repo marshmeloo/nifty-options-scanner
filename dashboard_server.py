@@ -437,13 +437,17 @@ DASHBOARD_PNL_HTML_PATH = BASE_DIR / "dashboard" / "pnl_dashboard.html"
 # _load_all_pnl_trades() skips missing files rather than erroring, and
 # the frontend only offers a filter for combinations that actually
 # produced at least one closed trade.
+# CONDOR REMOVED from this list 2026-09-01. main_condor.py was pulled from
+# automation/start_trading.ps1 on 2026-08-26 (see BACKLOG.md, "Iron condor:
+# FAILS both tests the directional spread passed"), so nothing has produced
+# a condor trade since -- its rows were three stale August entries that
+# still counted toward every headline total. The journals are left on disk;
+# only the P&L view stops reading them.
 PNL_JOURNALS = [
     (LOGS_DIR / "trade_journal.jsonl", "NIFTY", "Momentum (Anchor)"),
-    (LOGS_DIR / "condor_journal.jsonl", "NIFTY", "Condor"),
     (LOGS_DIR / "directional_spread_journal.jsonl", "NIFTY", "Directional Spread"),
     (LOGS_DIR / "price_action_journal.jsonl", "NIFTY", "Price Action"),
     (LOGS_DIR / "trade_journal_banknifty.jsonl", "Bank Nifty", "Momentum (Anchor)"),
-    (LOGS_DIR / "condor_journal_banknifty.jsonl", "Bank Nifty", "Condor"),
     (LOGS_DIR / "directional_spread_journal_banknifty.jsonl", "Bank Nifty", "Directional Spread"),
     (LOGS_DIR / "price_action_journal_banknifty.jsonl", "Bank Nifty", "Price Action"),
     # Sentinel v1.1-dev: the correlated-cluster-cap candidate, running as

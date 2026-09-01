@@ -144,6 +144,10 @@
 
 <div class="controls">
   <div class="control-group">
+    <div class="cg-label">Book</div>
+    <div class="pill-row" id="bookFilter"></div>
+  </div>
+  <div class="control-group">
     <div class="cg-label">Index</div>
     <div class="pill-row" id="indexFilter"></div>
   </div>
@@ -196,8 +200,8 @@ async function fetchTrades() {
     const res = await fetch("/api/pnl", { cache: "no-store" });
     const data = await res.json();
     allTrades = data.trades || [];
-    document.getElementById("refreshNote").textContent =
-      `${allTrades.length} closed trades · updated ${new Date(data.generated_at).toLocaleTimeString()}`;
+    lastGeneratedAt = data.generated_at;
+    setRefreshNote();
     buildFilters();
     render();
   } catch (e) {
@@ -205,9 +209,55 @@ async function fetchTrades() {
   }
 }
 
+// Anchor is the CONTROL arm -- deliberately uncapped, deliberately not
+// funded (see STRATEGY_VERSIONS.md, Sentinel promoted 2026-09-01). Its
+// losses are a measurement, not money, but they are large enough to
+// dominate every headline total: August was -Rs 80,902 of the book's
+// -Rs 93,106. Separating the two stops the control drowning out the
+// strategy that actually matters, without discarding it -- switch to
+// Control or All to see it.
+const CONTROL_STRATEGIES = new Set(["Momentum (Anchor)"]);
+let book = "primary";           // "primary" | "control" | "all"
+let lastGeneratedAt = null;
+
+// The header count has to follow the book, or Primary reads "28 closed
+// trades" above a grid showing none of them -- the control arm's rows are
+// loaded but deliberately out of view. Show the visible count, and name
+// what is being held back so the number is never silently short.
+function setRefreshNote() {
+  const el = document.getElementById("refreshNote");
+  if (!el || !lastGeneratedAt) return;
+  const shown = allTrades.filter(inBook).length;
+  const hidden = allTrades.length - shown;
+  const held = hidden > 0 ? ` · ${hidden} in the control arm, hidden` : "";
+  el.textContent = `${shown} closed trades${held} · updated `
+    + new Date(lastGeneratedAt).toLocaleTimeString();
+}
+
+function inBook(t) {
+  if (book === "all") return true;
+  const isControl = CONTROL_STRATEGIES.has(t.strategy);
+  return book === "control" ? isControl : !isControl;
+}
+
 function buildFilters() {
-  const indexes = [...new Set(allTrades.map(t => t.index))].sort();
-  const strategies = [...new Set(allTrades.map(t => t.strategy))].sort();
+  const booked = allTrades.filter(inBook);
+  const indexes = [...new Set(booked.map(t => t.index))].sort();
+  const strategies = [...new Set(booked.map(t => t.strategy))].sort();
+
+  const bookEl = document.getElementById("bookFilter");
+  bookEl.innerHTML = [
+    ["primary", "Primary", "Sentinel, spreads, price action -- the funded book"],
+    ["control", "Control", "Anchor: uncapped baseline, never funded"],
+    ["all", "All", "Both together"],
+  ].map(([k, label, tip]) =>
+    `<div class="pill ${book === k ? "active" : ""}" data-book="${k}" title="${tip}">${label}</div>`
+  ).join("");
+  bookEl.querySelectorAll(".pill").forEach(p => p.addEventListener("click", () => {
+    book = p.dataset.book;
+    activeStrategies.clear();          // a stale strategy pill can hide every row
+    setRefreshNote(); buildFilters(); render();
+  }));
 
   const idxEl = document.getElementById("indexFilter");
   idxEl.innerHTML = `<div class="pill ${activeIndexes.size === 0 ? "active" : ""}" data-all="index">All</div>` +
@@ -265,6 +315,7 @@ function quarterMonths(fy, q) {
 
 function filteredTrades() {
   return allTrades.filter(t =>
+    inBook(t) &&
     (activeIndexes.size === 0 || activeIndexes.has(t.index)) &&
     (activeStrategies.size === 0 || activeStrategies.has(t.strategy))
   );
