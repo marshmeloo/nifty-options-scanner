@@ -267,6 +267,20 @@ class Policy:
     # says it: an in-progress range is partial, so at 09:30 every day
     # scores as the quietest on record. Gating without it would block the
     # first trade of every session.
+    # DEPLOYMENT CAP (added 2026-09-01). Refuse a new entry when the
+    # PREMIUM already committed to open positions, plus this candidate's,
+    # would exceed this % of config.TOTAL_CAPITAL.
+    #
+    # WHY IT IS NOT ALREADY COVERED. config.MAX_TOTAL_EXPOSURE_PCT (20%)
+    # sounds like this and is not: trade_tracker.compute_risk_state sums
+    # (entry - stop) x lot x lots, i.e. RISK AT STOP, not money handed
+    # over. On 2026-08-27 the live book committed Rs 4,30,860 of premium
+    # at once -- 86% of the Rs 5,00,000 allocation, Anchor alone holding
+    # Rs 3,23,362 (65%) -- while that guard read roughly 3%. Actual
+    # capital commitment has never been bounded by anything.
+    #
+    # None disables it, so every existing study stays reproducible.
+    max_deployed_pct: float = None
     quiet_regime_block_pctile: float = None
     quiet_regime_min_elapsed_pct: float = 20.0
     regime_baseline: list = None
@@ -320,6 +334,26 @@ def build_price_index(cycles) -> dict:
                 (snapshot.timestamp, q.bid, q.ask, q.ltp)
             )
     return index
+
+
+def deployment_blocked(positions, ts, candidate_cost, max_pct) -> bool:
+    """
+    True when premium already committed, plus this candidate's, would
+    exceed `max_pct` of config.TOTAL_CAPITAL.
+
+    Counts a position as committed while opened_ts <= ts < closed_ts --
+    the same causality risk_state_at() uses, so a trade that closes later
+    in the day does not retroactively free capital for an earlier
+    decision.
+    """
+    if max_pct is None:
+        return False
+    lot = getattr(config, "NIFTY_LOT_SIZE", 65)
+    committed = sum(
+        p["entry"] * lot * p["lots"] for p in positions
+        if p["opened_ts"] <= ts and (p["closed_ts"] is None or p["closed_ts"] > ts))
+    budget = config.TOTAL_CAPITAL * max_pct / 100.0
+    return (committed + candidate_cost) > budget
 
 
 def quiet_regime_blocked(candles, ts, baseline, block_pctile, min_elapsed_pct) -> bool:
@@ -1039,6 +1073,14 @@ def run_policy(day: str, policy: Policy, verbose: bool = False, blocked_reversal
                 # would have been rejected anyway regardless of direction.
                 # Reordering has no other effect: nothing between the old
                 # and new position mutates `positions`/`trades`, only reads.
+                # Deployment cap: would this tie up more premium than the
+                # book is allowed to have committed at once?
+                if deployment_blocked(
+                        positions, ts,
+                        plan.entry * getattr(config, "NIFTY_LOT_SIZE", 65) * plan.lots,
+                        policy.max_deployed_pct):
+                    continue
+
                 # Quiet-regime gate: is today even a day worth trading?
                 # Checked here, with the other post-qualification gates, so
                 # it only ever rejects a candidate that would have opened.
