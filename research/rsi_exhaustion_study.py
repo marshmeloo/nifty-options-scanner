@@ -106,7 +106,17 @@ def main():
               f"{m['max_dd_pct']-base['max_dd_pct']:+6.2f}pp | Calmar "
               f"{base['calmar']:.2f} -> {m['calmar']:.2f}")
 
-    best = max((k for k in res if k != "off"), key=lambda k: res[k]["calmar"] or 0, default=None)
+    # Guard the sort itself, not just the value: a complex Calmar used to
+    # crash this line outright (TypeError: '>' not supported between
+    # 'complex' and 'float'), killing the per-year table and the JSON
+    # write after every variant had already been computed. The underlying
+    # cause is fixed in institutional_metrics, but a study should not be
+    # one bad metric away from losing an hour of results.
+    def _rank(k):
+        c = res[k].get("calmar")
+        return c if isinstance(c, (int, float)) else float("-inf")
+
+    best = max((k for k in res if k != "off"), key=_rank, default=None)
     if best:
         ya, yb = yr["off"], yr[best]
         print(f"\n  PER-YEAR, best ({best}) vs off -- the verdict")
