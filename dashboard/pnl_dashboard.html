@@ -323,6 +323,38 @@ function fmtInr(v) {
   return v > 0 ? "+" + s : (v < 0 ? "-" + s : s);
 }
 function pnlClass(v) { return v > 0 ? "pos" : (v < 0 ? "neg" : ""); }
+// Capital ACTUALLY tied up, not the sum of every trade's commitment.
+// Summing is wrong and flatters losses: 211 August trades summed to
+// Rs 20,96,762 against a Rs 5,00,000 book, because the same money is
+// recycled all month -- a trade closes, the capital frees, the next
+// trade uses it again. What matters is how much was committed AT ONCE.
+// Returns {peak, median, byDay} of per-day peak simultaneous capital.
+function capitalPeaks(trades) {
+  const byDay = {};
+  trades.forEach(t => {
+    if (t.capital_deployed == null || !t.opened_at || !t.closed_at) return;
+    (byDay[t.date] = byDay[t.date] || []).push(t);
+  });
+  const peaks = {};
+  Object.entries(byDay).forEach(([day, ts]) => {
+    const ev = [];
+    ts.forEach(t => {
+      ev.push([t.opened_at, +t.capital_deployed]);
+      ev.push([t.closed_at, -t.capital_deployed]);
+    });
+    ev.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    let cur = 0, pk = 0;
+    ev.forEach(([, d]) => { cur += d; pk = Math.max(pk, cur); });
+    peaks[day] = pk;
+  });
+  const vals = Object.values(peaks).sort((a, b) => a - b);
+  return {
+    peak: vals.length ? vals[vals.length - 1] : 0,
+    median: vals.length ? vals[Math.floor(vals.length / 2)] : 0,
+    byDay: peaks,
+  };
+}
+
 function fmtSignedPct(v) {
   if (v === undefined || v === null || isNaN(v)) return "—";
   return (v > 0 ? "+" : "") + v.toFixed(1) + "%";
@@ -374,7 +406,7 @@ function renderCards(trades) {
   const realised = trades.reduce((s, t) => s + t.realised_pnl_inr, 0);
   const charges = trades.reduce((s, t) => s + (t.charges_inr || 0), 0);
   const net = trades.reduce((s, t) => s + t.net_pnl_inr, 0);
-  const dayCount = new Set(trades.map(t => t.date)).size;
+  const pk = capitalPeaks(trades);
   const withCapital = trades.filter(t => t.capital_deployed !== null && t.capital_deployed !== undefined);
   const capital = withCapital.reduce((s, t) => s + t.capital_deployed, 0);
   const capitalKnown = withCapital.length > 0;
@@ -392,18 +424,17 @@ function renderCards(trades) {
     // summed over the selected range. Without it a rupee P&L has no
     // denominator: the same +Rs 5,000 means very different things on
     // Rs 20,000 deployed and on Rs 2,00,000.
-    { label: "Capital deployed", value: capitalKnown ? fmtInrAbs(capital) : "—",
+    { label: "Peak capital", value: capitalKnown ? fmtInrAbs(pk.peak) : "—",
       note: capitalKnown
-        ? (trades.length ? `avg ${fmtInrAbs(capital / trades.length)}/trade` +
-             (dayCount ? ` · ${fmtInrAbs(capital / dayCount)}/day` : "") : "")
+        ? `most ever committed at once · median day ${fmtInrAbs(pk.median)}`
         : "not recorded for these trades" },
-    // Return ON THE CAPITAL COMMITTED, which is the only way to compare a
-    // premium-buying strategy against a margin-posting credit spread --
-    // Directional Spread earned Rs 4,579 on Rs 34,089 of risk in August
-    // while the momentum books lost far more on far less.
-    { label: "Return on capital", value: capitalKnown ? fmtSignedPct(net / capital * 100) : "—",
+    // Measured against PEAK SIMULTANEOUS capital, never the sum of every
+    // trade. The same money is recycled all month, so summing invents a
+    // capital base that never existed and makes losses look small: August
+    // summed to Rs 20,96,762 against a real peak of Rs 4,30,860.
+    { label: "Return on capital", value: capitalKnown && pk.peak ? fmtSignedPct(net / pk.peak * 100) : "—",
       cls: pnlClass(net),
-      note: capitalKnown ? "net P&L / capital committed" : "" },
+      note: capitalKnown ? "net P&L / peak simultaneous capital" : "" },
   ];
   document.getElementById("cards").innerHTML = cards.map(c => `
     <div class="card">
@@ -520,13 +551,13 @@ function renderDayGrid(trades) {
     const ds = fmtDate(new Date(y, m, day));
     const dayTrades = byDate[ds] || [];
     const net = dayTrades.reduce((s, t) => s + t.net_pnl_inr, 0);
-    const dayCapital = dayTrades.reduce((s, t) => s + (t.capital_deployed || 0), 0);
+    const dayCapital = capitalPeaks(dayTrades).byDay[ds] || 0;   // peak, not sum
     const cls = dayTrades.length ? (net >= 0 ? "pos" : "neg") : "empty";
     const today = ds === todayStr ? " today" : "";
     html += `<div class="tile day ${cls}${today}" data-date="${ds}" ${dayTrades.length ? "" : ""}>
       <div class="tile-title">${day}</div>
       ${dayTrades.length ? `<div class="tile-pnl ${cls}">${fmtInr(net)}</div>` : ""}
-      ${dayTrades.length && dayCapital ? `<div class="tile-capital">${fmtInrAbs(dayCapital)} used</div>` : ""}
+      ${dayTrades.length && dayCapital ? `<div class="tile-capital">${fmtInrAbs(dayCapital)} peak</div>` : ""}
     </div>`;
   }
   html += `</div>`;

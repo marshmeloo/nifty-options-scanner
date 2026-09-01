@@ -754,7 +754,7 @@ function renderSentinel(sentinel, suffix, label) {
       <div class="card"><h3>${label} today</h3>
         <div class="row"><span class="k">Total capital</span><span class="v">${fmtInrAbs(totals.total_capital)}</span></div>
         <div class="row"><span class="k">Deployed (open)</span><span class="v">${fmtInrAbs(totals.capital_deployed)}${pctOfCapital(totals.capital_deployed, totals.total_capital)}</span></div>
-        <div class="row"><span class="k">Deployed (closed today)</span><span class="v">${fmtInrAbs(totals.closed_capital_deployed)}${pctOfCapital(totals.closed_capital_deployed, totals.total_capital)}</span></div>
+        <div class="row"><span class="k">Peak deployed today</span><span class="v">${fmtInrAbs(totals.peak_capital_today)}${pctOfCapital(totals.peak_capital_today, totals.total_capital)}</span></div>
         <div class="row"><span class="k">Open P&amp;L</span><span class="v ${pnlClass(totals.open_pnl_inr)}">${fmtInr(totals.open_pnl_inr)}</span></div>
         <div class="row"><span class="k">Realised today</span><span class="v ${pnlClass(totals.realized_pnl_inr)}">${fmtInr(totals.realized_pnl_inr)}</span></div>
         <div class="row"><span class="k">Total today</span><span class="v ${pnlClass(totals.total_pnl_today_inr)}">${fmtInr(totals.total_pnl_today_inr)}</span></div>

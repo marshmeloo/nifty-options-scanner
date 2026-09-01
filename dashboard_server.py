@@ -304,8 +304,7 @@ def _sentinel_block(open_trades_path: Path, journal_path: Path, lot_size: int) -
     return {
         "strategy_version": _sentinel_version(journal_path),
         "total_capital": getattr(config, "TOTAL_CAPITAL", None),
-        "closed_capital_deployed": round(
-            sum(t.get("capital_deployed", 0) or 0 for t in closed_today), 2),
+        "peak_capital_today": _peak_capital(open_trades, closed_today),
         "open_trades": open_trades,
         "closed_today": closed_today,
         "totals": {
@@ -492,6 +491,41 @@ def _peak_favorable_inr(t: dict, index_label: str):
     return None
 
 
+def _peak_capital(open_trades: list, closed_today: list) -> float:
+    """
+    Most capital committed AT ONCE today, not the sum of every trade.
+
+    Summing is wrong and it flatters risk: August's 211 trades summed to
+    Rs 20,96,762 against a Rs 5,00,000 book, because the same money is
+    recycled -- a trade closes, the capital frees, the next trade uses it.
+    The real figure for 2026-08-27 was Rs 4,30,860 committed at once, 86%
+    of the whole allocation. Worth stating plainly:
+    MAX_TOTAL_EXPOSURE_PCT (20%) does NOT bound this -- it measures risk
+    at stop, not premium deployed -- so this number is currently the only
+    place actual capital commitment is visible at all.
+
+    Open positions are counted as still committed right now.
+    """
+    events = []
+    for t in closed_today:
+        cap = t.get("capital_deployed")
+        if cap and t.get("opened_at") and t.get("closed_at"):
+            events.append((t["opened_at"], +cap))
+            events.append((t["closed_at"], -cap))
+    for t in open_trades:
+        cap = t.get("capital_deployed")
+        if cap and t.get("opened_at"):
+            events.append((t["opened_at"], +cap))     # never closed -> still on
+    if not events:
+        return 0.0
+    events.sort(key=lambda e: e[0])
+    cur = peak = 0.0
+    for _ts, delta in events:
+        cur += delta
+        peak = max(peak, cur)
+    return round(peak, 2)
+
+
 def _capital_committed(t: dict, lot_size: int) -> float:
     """
     What this trade actually TIED UP, across the three journal shapes.
@@ -653,7 +687,6 @@ def build_state() -> dict:
                                  getattr(config, "NIFTY_LOT_SIZE", 65))
 
     total_capital_deployed = round(sum(t["capital_deployed"] for t in open_trades), 2)
-    closed_capital_deployed = round(sum(t.get("capital_deployed", 0) or 0 for t in closed_today), 2)
     total_open_pnl_inr = round(sum(t.get("running_pnl_inr", 0) or 0 for t in open_trades), 2)
     total_realized_pnl_inr = round(sum(t.get("pnl_inr", 0) or 0 for t in closed_today), 2)
     total_pnl_today_inr = round(total_open_pnl_inr + total_realized_pnl_inr, 2)
@@ -794,8 +827,7 @@ def build_state() -> dict:
         "opened_today": bn_open_trades_state.get("opened_today") if bn_open_trades_state else None,
         "totals": {
             "capital_deployed": bn_total_capital_deployed,
-            "closed_capital_deployed": round(
-                sum(t.get("capital_deployed", 0) or 0 for t in bn_closed_today), 2),
+            "peak_capital_today": _peak_capital(bn_open_trades, bn_closed_today),
             "total_capital": getattr(config, "TOTAL_CAPITAL", None),
             "open_pnl_inr": bn_total_open_pnl_inr,
             "realized_pnl_inr": bn_total_realized_pnl_inr,
@@ -832,7 +864,7 @@ def build_state() -> dict:
             # Premium tied up by trades that have already CLOSED today.
             # Without it the dashboard could show what is deployed right
             # now but never what the day as a whole put to work.
-            "closed_capital_deployed": closed_capital_deployed,
+            "peak_capital_today": _peak_capital(open_trades, closed_today),
             # The allocation everything is sized against (config.TOTAL_CAPITAL).
             # Shown so a rupee figure can be read as a % of the book rather
             # than as a bare number.

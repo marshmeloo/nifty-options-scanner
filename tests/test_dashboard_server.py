@@ -391,3 +391,44 @@ def test_pnl_rows_carry_capital_for_both_shapes(tmp_path, monkeypatch):
     rows = {r["strategy"]: r for r in ds._load_all_pnl_trades()}
     assert rows["Momentum (Anchor)"]["capital_deployed"] == 6500.0
     assert rows["Directional Spread"]["capital_deployed"] == 4108.0
+
+
+# --------------------------------------------------------------------------
+# _peak_capital: capital committed AT ONCE, never the sum.
+#
+# Summing every trade's commitment invents a base that never existed and
+# flatters risk. August's 211 trades summed to Rs 20,96,762 against a
+# Rs 5,00,000 book; the real peak was Rs 4,30,860 on 2026-08-27 -- 86% of
+# the allocation, against a MAX_TOTAL_EXPOSURE_PCT of 20% that does not
+# measure deployment at all.
+# --------------------------------------------------------------------------
+
+def test_peak_capital_is_concurrency_not_sum():
+    """Two trades that never overlap: peak is the larger, not the total."""
+    import dashboard_server as ds
+    closed = [
+        {"capital_deployed": 1000, "opened_at": "2026-08-31T09:20", "closed_at": "2026-08-31T10:00"},
+        {"capital_deployed": 3000, "opened_at": "2026-08-31T10:30", "closed_at": "2026-08-31T11:00"},
+    ]
+    assert ds._peak_capital([], closed) == 3000
+
+
+def test_peak_capital_adds_overlapping_positions():
+    import dashboard_server as ds
+    closed = [
+        {"capital_deployed": 1000, "opened_at": "2026-08-31T09:20", "closed_at": "2026-08-31T11:00"},
+        {"capital_deployed": 3000, "opened_at": "2026-08-31T10:00", "closed_at": "2026-08-31T10:30"},
+    ]
+    assert ds._peak_capital([], closed) == 4000
+
+
+def test_peak_capital_counts_still_open_positions():
+    """An open position is capital committed RIGHT NOW."""
+    import dashboard_server as ds
+    assert ds._peak_capital(
+        [{"capital_deployed": 2500, "opened_at": "2026-08-31T09:20"}], []) == 2500
+
+
+def test_peak_capital_empty_is_zero():
+    import dashboard_server as ds
+    assert ds._peak_capital([], []) == 0.0
