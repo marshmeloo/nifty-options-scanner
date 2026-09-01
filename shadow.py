@@ -222,6 +222,54 @@ class Policy:
     # this has not shipped anywhere; every existing study stays
     # reproducible unless a caller opts in explicitly.
     use_reversal_exit: bool = False
+    # EXTENSION GUARD (added 2026-08-31). Refuse an entry when spot has
+    # already travelled most of its recent range in the signal's own
+    # direction -- i.e. do not buy PE at the bottom of the range, or CE
+    # at the top.
+    #
+    # WHY. Every reason string behind the 2026-08-31 session's losing
+    # entries was "Momentum aligned: X% ROC supports this direction", and
+    # ROC is BACKWARD-LOOKING: it can only turn negative after price has
+    # already fallen. So a momentum-confirmation entry is late by
+    # construction. Measured on that session, all 13 Bank Nifty entries
+    # were in the direction the previous 30 minutes had already moved
+    # (PE after -57 to -146 pts, CE after +97 to +158), and the worst pair
+    # never went a single point favourable. On a trending day the leg
+    # continues; on that day the index ranged 0.66% and the move that
+    # triggered the signal WAS the whole move.
+    #
+    # Expressed as a percentile of the lookback range: 0.8 means "refuse a
+    # CE when spot sits above the 80th percentile of its recent range, and
+    # a PE when it sits below the 20th". None disables it, so every
+    # existing study stays reproducible.
+    extension_guard_pctile: float = None
+    extension_lookback_minutes: float = 30.0
+    # QUIET-REGIME GATE (added 2026-08-31). Refuse NEW entries once the
+    # session's range-so-far ranks below `quiet_regime_block_pctile` of a
+    # TRAILING baseline, and enough of the session has elapsed for that
+    # reading to mean anything.
+    #
+    # WHY. market_regime.py has computed exactly this live since July, for
+    # an unrelated reason, and NOTHING GATES ON IT -- grep finds only
+    # logging. On 2026-08-31 it printed QUIET every cycle: Bank Nifty p0
+    # at the open, p7 by 10% elapsed, p9 by 20%, then flat at p13 all
+    # afternoon. The nine losing PE entries fired at 10:09-10:23, inside
+    # that p7-p9 window. The day used less range by 11am than 93% of days
+    # use in total, and the system traded it 27 times.
+    #
+    # `regime_baseline` is the sorted list of trailing daily range
+    # percentages for the day being replayed, supplied by the caller.
+    # market_regime.get_range_distribution() fetches a LIVE 180-day
+    # window, which applied to 2021 history would be look-ahead; the study
+    # builds a rolling baseline from the reconstructed history instead.
+    #
+    # The elapsed floor is not optional. market_regime's own docstring
+    # says it: an in-progress range is partial, so at 09:30 every day
+    # scores as the quietest on record. Gating without it would block the
+    # first trade of every session.
+    quiet_regime_block_pctile: float = None
+    quiet_regime_min_elapsed_pct: float = 20.0
+    regime_baseline: list = None
 
     def resolved_min_score(self) -> float:
         return self.min_score if self.min_score is not None else config.MIN_CONVICTION_SCORE_TO_TRACK
@@ -272,6 +320,63 @@ def build_price_index(cycles) -> dict:
                 (snapshot.timestamp, q.bid, q.ask, q.ltp)
             )
     return index
+
+
+def quiet_regime_blocked(candles, ts, baseline, block_pctile, min_elapsed_pct) -> bool:
+    """
+    True when the session so far is quieter than `block_pctile` of the
+    trailing baseline, and enough of it has run to say so.
+
+    Returns False whenever the question is unanswerable -- no baseline, no
+    candles, degenerate range, or too little of the session elapsed. An
+    unmeasurable condition must never silently halt trading.
+    """
+    if block_pctile is None or not baseline or not candles:
+        return False
+    session_start = ts.replace(hour=9, minute=15, second=0, microsecond=0)
+    session_minutes = 375.0                     # 09:15 -> 15:30
+    elapsed_pct = min(100.0, max(0.0,
+                      (ts - session_start).total_seconds() / 60.0 / session_minutes * 100.0))
+    if elapsed_pct < min_elapsed_pct:
+        return False
+    day_open = candles[0].open
+    if not day_open:
+        return False
+    hi = max(c.high for c in candles)
+    lo = min(c.low for c in candles)
+    if hi <= lo:
+        return False
+    range_pct = (hi - lo) / day_open * 100.0
+    below = sum(1 for r in baseline if r < range_pct)
+    percentile = below / len(baseline) * 100.0
+    return percentile <= block_pctile
+
+
+def extension_blocked(option_type: str, spot: float, spot_history: list, ts,
+                      pctile: float, lookback_minutes: float) -> bool:
+    """
+    True when spot has already run too far in the direction this contract
+    needs, measured as its position within the lookback range.
+
+    position = (spot - low) / (high - low), so 1.0 is the top of the range
+    and 0.0 the bottom. A CE is refused above `pctile`; a PE below
+    `1 - pctile`. Returns False when the range is degenerate or the
+    history is too short to judge -- an unmeasurable condition must not
+    silently block trading.
+    """
+    if pctile is None or not spot_history:
+        return False
+    cutoff = ts - timedelta(minutes=lookback_minutes)
+    window = [p for t, p in spot_history if t >= cutoff]
+    if len(window) < 5:
+        return False
+    lo, hi = min(window), max(window)
+    if hi <= lo:
+        return False
+    position = (spot - lo) / (hi - lo)
+    if option_type == "CE":
+        return position > pctile
+    return position < (1.0 - pctile)
 
 
 def opposite_direction_blocked(setup, positions: list, ts) -> bool:
@@ -815,10 +920,13 @@ def run_policy(day: str, policy: Policy, verbose: bool = False, blocked_reversal
     # "a loss" that ended the day, when only a genuine stop-out (outcome
     # == "LOSS") is a discrete, real-time event a live trader would act on.
     loss_known_at = None
+    spot_history = []       # (ts, spot) for the extension guard's lookback window
 
     with tt.journal_writes_disabled(), _config_overrides(policy.config_overrides):
         for snapshot, candles, _meta in cycles:
             ts = snapshot.timestamp
+            if snapshot.spot:
+                spot_history.append((ts, snapshot.spot))
             if loss_known_at is not None and ts >= loss_known_at:
                 break
             if not (start <= ts.time() <= end):
@@ -931,6 +1039,24 @@ def run_policy(day: str, policy: Policy, verbose: bool = False, blocked_reversal
                 # would have been rejected anyway regardless of direction.
                 # Reordering has no other effect: nothing between the old
                 # and new position mutates `positions`/`trades`, only reads.
+                # Quiet-regime gate: is today even a day worth trading?
+                # Checked here, with the other post-qualification gates, so
+                # it only ever rejects a candidate that would have opened.
+                if quiet_regime_blocked(candles, ts, policy.regime_baseline,
+                                        policy.quiet_regime_block_pctile,
+                                        policy.quiet_regime_min_elapsed_pct):
+                    continue
+
+                # Extension guard: refuse a fully-qualified signal that is
+                # merely chasing a move already made. Placed here, after
+                # every other gate, for the same reason the opposite-
+                # direction check sits here -- so it only ever rejects a
+                # candidate that would genuinely have opened.
+                if extension_blocked(setup.option_type, snapshot.spot, spot_history, ts,
+                                     policy.extension_guard_pctile,
+                                     policy.extension_lookback_minutes):
+                    continue
+
                 if policy.use_opposite_direction_gate and opposite_direction_blocked(setup, positions, ts):
                     blocking = [
                         p for p in positions

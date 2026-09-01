@@ -3,6 +3,97 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## NOT ADOPTED (both tested and rejected 2026-08-31): two filters aimed at the -Rs 37,875 session -- the extension guard and the quiet-regime gate
+
+The 2026-08-31 Bank Nifty session lost Rs 37,875 on a day whose total
+range was 0.66%. Two readings of it were tested properly. Both failed.
+Recorded so neither is retried from scratch.
+
+**1. EXTENSION GUARD -- "stop chasing moves already made".**
+Every losing entry's only reason was "Momentum aligned: X% ROC supports
+this direction", and ROC is backward-looking, so the entry is late by
+construction. Measured: ALL 13 Bank Nifty entries were in the direction
+the prior 30 minutes had already moved; the worst pair never went one
+point favourable. The guard refuses a CE above the Nth percentile of the
+recent range, a PE below the (100-N)th.
+
+On the session it was designed from it blocks 15-18 of 18 trades and
+"saves" Rs 30-35k. On 1,244 days it is worse at EVERY setting:
+
+| guard | trades | win% | return | maxDD | Calmar |
+|---|---|---|---|---|---|
+| off | 6,970 | 43.0 | +895.1% | 9.6% | **6.11** |
+| 0.95 | 4,368 | 40.8 | +457.8% | 17.6% | 2.34 |
+| 0.90 | 3,976 | 40.9 | +439.4% | 13.9% | 2.89 |
+| 0.85 | 3,581 | 40.7 | +383.5% | 11.8% | 3.13 |
+| 0.80 | 3,181 | 41.0 | +352.3% | 8.9% | 3.97 |
+| 0.70 | 2,501 | 40.8 | +262.6% | 11.4% | 2.58 |
+
+Win rate and profit factor fall at all five settings. Only 0.80 improves
+drawdown, by 0.68pp, for 543pp of return. Drawdown is not even monotonic
+(17.6 -> 13.9 -> 11.8 -> 8.9 -> 11.4), the signature of noise.
+
+CONCLUSION: chasing continuation IS the edge. The guard does not filter
+bad entries, it filters out the strategy.
+
+**2. QUIET-REGIME GATE -- "don't trade a dead tape".**
+market_regime.py has computed a live quiet/normal/volatile read since
+2026-07-30 and NOTHING GATES ON IT (grep finds only logging). On
+2026-08-31 it printed QUIET every cycle: Bank Nifty p0 at the open, p7
+by 10% elapsed, p9 by 20%, flat at p13 all afternoon. The day used less
+range by 11am than 93% of days use in total; the system traded it 27
+times.
+
+Tested with a STRICTLY TRAILING 121-day baseline built from the
+reconstructed history (market_regime's own live baseline would be
+look-ahead on 2021 data) and a 20%-elapsed floor (its docstring warns an
+in-progress range is partial, so every day looks quietest at 09:30).
+
+Aggregate looked GOOD -- p25: drawdown 9.6% -> 7.4%, Calmar 6.11 ->
+7.13, win rate and expectancy both up. Per YEAR it falls apart:
+
+| year | return off -> on | Calmar off -> on | |
+|---|---|---|---|
+| 2021 | 89.3% -> 84.4% | 64.87 -> 56.77 | worse |
+| 2022 | 251.1% -> 174.8% | 40.89 -> 31.21 | worse |
+| 2023 | 141.9% -> 112.6% | 20.27 -> 15.46 | worse |
+| 2024 | 196.3% -> 186.9% | 31.10 -> 29.73 | worse |
+| 2025 | 93.9% -> 67.2% | 9.88 -> 9.56 | worse |
+| 2026 | 122.6% -> 112.1% | 50.52 -> 66.48 | BETTER |
+
+Return is lower in ALL SIX years. Calmar better in 1 of 6.
+
+WHY THE AGGREGATE LIED, worth remembering: whole-period drawdown fell
+9.6% -> 7.4% while NO year's own drawdown improved much (worse in 2021
+and 2023, unchanged in 2024). The gain came from a drawdown episode
+SPANNING years that the gate softened once -- not from reducing risk in
+any given year. A single aggregate Calmar hid that completely; the
+per-year split exposed it. The sweep was also non-monotonic (p33 worse
+than no gate at all), which was the tell.
+
+Both flags remain in shadow.Policy, defaulting OFF
+(extension_guard_pctile, quiet_regime_block_pctile), so the negative
+results stay reproducible. NEITHER IS WIRED TO ANYTHING LIVE.
+
+**WHAT THE SESSION ACTUALLY POINTS AT.** August live: -Rs 81,835 over
+199 trades, of which Anchor is -Rs 80,902 (99%). Every other strategy is
+flat or positive (DirSpread +Rs 4,579 at 75% win rate). Anchor Bank
+Nifty ran 9.7% win rate against Sentinel Bank Nifty's 32.5% on the same
+market -- and the only structural difference for most of August was
+Sentinel's cluster cap. Applying that cap retrospectively to Anchor's
+own August journal (keeping the FIRST of each burst, blocking the
+followers, as cluster_cap_blocks does live) removes Rs 63,680 of the
+Rs 81,835 loss; the blocked trades ran 12% win rate vs 21% for the kept
+ones. Bursts reached 14, 10, 9, 9, 6, 5 same-direction trades inside a
+30-minute bucket.
+
+That is a retrospective static replay, NOT a simulation -- it cannot see
+that freed capital and cooldowns change what opens next, the exact
+distinction that made the opposite-direction approximation read +622%
+when the real forward run gave +362%. Next step is the cap through
+shadow.py on Anchor's own 1,244-day Bank Nifty and 1,491-day NIFTY
+history, per-year, to the same bar the quiet-regime gate just failed.
+
 ## FIXED (2026-08-31): the "support" tag was a substring false positive on 86% of all trades ever recorded
 
 Spotted from the live session by eye -- "PE entry was on support" -- and
