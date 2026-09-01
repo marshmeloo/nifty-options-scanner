@@ -195,9 +195,9 @@ def _with_capital(entries: list, lot_size: int) -> list:
     out = []
     for e in entries:
         e = dict(e)
-        entry_px = e.get("entry")
-        if entry_px is not None:
-            e["capital_deployed"] = round(entry_px * lot_size * (e.get("lots") or 1), 2)
+        cap = _capital_committed(e, lot_size)
+        if cap is not None:
+            e["capital_deployed"] = cap
         out.append(e)
     return out
 
@@ -492,6 +492,38 @@ def _peak_favorable_inr(t: dict, index_label: str):
     return None
 
 
+def _capital_committed(t: dict, lot_size: int) -> float:
+    """
+    What this trade actually TIED UP, across the three journal shapes.
+
+    Single-leg (momentum, price action) BUY premium, so capital is
+    entry x lot size x lots -- money handed over.
+
+    Credit spreads and condors (directional spread, condor) COLLECT
+    premium and post margin instead. There is no "entry" price to
+    multiply, and the money at stake is the defined max loss the hedge
+    caps it at. Using entry x lots for them is not merely inaccurate, it
+    is meaningless -- which is why they showed no capital at all before
+    2026-09-01, and why August's only profitable strategy had no
+    denominator on the dashboard: Directional Spread committed
+    Rs 34,089 of risk across 8 trades (avg Rs 4,261) to earn Rs 4,579,
+    and none of that was visible.
+
+    Returns None when the shape is unrecognised, so the frontend shows a
+    dash rather than a wrong number.
+    """
+    entry = t.get("entry")
+    if entry is not None:
+        return round(entry * lot_size * (t.get("lots") or 1), 2)
+
+    plan = t.get("plan") or {}
+    max_loss = plan.get("max_loss_inr")
+    if max_loss is not None:
+        # Already an absolute rupee figure for the whole position.
+        return round(abs(max_loss), 2)
+    return None
+
+
 def _contract_label(t: dict) -> str:
     """
     Human-readable description of WHAT was traded, across three different
@@ -600,12 +632,8 @@ def _load_all_pnl_trades() -> list:
                 # profit and loss per day with no sense of the capital that
                 # produced it, so a good day on a large deployment and a good
                 # day on a small one read identically.
-                "capital_deployed": (
-                    round((t.get("entry") or 0)
-                          * PNL_INDEX_LOT_SIZE.get(index_label, 65)
-                          * ((t.get("lots") if t.get("lots") is not None
-                              else (t.get("plan") or {}).get("lots")) or 1), 2)
-                    if t.get("entry") is not None else None),
+                "capital_deployed": _capital_committed(
+                    t, PNL_INDEX_LOT_SIZE.get(index_label, 65)),
                 "peak_favorable_inr": _peak_favorable_inr(t, index_label),
                 "peak_r": t.get("max_r_seen"),
             })

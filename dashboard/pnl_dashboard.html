@@ -323,6 +323,10 @@ function fmtInr(v) {
   return v > 0 ? "+" + s : (v < 0 ? "-" + s : s);
 }
 function pnlClass(v) { return v > 0 ? "pos" : (v < 0 ? "neg" : ""); }
+function fmtSignedPct(v) {
+  if (v === undefined || v === null || isNaN(v)) return "—";
+  return (v > 0 ? "+" : "") + v.toFixed(1) + "%";
+}
 
 // GAVE_BACK_THRESHOLD_INR: below this, a peak-vs-close gap is noise
 // (a few rupees of tick movement), not a real "ran up then reversed"
@@ -370,6 +374,7 @@ function renderCards(trades) {
   const realised = trades.reduce((s, t) => s + t.realised_pnl_inr, 0);
   const charges = trades.reduce((s, t) => s + (t.charges_inr || 0), 0);
   const net = trades.reduce((s, t) => s + t.net_pnl_inr, 0);
+  const dayCount = new Set(trades.map(t => t.date)).size;
   const withCapital = trades.filter(t => t.capital_deployed !== null && t.capital_deployed !== undefined);
   const capital = withCapital.reduce((s, t) => s + t.capital_deployed, 0);
   const capitalKnown = withCapital.length > 0;
@@ -389,8 +394,16 @@ function renderCards(trades) {
     // Rs 20,000 deployed and on Rs 2,00,000.
     { label: "Capital deployed", value: capitalKnown ? fmtInrAbs(capital) : "—",
       note: capitalKnown
-        ? (trades.length ? `avg ${fmtInrAbs(capital / trades.length)} per trade` : "")
+        ? (trades.length ? `avg ${fmtInrAbs(capital / trades.length)}/trade` +
+             (dayCount ? ` · ${fmtInrAbs(capital / dayCount)}/day` : "") : "")
         : "not recorded for these trades" },
+    // Return ON THE CAPITAL COMMITTED, which is the only way to compare a
+    // premium-buying strategy against a margin-posting credit spread --
+    // Directional Spread earned Rs 4,579 on Rs 34,089 of risk in August
+    // while the momentum books lost far more on far less.
+    { label: "Return on capital", value: capitalKnown ? fmtSignedPct(net / capital * 100) : "—",
+      cls: pnlClass(net),
+      note: capitalKnown ? "net P&L / capital committed" : "" },
   ];
   document.getElementById("cards").innerHTML = cards.map(c => `
     <div class="card">
@@ -564,7 +577,8 @@ function renderTradeTable(trades) {
   wrap.innerHTML = `<table>
     <thead><tr>
       <th>Closed</th><th>Index</th><th>Strategy</th><th>Contract</th><th>Lots</th>
-      <th>Realised</th><th>Charges</th><th>Peak</th><th>Net</th><th>Outcome</th>
+      <th title="Premium paid for a bought option; max loss (margin) for a credit spread or condor">Capital</th>
+      <th>Realised</th><th>Charges</th><th>Peak</th><th>Net</th><th title="Net P&amp;L as a % of the capital that trade committed">on cap</th><th>Outcome</th>
     </tr></thead>
     <tbody>${sorted.map(t => { const pk = peakLabel(t); return `
       <tr>
@@ -573,10 +587,12 @@ function renderTradeTable(trades) {
         <td>${t.strategy}</td>
         <td>${t.contract || (t.strike ? t.strike + " " + (t.option_type || "") : "—")}</td>
         <td>${t.lots ?? "—"}</td>
+        <td>${t.capital_deployed != null ? fmtInrAbs(t.capital_deployed) : "—"}</td>
         <td class="${pnlClass(t.realised_pnl_inr)}">${fmtInr(t.realised_pnl_inr)}</td>
         <td>${t.charges_modelled ? fmtInr(-(t.charges_inr||0)) : "—"}</td>
         <td title="${pk ? 'Gave back ' + fmtInrAbs(pk.gaveBack) + ' before closing' : ''}" style="${pk ? 'color:#c9a44a;' : ''}">${pk ? fmtInr(pk.peak) + pk.rSuffix : "—"}</td>
         <td class="${pnlClass(t.net_pnl_inr)}">${fmtInr(t.net_pnl_inr)}</td>
+        <td class="${pnlClass(t.net_pnl_inr)}">${t.capital_deployed ? (t.net_pnl_inr / t.capital_deployed * 100).toFixed(1) + "%" : "—"}</td>
         <td>${t.outcome || "—"}</td>
       </tr>
     `; }).join("")}</tbody>

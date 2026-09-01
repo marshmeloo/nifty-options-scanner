@@ -327,3 +327,67 @@ def test_dashboard_html_has_no_hardcoded_sentinel_version():
     for h in headings:
         assert "v1.1-dev" not in h and "v1.2-dev" not in h, f"hardcoded version in: {h.strip()}"
         assert "sentinel-version-label" in h, f"heading not wired to the derived label: {h.strip()}"
+
+
+# --------------------------------------------------------------------------
+# _capital_committed: single-leg vs credit-spread shapes.
+#
+# Credit spreads and condors COLLECT premium and post margin -- there is no
+# "entry" price to multiply, so entry x lots is meaningless for them, not
+# merely imprecise. They showed no capital at all until 2026-09-01, which
+# left August's ONLY profitable strategy (Directional Spread: Rs 4,579 on
+# Rs 34,089 of committed risk) with no denominator on the dashboard.
+# --------------------------------------------------------------------------
+
+def test_capital_committed_single_leg_uses_premium_paid():
+    import dashboard_server as ds
+    assert ds._capital_committed({"entry": 100.0, "lots": 1}, 65) == 6500.0
+    assert ds._capital_committed({"entry": 100.0, "lots": 2}, 30) == 6000.0
+
+
+def test_capital_committed_defaults_to_one_lot():
+    import dashboard_server as ds
+    assert ds._capital_committed({"entry": 50.0}, 65) == 3250.0
+
+
+def test_capital_committed_credit_spread_uses_max_loss():
+    """A real August directional-spread plan: 24600/24500, max loss 4108."""
+    import dashboard_server as ds
+    t = {"plan": {"short_strike": 24600.0, "hedge_strike": 24500.0,
+                  "net_credit_inr": 2392.0, "max_loss_inr": 4108.0, "lots": 1}}
+    assert ds._capital_committed(t, 65) == 4108.0
+
+
+def test_capital_committed_never_multiplies_a_spread_by_lot_size():
+    """The bug this guards: treating max_loss as a per-unit price."""
+    import dashboard_server as ds
+    t = {"plan": {"max_loss_inr": 4108.0}}
+    assert ds._capital_committed(t, 65) == 4108.0
+    assert ds._capital_committed(t, 30) == 4108.0   # lot size must not matter
+
+
+def test_capital_committed_unknown_shape_is_none_not_zero():
+    """None renders as a dash; 0 would read as 'no capital used', a lie."""
+    import dashboard_server as ds
+    assert ds._capital_committed({"something_else": 1}, 65) is None
+
+
+def test_pnl_rows_carry_capital_for_both_shapes(tmp_path, monkeypatch):
+    import dashboard_server as ds
+    single = tmp_path / "single.jsonl"
+    single.write_text(json.dumps({
+        "opened_at": "2026-08-03T10:00:00", "closed_at": "2026-08-03T11:00:00",
+        "entry": 100.0, "lots": 1, "pnl_inr": 500, "strike": 24000, "option_type": "CE"}) + "\n",
+        encoding="utf-8")
+    spread = tmp_path / "spread.jsonl"
+    spread.write_text(json.dumps({
+        "opened_at": "2026-08-03T11:56:27", "closed_at": "2026-08-03T15:00:00",
+        "pnl_inr": -2122, "plan": {"short_strike": 24600.0, "hedge_strike": 24500.0,
+                                   "direction": "PE", "max_loss_inr": 4108.0, "lots": 1}}) + "\n",
+        encoding="utf-8")
+    monkeypatch.setattr(ds, "PNL_JOURNALS", [
+        (single, "NIFTY", "Momentum (Anchor)"),
+        (spread, "NIFTY", "Directional Spread")])
+    rows = {r["strategy"]: r for r in ds._load_all_pnl_trades()}
+    assert rows["Momentum (Anchor)"]["capital_deployed"] == 6500.0
+    assert rows["Directional Spread"]["capital_deployed"] == 4108.0
