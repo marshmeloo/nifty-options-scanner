@@ -3,6 +3,85 @@
 Things that are working and acceptable during the evaluation/testing
 phase, but worth revisiting before real money is on the line.
 
+## NOT ADOPTED (2026-09-01): an RSI exhaustion gate -- the fourth filter tested against these sessions, and the fourth rejected
+
+On 2026-09-01 Anchor opened THIRTEEN adjacent Bank Nifty CE strikes
+between 11:15:00 and 11:22:16 -- 0 wins, -Rs 29,943 -- at the top of a
+314-point rally, immediately before a 500-point decline. A 1-minute
+RSI(14) read ~77 at that moment. The obvious inference: stop buying
+calls when RSI says the move is spent.
+
+TWO THINGS HAD TO BE UNDERSTOOD FIRST.
+
+1. OUR RSI IS SLOWER THAN THE CHART'S. Live computes RSI(14) on 5-MINUTE
+   candles -- a 70-minute lookback. It read 66.8 "neutral" at 11:15 and
+   only crossed 70 at 11:20, by which point NINE of the thirteen were
+   already open. Not a bug; a resolution mismatch against a 1-minute
+   chart.
+
+2. IT WOULD NOT HAVE MATTERED ANYWAY. Under SCORING_MODE =
+   "momentum_only" (live since 2026-08-02), scanner.py ~line 327
+   REPLACES the entire weighted score with one of three constants keyed
+   on momentum alignment alone -- which is why every live trade scores
+   exactly 6.0. The -0.25 "CE momentum may be exhausted" penalty at
+   scanner.py:297 is computed, written into `reasons`, and discarded.
+   A faster indicator would only produce a better number nothing reads.
+
+So the test was a GATE, swept over both period and threshold, on the
+full live Sentinel v1.2 config (cluster cap + gate + reversal exit) with
+the RSI gate as the ONLY variable -- it can only ever REMOVE trades.
+
+RESULT, Bank Nifty 1,244 days. Every variant worse on every measure:
+
+| gate | trades | return | drawdown | Calmar |
+|---|---|---|---|---|
+| off | 6,970 | +895.1% | 9.6% | **6.11** |
+| RSI(14)>=70 | 78.8% | -370pp | +1.6pp | 3.96 |
+| RSI(5)>=80 | 76.6% | -700pp | +22.0pp | 0.77 |
+| RSI(7)>=75 | 72.7% | -655pp | +16.4pp | 1.07 |
+| RSI(5)>=75 | 63.8% | -919pp | +43.0pp | -0.10 |
+| RSI(7)>=70 | 54.8% | -889pp | +19.3pp | 0.04 |
+| RSI(5)>=70 | 49.7% | -1052pp | +150.3pp | complex |
+
+Not one improves drawdown. Three make the strategy LOSS-MAKING.
+
+THE DECISIVE READING is expectancy PER SURVIVING TRADE: +0.2432R with
+the gate off, +0.1699R at RSI(14), -0.0064R at RSI(7), -0.0895R at
+RSI(5). The gate is not merely cutting volume, it is removing the
+WINNERS -- what remains is worse than random. And FASTER IS WORSE, which
+inverts the hypothesis outright.
+
+WHY, and it is the same finding the extension guard produced through a
+different door: THIS SYSTEM EARNS BY BUYING STRENGTH. "Don't buy what
+has already moved" and "don't buy when RSI is high" are the same
+instruction. Both remove the edge rather than the pathology. What CAN be
+fixed is buying strength THIRTEEN TIMES AT ONCE -- which is exactly what
+the cluster cap does, and why it passed 13 of 13 years.
+
+**THE WEEK'S PATTERN, worth stating explicitly.** Four rules invented
+from watching a bad session -- extension guard, quiet-regime gate,
+deployment cap, RSI exhaustion gate -- all four rejected. One mechanism
+NOT invented from a loss (the cluster cap: pre-existing, independently
+validated on 5 windows before any of these sessions) adopted on 13/13
+years. Rules derived from a single painful session have a poor record
+here; re-examining existing mechanisms has a good one.
+
+SIDE FINDING, FIXED: institutional_metrics returned a COMPLEX Calmar
+(-0.17+0.33j) for the RSI(5)>=70 variant. `(final/capital) ** (1/years)`
+on a negative base returns a complex number in Python rather than
+raising, so a book that loses more than its capital silently carried an
+imaginary Calmar into the JSON and the printed table. Now reports -100%
+annualised for a wiped-out book, with a regression test.
+
+STILL OPEN, and the better-shaped question: the 2026-08-02 study that
+chose momentum_only ranked `combined` (momentum up-weighted, IV and
+support-level scoring removed) at +0.241R per trade against
+momentum_only's +0.158R -- higher expectancy, one-third the trade count,
+passed over for total rupees. That comparison predates the cluster cap,
+and its own docstring flags it as in-sample with LTP fills and no
+bid/ask. Re-running it WITH the cap, per-year, is re-examining an
+existing decision rather than inventing a fifth filter.
+
 ## NOT ADOPTED (both tested and rejected 2026-08-31): two filters aimed at the -Rs 37,875 session -- the extension guard and the quiet-regime gate
 
 The 2026-08-31 Bank Nifty session lost Rs 37,875 on a day whose total

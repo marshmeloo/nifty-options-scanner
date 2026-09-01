@@ -280,6 +280,29 @@ class Policy:
     # capital commitment has never been bounded by anything.
     #
     # None disables it, so every existing study stays reproducible.
+    # RSI EXHAUSTION GATE (added 2026-09-01). Refuse a CE when RSI is
+    # overbought, a PE when oversold -- the "momentum may be exhausted"
+    # condition scanner.py already detects and already penalises (-0.25)
+    # in the legacy scorer.
+    #
+    # WHY IT NEEDS TO BE A GATE RATHER THAN A FASTER INDICATOR. Under
+    # config.SCORING_MODE = "momentum_only" (live since 2026-08-02),
+    # scanner.py line ~327 REPLACES the whole weighted score with one of
+    # three constants keyed on momentum alignment alone. RSI is computed,
+    # appended to `reasons`, and then discarded -- every live trade scores
+    # exactly 6.0. Making the indicator faster would only produce a better
+    # number that nothing reads.
+    #
+    # WHY "FASTER" IS PART OF THE SWEEP. Live computes RSI(14) on 5-MINUTE
+    # candles -- a 70-minute lookback. On 2026-09-01 that read 66.8
+    # ("neutral") at 11:15 as Anchor opened the first of thirteen adjacent
+    # Bank Nifty CE strikes; a 1-minute RSI(14) was already ~77. Ours only
+    # crossed 70 at 11:20, by which point nine of the thirteen were open.
+    # The reconstructed history is 5-minute, so a shorter PERIOD is how
+    # "faster" is expressed here.
+    rsi_exhaustion_period: int = None       # None -> gate off
+    rsi_overbought: float = 70.0
+    rsi_oversold: float = 30.0
     max_deployed_pct: float = None
     quiet_regime_block_pctile: float = None
     quiet_regime_min_elapsed_pct: float = 20.0
@@ -334,6 +357,26 @@ def build_price_index(cycles) -> dict:
                 (snapshot.timestamp, q.bid, q.ask, q.ltp)
             )
     return index
+
+
+def rsi_exhaustion_blocked(option_type, candles, period, overbought, oversold) -> bool:
+    """
+    True when RSI says this contract's own direction is exhausted.
+
+    Returns False when RSI cannot be computed (too few candles) -- an
+    unmeasurable condition must not silently halt trading.
+    """
+    if period is None or not candles:
+        return False
+    try:
+        rsi = price_action.compute_rsi(candles, period=period)
+    except Exception:
+        return False
+    if rsi is None:
+        return False
+    if option_type == "CE":
+        return rsi >= overbought
+    return rsi <= oversold
 
 
 def deployment_blocked(positions, ts, candidate_cost, max_pct) -> bool:
@@ -1073,6 +1116,14 @@ def run_policy(day: str, policy: Policy, verbose: bool = False, blocked_reversal
                 # would have been rejected anyway regardless of direction.
                 # Reordering has no other effect: nothing between the old
                 # and new position mutates `positions`/`trades`, only reads.
+                # RSI exhaustion: is this contract's own direction already
+                # spent? Placed with the other post-qualification gates so
+                # it only rejects a candidate that would have opened.
+                if rsi_exhaustion_blocked(setup.option_type, candles,
+                                          policy.rsi_exhaustion_period,
+                                          policy.rsi_overbought, policy.rsi_oversold):
+                    continue
+
                 # Deployment cap: would this tie up more premium than the
                 # book is allowed to have committed at once?
                 if deployment_blocked(

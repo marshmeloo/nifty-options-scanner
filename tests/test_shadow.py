@@ -634,3 +634,19 @@ def test_banknifty_reconstructed_history_exists_in_dev():
     assert first is not None, "Bank Nifty history present but unreadable"
     assert first[0].source == "dhan_historical", (
         "expected reconstructed history, got " + str(first[0].source))
+
+
+def test_institutional_metrics_never_returns_a_complex_calmar():
+    """(final/capital) ** (1/years) on a NEGATIVE base returns a complex
+    number in Python rather than raising, so a variant that loses more
+    than its capital silently reported e.g. calmar = -0.17+0.33j and
+    carried it into the JSON. Seen for real 2026-09-01: an RSI(5)>=70
+    exhaustion gate drove Bank Nifty to -156.9% return."""
+    from research.one_trade_per_day_study import institutional_metrics
+    # Rows: (date, net_inr, r_multiple, risk_inr). Losses far exceeding capital.
+    rows = [(f"2026-0{1 + i // 28}-{1 + i % 28:02d}", -20000.0, -1.0, 20000.0)
+            for i in range(40)]
+    m = institutional_metrics(rows, capital=100_000)
+    assert not isinstance(m["calmar"], complex), f"complex Calmar: {m['calmar']}"
+    assert not isinstance(m["total_return_pct"], complex)
+    assert m["calmar"] is None or isinstance(m["calmar"], (int, float))

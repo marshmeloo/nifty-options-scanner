@@ -121,7 +121,21 @@ def institutional_metrics(rows, capital=START_CAPITAL):
     dates = sorted(r[0] for r in rows)
     day_span = (date.fromisoformat(dates[-1]) - date.fromisoformat(dates[0])).days
     years = day_span / 365.25
-    ann_return_pct = ((final_capital / capital) ** (1 / years) - 1) * 100 if years >= 0.1 else None
+    # A fractional power of a NEGATIVE base returns a COMPLEX number in
+    # Python, not an error -- so a variant that loses more than its whole
+    # capital silently produced e.g. calmar = -0.17+0.33j and carried it
+    # through the JSON and the printed table. Seen for real on
+    # 2026-09-01: an RSI(5)>=70 exhaustion gate drove Bank Nifty to
+    # -156.9% return, and its Calmar came back complex.
+    #
+    # A wiped-out book has no meaningful annualised rate, so report -100%
+    # (everything and more was lost) rather than an imaginary one.
+    if years < 0.1:
+        ann_return_pct = None
+    elif final_capital <= 0:
+        ann_return_pct = -100.0
+    else:
+        ann_return_pct = ((final_capital / capital) ** (1 / years) - 1) * 100
     calmar = ann_return_pct / max_dd_pct if (ann_return_pct is not None and max_dd_pct > 0) else None
 
     return {
